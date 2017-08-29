@@ -447,7 +447,7 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
     for (i = 0; i < pkdlen; i += 4) {
       rsub = WORD16(&data[i]);	/* subnet nr */
       rcost = WORD16(&data[i+2]);  /* cost from that bridge */
-      if (rttbl_net[rsub].rt_type == RT_DIRECT && debug) 
+      if (rttbl_net[rsub].rt_type == RT_DIRECT && (verbose||debug) )
 	fprintf(stderr,"DEBUG: Received RUT info for subnet %#o from host %#o.\n"
 		" We have DIRECT connction to that subnet - "
 		" bug in network structure or sender's software?\n",
@@ -514,9 +514,9 @@ update_route_costs()
   PTUNLOCK(rttbl_lock);
 }
 
-/* Make a RUT pkt for someone on a subnet (filtering out that subnet) */
+// Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.
 int
-make_routing_table_pkt(u_short subnet, u_char *pkt, int pklen)
+make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 {
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_char *data = &pkt[CHAOS_HEADERSIZE];
@@ -530,17 +530,22 @@ make_routing_table_pkt(u_short subnet, u_char *pkt, int pklen)
 
   PTLOCK(rttbl_lock);
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
-    if (i != subnet && (rttbl_net[i].rt_type != RT_NOPATH)) {
+    if (i != (dest>>8) && (rttbl_net[i].rt_braddr != dest) && (rttbl_net[i].rt_type != RT_NOPATH)) {
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
       data[nroutes*4+2] = (cost >> 8);
       data[nroutes*4+3] = (cost & 0xff);
       // fprintf(stderr,"RUT to %#o cost %d\n", i, cost);
       nroutes++;
+    } else if (debug && (rttbl_net[i].rt_type != RT_NOPATH)) {
+      if (i == (dest >> 8))
+	fprintf(stderr, " not including net %#o for dest %#o\n", i, dest);
+      else if (rttbl_net[i].rt_braddr == dest) 
+	fprintf(stderr, " not including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
     }
   }
   PTUNLOCK(rttbl_lock);
-  set_ch_destaddr(cha, subnet<<8);  /* well... */
+  set_ch_destaddr(cha, ((dest & 0xff) == 0) ? 0 : dest );  /* well... */
   set_ch_nbytes(cha,nroutes*4);
   if (ch_nbytes(cha) > 0)
     return ch_nbytes(cha)+CHAOS_HEADERSIZE;
@@ -2307,19 +2312,25 @@ void * rut_sender(void *v)
 
   while (1) {
     /* Send to all subnets which are not through a bridge */
-    for (i = 0; i < 0xff; i++)
+    for (i = 0; i < 256; i++)
       if ((rttbl_net[i].rt_type != RT_NOPATH) && (rttbl_net[i].rt_type != RT_BRIDGE)
 	  && (rttbl_net[i].rt_link != LINK_INDIRECT)) {
-	if ((c = make_routing_table_pkt(i, &pkt[0], sizeof(pkt))) > 0) {
+	if (debug) fprintf(stderr,"Making RUT pkt for net %#o\n", i);
+	if ((c = make_routing_table_pkt(i<<8, &pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(&rttbl_net[i], pkt, c);
 	}
       }
     /* And to all individual hosts */
     for (i = 0; i < *rttbl_host_len; i++) {
-      if (rttbl_host[i].rt_link != LINK_INDIRECT) 
-	if ((c = make_routing_table_pkt(rttbl_host[i].rt_braddr>>8, &pkt[0], sizeof(pkt))) > 0) {
+      if (rttbl_host[i].rt_link != LINK_INDIRECT) {
+	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
+			     rttbl_host[i].rt_braddr, rttbl_host[i].rt_dest,
+			     rttbl_host[i].rt_braddr == 0 ? rttbl_host[i].rt_dest : rttbl_host[i].rt_braddr);
+	if ((c = make_routing_table_pkt(rttbl_host[i].rt_braddr == 0 ? rttbl_host[i].rt_dest : rttbl_host[i].rt_braddr,
+					&pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(&rttbl_host[i], pkt, c);
 	}
+      }
     }
 
     // By AIM 628, do this every 15 s
