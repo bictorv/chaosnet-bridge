@@ -163,3 +163,17 @@ Examples:
     link ether subnet 7
     ; Define host 401 on the Chaos-over-unix-socket
     link unix host 401 
+
+----------------------------------------------------------------
+
+Notes:
+======
+Separate threads are started to handle input from different link
+types. Each thread is only started if the configuration needs it (e.g.
+if you configure an ether interface, or an ether link, the ethernet
+thread is started).
+
+Often the Ethernet link can not send and receive to the host system
+running the bridge program, or other programs using the same
+mechanism, such as LambdaDelta. Run the bridge on another system on
+your network.
