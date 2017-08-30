@@ -530,12 +530,16 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 
   PTLOCK(rttbl_lock);
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
-    if (i != (dest>>8) && (rttbl_net[i].rt_braddr != dest) && (rttbl_net[i].rt_type != RT_NOPATH)) {
+    if ((rttbl_net[i].rt_type != RT_NOPATH) 
+	// don't send a subnet route to the subnet itself (but to individual hosts)
+	&& (! (((dest & 0xff) == 0) && (i == (dest>>8))))
+	// and not to the bridge itself
+	&& (rttbl_net[i].rt_braddr != dest)) {
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
       data[nroutes*4+2] = (cost >> 8);
       data[nroutes*4+3] = (cost & 0xff);
-      // fprintf(stderr,"RUT to %#o cost %d\n", i, cost);
+      if (debug) fprintf(stderr," including net %#o cost %d\n", i, cost);
       nroutes++;
     } else if (debug && (rttbl_net[i].rt_type != RT_NOPATH)) {
       if (i == (dest >> 8))
@@ -578,9 +582,11 @@ find_in_routing_table(u_short dchad, int only_host)
 	// #### validate config once instead of every time, and simply return the recursive call here
 	if (rttbl_host[i].rt_braddr != 0) {
 	  struct chroute *res = find_in_routing_table(rttbl_host[i].rt_braddr, 0);
-	  if (res == NULL)
+	  if (res == NULL) {
 	    fprintf(stderr,"Warning: find route: Indirect link to %#o found, but no route to its bridge %#o\n",
 		    dchad, rttbl_host[i].rt_braddr);
+	    print_routing_table();
+	  }
 	  return res;
 	} else {
 	  fprintf(stderr,"Warning: find route: Indirect link to %#o found, but no bridge address given!\n",
@@ -607,10 +613,17 @@ find_in_routing_table(u_short dchad, int only_host)
     if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
       // #### validate config once instead of every time, and simply return the recursive call here
       if (rttbl_net[sub].rt_braddr != 0) {
+#if 0
+	if ((rttbl_net[sub].rt_braddr == mychaddr)
+	    || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
+	  return NULL;
+#endif
 	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 1);
-	if (res == NULL)
+	if (res == NULL) {
 	  fprintf(stderr,"Warning: find route: Indirect link to host %#o on subnet %#o found, but no route to its bridge %#o\n",
 		  dchad, sub, rttbl_net[sub].rt_braddr);
+	  print_routing_table();
+	}
 	return res;
       } else {
 	fprintf(stderr,"Warning: find route: Indirect link to subnet %#o found, but no bridge address given!\n",
@@ -2770,6 +2783,7 @@ int parse_route_config()
       }
       else if (strcasecmp(tok,"bridge") == 0) {
 	rt->rt_type = RT_BRIDGE;
+	rt->rt_cost_updated = time(NULL);
 	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
       }
       else {
@@ -2920,6 +2934,7 @@ int parse_link_config()
       }
       else if (strcasecmp(tok,"bridge") == 0) {
 	rt->rt_type = RT_BRIDGE;
+	rt->rt_cost_updated = time(NULL);
 	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
       }
       else {
