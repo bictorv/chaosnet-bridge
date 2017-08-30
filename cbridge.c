@@ -820,7 +820,8 @@ ch_dumpkt(unsigned char *ucp, int cnt)
       fprintf(stderr,"[8-bit controlled data]\n");
   }
 
-  for (row = 0; row*8 < len; row++) {
+  int showlen = (len > cnt ? cnt : len);
+  for (row = 0; row*8 < showlen; row++) {
     for (i = 0; (i < 8) && (i+row*8 < len); i++) {
       fprintf(stderr, "  %02x", ucp[i+row*8]);
       fprintf(stderr, "%02x", ucp[(++i)+row*8]);
@@ -839,7 +840,9 @@ ch_dumpkt(unsigned char *ucp, int cnt)
     fprintf(stderr, " (11-chars)\r\n");
 #endif
   }
-  
+  if (cnt < len)
+    fprintf(stderr,"... (header length field > buf len)\n");
+
   /* Now show trailer */
   if (len % 2)
     len++;			/* Align */
@@ -2398,6 +2401,9 @@ void * unix_input(void *v)
       unixsock = u_connect_to_server();
     } else {
       if (debug) fprintf(stderr,"unix input %d bytes\n", len);
+
+      ntohs_buf((u_short *)pkt, (u_short *)pkt, len);
+
 #if COLLECT_STATS
       struct chaos_header *ch = (struct chaos_header *)pkt;
       if (len == ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
@@ -2406,28 +2412,43 @@ void * unix_input(void *v)
 	// Symbolics known to send trailer checksum -1
 	if ((tr->ch_hw_destaddr != 0 && tr->ch_hw_srcaddr != 0 && tr->ch_hw_checksum != 0)
 	    && tr->ch_hw_checksum != 0xffff) {
-	  u_short cks = ch_checksum(pkt, len);
+	  u_short schad = ch_srcaddr(ch);
+	  u_int cks = ch_checksum(pkt, len);
 	  if (cks != 0) {
-	    u_short schad = ch_srcaddr(ch);
-	    if (verbose) {
-	      fprintf(stderr,"[Bad checksum %#x from %#o (Unix)]\n", cks, schad);
-	      fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
-		      tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
+	    // See if it is a weird case, usim byte swapping bug?
+	    tr->ch_hw_checksum = ntohs(tr->ch_hw_checksum);
+	    if (ch_checksum(pkt, len) != 0) {
+	      // Still bad
+	      if (verbose || debug) {
+		fprintf(stderr,"[Bad checksum %#x from %#o (Unix)]\n", cks, schad);
+		fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
+			tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
+		ch_dumpkt(pkt, len);
+	      }
+	      // Use link source net, can't really trust data
+	      PTLOCK(linktab_lock);
+	      linktab[us_subnet].pkt_crcerr++;
+	      PTUNLOCK(linktab_lock);
+	      continue;
+	    } else {
+	      // weird case, usim byte swapping bug?
+	      if (debug) fprintf(stderr,"[Checksum from %#o (Unix) was fixed by swapping]\n", schad);
+	      PTLOCK(linktab_lock);
+	      // Count it, but accept it.
+	      linktab[us_subnet].pkt_crcerr_post++;
+	      PTUNLOCK(linktab_lock);
 	    }
-	    // Use link source net, can't really trust data
-	    PTLOCK(linktab_lock);
-	    linktab[us_subnet].pkt_crcerr++;
-	    PTUNLOCK(linktab_lock);
-	    continue;
 	  }
 	} else if (debug)
 	  fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Unix\n",
 		  tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
+      } else if (debug) {
+	fprintf(stderr,"Unix: Received no HW trailer (len %d != %lu = %d+%lu+%lu)\n",
+		len, ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE,
+		ch_nbytes(ch), CHAOS_HEADERSIZE, CHAOS_HW_TRAILERSIZE);
+	ch_dumpkt(pkt, len);
       }
 #endif
-      ntohs_buf((u_short *)pkt, (u_short *)pkt, len);
-      if (0 && debug) ch_dumpkt(pkt, len);
-
       // check where it's coming from, prefer trailer info
       u_short srcaddr;
       if (len > (ch_nbytes(ch) + CHAOS_HEADERSIZE)) {
