@@ -612,12 +612,14 @@ find_in_routing_table(u_short dchad, int only_host)
       && rttbl_net[sub].rt_cost < RTCOST_HIGH) {
     if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
       // #### validate config once instead of every time, and simply return the recursive call here
-      if (rttbl_net[sub].rt_braddr != 0) {
-#if 0
-	if ((rttbl_net[sub].rt_braddr == mychaddr)
-	    || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
-	  return NULL;
-#endif
+      if ((rttbl_net[sub].rt_braddr == mychaddr)
+	  || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
+	// This is an announce-only route, when we have individual
+	// links to all hosts on the subnet - but apparently not to
+	// this one. Drop it.
+	return NULL;
+      else if (rttbl_net[sub].rt_braddr != 0) {
+
 	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 1);
 	if (res == NULL) {
 	  fprintf(stderr,"Warning: find route: Indirect link to host %#o on subnet %#o found, but no route to its bridge %#o\n",
