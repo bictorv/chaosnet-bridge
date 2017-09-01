@@ -177,3 +177,11 @@ Often the Ethernet link can not send and receive to the host system
 running the bridge program, or other programs using the same
 mechanism, such as LambdaDelta. Run the bridge on another system on
 your network.
+
+Q: if UP should be the main router for subnet 6, but that's only p2p
+   chudp links, how do we configure it to send RUTs for subnet 6 on
+   other nets it may be connected to?
+A: "route subnet 6 bridge 3143" works.
+   Actual host routes have prio, this will add an indirect route,
+   and no route will be found to self.
+
