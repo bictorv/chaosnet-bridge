@@ -34,6 +34,12 @@
 
 // TODO
 
+// Q: if UP should be the main router for subnet 6, but that's only p2p chudp links,
+//    how do we configure it to send RUTs for subnet 6 on other nets it may be connected to?
+// A: "route subnet 6 bridge 3143" works.
+//    Actual host routes have prio, this will add an indirect route,
+//    and no route will be found to self.
+
 // perhaps implement TIME for the router?
 
 // add a more silent variant of output, which just notes new chudp
@@ -331,19 +337,18 @@ print_routing_table() {
   int i;
   fprintf(stderr,"Routing tables follow:\n");
   if (*rttbl_host_len > 0) {
-    fprintf(stderr,"Host\tBridge\tType\tLink\tCost\tMyAddr\n");
+    fprintf(stderr,"Host\tBridge\tType\tLink\tCost\n");
     for (i = 0; i < *rttbl_host_len; i++)
       if (rttbl_host[i].rt_type != RT_NOPATH)
-	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%#o\n",
-		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type), rt_linkname(rttbl_host[i].rt_link), rttbl_host[i].rt_cost, rttbl_host[i].rt_myaddr);
+	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\n",
+		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type), rt_linkname(rttbl_host[i].rt_link), rttbl_host[i].rt_cost);
   }
-  fprintf(stderr,"Net\tBridge\tType\tLink\tCost\tAge\tMyAddr\n");
+  fprintf(stderr,"Net\tBridge\tType\tLink\tCost\tAge\n");
   for (i = 0; i < 0xff; i++)
     if (rttbl_net[i].rt_type != RT_NOPATH)
-      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%ld\t%#o\n",
+      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%ld\n",
 	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link), rttbl_net[i].rt_cost,
-	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0,
-	      rttbl_net[i].rt_myaddr);
+	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
 void print_chudp_config()
@@ -415,7 +420,6 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
   int i, pkdlen = ch_nbytes(cha);
 
   if (pksrc == mychaddr) {
-    // Already checked by caller
     if (debug) fprintf(stderr,"Got my pkt back (%#o), ignoring\n", pksrc);
     return;
   }
@@ -570,6 +574,7 @@ find_in_routing_table(u_short dchad, int only_host)
 
   /* Check host routing table first */
   for (i = 0; i < *rttbl_host_len; i++) {
+#if 1
     if (rttbl_host[i].rt_dest == dchad
 	// Check the cost, too.
 	&& rttbl_host[i].rt_cost < RTCOST_HIGH) {
@@ -591,18 +596,23 @@ find_in_routing_table(u_short dchad, int only_host)
       } else
 	return &rttbl_host[i];
     }
+#else
+    if (rttbl_host[i].rt_braddr == dchad) {
+      return &rttbl_host[i];
+    }
+#endif
   }
   if (only_host) return NULL;	// avoid non-well-founded recursion
 
   /* Then check subnet routing table */
   u_short sub = (dchad>>8)&0xff;
+#if 1
   if (rttbl_net[sub].rt_type != RT_NOPATH
       // Check the cost, too.
       && rttbl_net[sub].rt_cost < RTCOST_HIGH) {
     if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
       // #### validate config once instead of every time, and simply return the recursive call here
       if ((rttbl_net[sub].rt_braddr == mychaddr)
-	  // this case would be stupid
 	  || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
 	// This is an announce-only route, when we have individual
 	// links to all hosts on the subnet - but apparently not to
@@ -625,6 +635,10 @@ find_in_routing_table(u_short dchad, int only_host)
     } else
       return &rttbl_net[sub];
   }
+#else
+  if ((rttbl_net[sub].rt_type != RT_NOPATH) && (rttbl_net[sub].rt_myaddr != dchad))
+    return &rttbl_net[sub];
+#endif
   return NULL;
 }
 
@@ -1579,11 +1593,6 @@ send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *p
     for (cc = 0; cc < addrlen-1; cc++)
       printf("%02X:",addr[cc]);
     printf("%02X\n",addr[cc]);
-    if (debug) {
-      u_char pk[CH_PK_MAXLEN];
-      ntohs_buf((u_short *)packet, (u_short *)pk, packetlen);
-      ch_dumpkt(pk, packetlen);
-    }
   }
 #if ETHER_BPF
   // construct the header separately to avoid copying
@@ -1919,7 +1928,7 @@ u_char *find_arp_entry(u_short daddr)
 {
   int i;
   if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, *charp_len);
-  if (daddr == mychaddr) {	// #### maybe also look for rt_myaddr matches...
+  if (daddr == mychaddr) {
     fprintf(stderr,"#### Looking up ARP for my own address, BUG!\n");
     return NULL;
   }
@@ -1942,41 +1951,11 @@ u_char *find_arp_entry(u_short daddr)
   return NULL;
 }
 
-// Find my chaos address on the ether link #### check config that there are no conflicting addrs?
-u_short find_ether_chaos_address() {
-  int i;
-  u_short ech = 0;
-  PTLOCK(rttbl_lock);
-  for (i = 0; i < *rttbl_host_len; i++) {
-    if (rttbl_host[i].rt_link == LINK_ETHER) {
-      ech = rttbl_host[i].rt_myaddr;
-      break;
-    }
-  }
-  if (ech == 0) {
-    for (i = 0; i < 255; i++) {
-      if (rttbl_net[i].rt_link == LINK_ETHER) {
-	ech = rttbl_net[i].rt_myaddr;
-	break;
-      }
-    }
-  }
-  PTUNLOCK(rttbl_lock);
-  return (ech == 0 ? mychaddr : ech);
-}
-
 void
 send_chaos_arp_request(int fd, u_short chaddr)
 {
-  static u_short eth_chaddr = 0;
   u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
   struct arphdr *arp = (struct arphdr *)&req;
-
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
-
   memset(&req, 0, sizeof(req));
   arp->ar_hrd = htons(ARPHRD_ETHER); /* Want ethernet address */
   arp->ar_pro = htons(ETHERTYPE_CHAOS);	/* of a Chaosnet address */
@@ -1984,7 +1963,7 @@ send_chaos_arp_request(int fd, u_short chaddr)
   arp->ar_pln = sizeof(chaddr);
   arp->ar_op = htons(ARPOP_REQUEST);
   memcpy(&req[sizeof(struct arphdr)], &myea, ETHER_ADDR_LEN);	/* my ether */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &eth_chaddr, sizeof(eth_chaddr)); /* my chaos */
+  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &mychaddr, sizeof(mychaddr)); /* my chaos */
   /* his chaos */
   memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2+ETHER_ADDR_LEN], &chaddr, sizeof(chaddr));
 
@@ -2020,7 +1999,6 @@ status_responder(u_char *rfc, int len)
 {
   struct chaos_header *ch = (struct chaos_header *)rfc;
   u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
   u_char ans[CH_PK_MAXLEN];
   struct chaos_header *ap = (struct chaos_header *)&ans;
   int i;
@@ -2029,7 +2007,6 @@ status_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
   u_short *dp = (u_short *)&ans[CHAOS_HEADERSIZE];
@@ -2192,6 +2169,17 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 	    schad, dchad);
 #endif
 
+  if (ch_srcaddr(ch) == mychaddr) {
+    // Should not happen. Unless Unix sockets.
+    if (src_linktype != LINK_UNIXSOCK) {
+      if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, type %s, link %s) \n",
+			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
+			   rt_typename(type), rt_linkname(src_linktype));
+      if (debug) ch_dumpkt(data, dlen);
+    }
+    return;
+  }
+
   if (++fwc > CH_FORWARD_MAX) {	/* over-forwarded */
     if (verbose) fprintf(stderr,"Dropping over-forwarded pkt for %#o\n", dchad);
 #if COLLECT_STATS
@@ -2206,31 +2194,18 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   set_ch_fc(ch,fwc);		/* update */
 
   struct chroute *rt = find_in_routing_table(dchad, 0);
-
-  // From me?
-  if ((ch_srcaddr(ch) == mychaddr) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
-    // Should not happen. Unless Unix sockets.
-    if (src_linktype != LINK_UNIXSOCK) {
-      if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, type %s, link %s) \n",
-			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
-			   rt_typename(type), rt_linkname(src_linktype));
-      if (debug) ch_dumpkt(data, dlen);
-    }
-    return;
-  }
-
-  if ((rt != NULL) && (rt->rt_link == LINK_UNIXSOCK) && (src_linktype == LINK_UNIXSOCK)) {
-      // Unix socket echoes my own packets
-      if (debug) fprintf(stderr,"[Not routing %s from %#o to %#o back to source route (%s)]\n",
+  if ((rt != NULL)
+      && (rt->rt_link == LINK_UNIXSOCK) && (src_linktype == LINK_UNIXSOCK)) {
+    // Unix socket echoes my own packets
+    if (debug) fprintf(stderr,"[Not routing %s from %#o to %#o back to source route (%s)]\n",
 			 ch_opcode_name(ch_opcode(ch)),
 			 ch_srcaddr(ch), dchad, rt_linkname(rt->rt_link));
-      return;
+    return;
   }
 
   peek_routing(data, dlen, type, cost, src_linktype); /* check for RUT */
 
-  // To me?
-  if ((dchad == mychaddr) || (rt != NULL && rt->rt_myaddr == dchad)) {
+  if (dchad == mychaddr) {
 #if COLLECT_STATS
     // should potentially handle BRD packets, but nobody sends them anyway?
     if (ch_opcode(ch) == CHOP_RFC
@@ -2244,7 +2219,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
       if (debug) {
 	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding.\n",
 		ch_opcode_name(ch_opcode(ch)),
-		dchad);
+		mychaddr);
 	if (ch_opcode(ch) == CHOP_RFC) {
 	  fprintf(stderr," Contact: ");
 	  int max = ch_nbytes(ch);
@@ -2302,7 +2277,7 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
 {
   struct chaos_header *cha = (struct chaos_header *)pkt;
 
-  // Update source address
+  // Update source address, perhaps	  
   set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr : rt->rt_myaddr));
 
   switch (rt->rt_link) {
@@ -2395,8 +2370,7 @@ void send_chaos_pkt(u_char *pkt, int len)
   }
 
   // Update source address, perhaps	  
-  if (ch_srcaddr(cha) == 0)
-    set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr : rt->rt_myaddr));
+  set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr : rt->rt_myaddr));
 
   if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (%s)\n",
 		       ch_opcode_name(ch_opcode(cha)),
@@ -2499,7 +2473,6 @@ void * unix_input(void *v)
 	srcaddr = ch_srcaddr(ch);
       if (srcaddr == mychaddr) {
 	// Unix socket server/chaosd echoes everything to everyone
-	// (This is checked also in forward_chaos_pkt, but optimize a little?)
 	if (debug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
 	continue;
       }
@@ -2569,27 +2542,19 @@ void handle_arp_input(u_char *data, int dlen)
   if (debug) fprintf(stderr,"Handle ARP\n");
   /* Chaos over Ethernet */
   struct arphdr *arp = (struct arphdr *)data;
-  static u_short eth_chaddr = 0;
   u_short schad = ntohs((data[sizeof(struct arphdr)+arp->ar_hln]<<8) |
 			data[sizeof(struct arphdr)+arp->ar_hln+1]);
   u_char *sead = &data[sizeof(struct arphdr)];
   u_short dchad =  ntohs((data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln]<<8) |
 			 data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]);
-
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
-
   if (debug) printf("ARP rcv: Dchad: %o %o => %o\n",
 		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]<<8,
 		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln],
 		    dchad);
 
-
   /* See if we proxy for this one */
   if (arp->ar_op == htons(ARPOP_REQUEST)) {
-    if (dchad == eth_chaddr || dchad == mychaddr) {
+    if (dchad == mychaddr) {
       if (verbose) printf("ARP: Sending reply for %#o (me) to %#o\n", dchad, schad);
       send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
     } else {
