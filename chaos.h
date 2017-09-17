@@ -2,7 +2,7 @@
 #define WORD32(c) ((c[1]) + ((c)[0]<<8) + ((c)[3]<<16) + ((c)[2]<<24))
 #define WORD16(c) (*(c+1) + (*(c)<<8))
 // Max forwarding count (4 bits)
-#define CH_FORWARD_MAX 16
+#define CH_FORWARD_MAX 0xF
 
 enum { CHOP_RFC=1, CHOP_OPN, CHOP_CLS, CHOP_FWD, CHOP_ANS, CHOP_SNS, CHOP_STS,
        CHOP_RUT, CHOP_LOS, CHOP_LSN, CHOP_MNT, CHOP_EOF, CHOP_UNC, CHOP_BRD };
