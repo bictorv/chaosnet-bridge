@@ -5,6 +5,11 @@ This program is a bridge between Chaosnet implementations. It supports
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see
   http://www.unlambda.com/cadr/) 
 
+For the original Chaosnet report, MIT AI Memo 628 by David A. Moon,
+see the attached PDF (original location
+http://hdl.handle.net/1721.1/6353) or
+https://lm-3.github.io/amber.html for an HTML:ized version.
+
 It was written by Björn Victor (bjorn@victor.se) in 2017, based on
 earlier code (from 2005) for pairwise bridging (ether-chudp,
 chudp-unix), where the Chaos-over-unix-sockets was based on code by
