@@ -627,9 +627,12 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
     if (rttbl_net[sub].rt_type != RT_NOPATH) {
       // Method: if < 0400: interface number; otherwise next hop address
-      if (rttbl_net[sub].rt_type == RT_DIRECT) {
+      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (rttbl_net[sub].rt_braddr == mychaddr)) {
 	// interface nr - use link type
-	data[sub*2] = htons(rttbl_net[sub].rt_link);
+	if (rttbl_net[sub].rt_link == LINK_INDIRECT)
+	  data[sub*2] = htons(LINK_CHUDP);  /* assume this */
+	else
+	  data[sub*2] = htons(rttbl_net[sub].rt_link);
       } else {
 	data[sub*2] = htons(rttbl_net[sub].rt_braddr);
       }
