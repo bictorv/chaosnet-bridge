@@ -2348,6 +2348,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 
   // To me?
   if ((dchad == mychaddr) || (rt != NULL && rt->rt_myaddr == dchad)) {
+    // @@@@ make this more generic at some point, if more protocols are added.
 #if COLLECT_STATS
     // should potentially handle BRD packets, but nobody sends them anyway?
     if (ch_opcode(ch) == CHOP_RFC
