@@ -69,11 +69,18 @@ same subnet on different media is harder to get right than
 interconnecting two different subnets. Attaching single hosts to a
 subnet through this bridge is more doable.
 
+The bridge responds to the DUMP-ROUTING-TABLE contact, which sends the
+routing table (for subnets up to nr 122). This is used by e.g. the
+functions CHAOS:SHOW-ROUTING-PATH and CHAOS:SHOW-ROUTING-TABLE on LMI
+systems, the CHAOS:PRINT-ROUTING-TABLE function on Symbolics systems,
+and if you're lucky, the DUMP-ROUTING-TABLE command of the CHATST
+program in ITS.
+
 When cbridge is compiled to collect statistics, it also responds to
-the STATUS protocol, using the host name from the "myname"
-configuration parameter (defaults to "real" host name up to first
-period). Yes, it could try to look it up in Chaosnet DNS given the
-chaddr parameter, but...
+the STATUS protocol (see AI Memo 628), using the host name from the
+"myname" configuration parameter (defaults to "real" host name up to
+first period). Yes, it could try to look it up in Chaosnet DNS given
+the chaddr parameter, but...
 
 ----------------------------------------------------------------
 

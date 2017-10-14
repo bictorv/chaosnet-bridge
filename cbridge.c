@@ -36,7 +36,7 @@
 
 // Separate links from routes?
 
-// perhaps implement TIME for the router?
+// perhaps implement TIME for the bridge?
 
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
@@ -599,6 +599,54 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
     return ch_nbytes(cha)+CHAOS_HEADERSIZE;
   else
     return 0;
+}
+
+// Implement DUMP-ROUTING-TABLE for bridge, 
+// so CHAOS:SHOW-ROUTING-PATH (LMI) and CHAOS:PRINT-ROUTING-TABLE (Symbolics) could work.
+// See SYS:NETWORK.CHAOS;CHSNCP LISP
+// ;;; Routing table format: for N subnets, N*4 bytes of data, holding N*2 words
+// ;;; For subnet n, pkt[2n] has the method; if this is less than 400 (octal), it's
+// ;;; an interface number; otherwise, it's a host which will forward packets to that
+// ;;; subnet.  pkt[2n+1] has the host's idea of the cost.
+// (Stupid format, can only handle subnets up to decimal #122 - RUT
+// handles 122 subnets regardless of their actual subnet number.)
+
+int
+make_dump_routing_table_pkt(u_char *pkt, int pklen)
+{
+  struct chaos_header *cha = (struct chaos_header *)pkt;
+  u_short *data = (u_short *)&pkt[CHAOS_HEADERSIZE];
+  int sub, cost, nroutes = 0;
+  int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
+  if (maxroutes > 122)
+    maxroutes = 122;
+
+  memset(data, 0, pklen-CHAOS_HEADERSIZE);
+
+  PTLOCK(rttbl_lock);
+  for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
+    if (rttbl_net[sub].rt_type != RT_NOPATH) {
+      // Method: if < 0400: interface number; otherwise next hop address
+      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (rttbl_net[sub].rt_braddr == mychaddr)) {
+	// interface nr - use link type
+	if (rttbl_net[sub].rt_link == LINK_INDIRECT)
+	  data[sub*2] = htons(LINK_CHUDP);  /* assume this */
+	else
+	  data[sub*2] = htons(rttbl_net[sub].rt_link);
+      } else {
+	data[sub*2] = htons(rttbl_net[sub].rt_braddr);
+      }
+      cost = rttbl_net[sub].rt_cost;
+      data[sub*2+1] = htons(cost);
+      if (debug) fprintf(stderr," Adding routing for subnet %#o (meth %#o, cost %d)\n",
+			 sub, data[sub*2], cost);
+      nroutes = sub;
+    }
+  }
+  PTUNLOCK(rttbl_lock);
+
+  if (debug) fprintf(stderr," Max net in pkt %#o, i.e. %d bytes data\n", nroutes, (nroutes+1)*4);
+  return (nroutes+1)*4;
 }
 
 struct chroute *
@@ -1817,13 +1865,25 @@ get_packet (int if_fd, u_char *buf, int buflen)
 	for (i = 0; i < arp->ar_pln; i++)
 	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
 	printf("\n");
-      } else if (verbose)
-	printf("ARP %s for protocol %#x\n",
+      } else if (stats || verbose) {
+	printf("ARP %s for protocol %#x",
 	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
 	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
 		(arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
 		 (arp->ar_op == htons(ARPOP_RREPLY) ? "Reverse reply" : "?"))),
 	       ntohs(arp->ar_pro));
+	printf(", dest addr ");
+	if (arp->ar_pln == 2)
+	  printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 ||
+			       buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
+	//else
+	  for (i = 0; i < arp->ar_pln; i++)
+	    printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
+	printf("from src ");
+	for (i = 0; i < arp->ar_hln; i++)
+	  printf("%02X ", buf[sizeof(struct arphdr)+i]);
+	printf("\n");
+      }
     }
     else if (protocol == htons(ETHERTYPE_CHAOS)) {
 #if PEEK_ARP
@@ -2020,6 +2080,38 @@ send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
   send_packet(fd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
 }
 #endif // CHAOS_ETHERP
+
+void 
+dump_routing_table_responder(u_char *rfc, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)rfc;
+  u_short src = ch_srcaddr(ch);
+  u_short dst = ch_destaddr(ch);
+  u_char ans[CH_PK_MAXLEN];
+  struct chaos_header *ap = (struct chaos_header *)&ans;
+  int i;
+
+  if (verbose || debug) {
+    fprintf(stderr,"Handling DUMP-ROUTING-TABLE from %#o to %#o\n",
+	    src, dst);
+    print_routing_table();
+  }  
+
+  memset(ans, 0, sizeof(ans));
+  set_ch_opcode(ap, CHOP_ANS);
+  set_ch_destaddr(ap, src);
+  set_ch_destindex(ap, ch_srcindex(ch));
+  set_ch_srcaddr(ap, dst);
+  set_ch_srcindex(ap, ch_destindex(ch));
+
+  i = make_dump_routing_table_pkt((u_char *)ap, sizeof(ans));
+  if (verbose || debug) {
+    fprintf(stderr,"Responding to DUMP-ROUTING-TABLE with %d bytes\n", i);
+  }
+  set_ch_nbytes(ap, i);
+
+  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
+}
 
 #if COLLECT_STATS
 void 
@@ -2256,6 +2348,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 
   // To me?
   if ((dchad == mychaddr) || (rt != NULL && rt->rt_myaddr == dchad)) {
+    // @@@@ make this more generic at some point, if more protocols are added.
 #if COLLECT_STATS
     // should potentially handle BRD packets, but nobody sends them anyway?
     if (ch_opcode(ch) == CHOP_RFC
@@ -2266,6 +2359,13 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     }
     else
 #endif // COLLECT_STATS
+    if (ch_opcode(ch) == CHOP_RFC
+	&& strncmp((char *)&data[CHAOS_HEADERSIZE],"DUMP-ROUTING-TABLE",18)
+	&& (ch_nbytes(ch) == 18)) {
+      if (verbose) fprintf(stderr,"RFC for DUMP-ROUTING-TABLE received, responding\n");
+      dump_routing_table_responder(data, dlen);
+    }
+    else
       if (debug) {
 	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding.\n",
 		ch_opcode_name(ch_opcode(ch)),
