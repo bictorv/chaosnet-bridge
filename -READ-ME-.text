@@ -82,6 +82,10 @@ the STATUS protocol (see AI Memo 628), using the host name from the
 first period). Yes, it could try to look it up in Chaosnet DNS given
 the chaddr parameter, but...
 
+If the process receives a SIGUSR1 signal, it prints things about its
+configuration, routing and statistics. If SIGINFO is defined (e.g. on
+macOS, using ctrl-T in bash), that signal does the same.
+
 ----------------------------------------------------------------
 
 Future work (let me know if you do it!):

@@ -3231,6 +3231,28 @@ void parse_config(char *cfile)
   }
 }
 
+// Print stats on SIGINFO/SIGUSR1
+void
+print_stats(int sig)
+{
+  if (sig != 0) {
+    // fprintf(stderr,"Signal %d received\n", sig);
+    fprintf(stderr,"My Chaosnet host name %s, address %#o\n",
+	    myname, mychaddr);
+    if (do_unix) fprintf(stderr," Unix socket enabled and %s\n",
+			 (unixsock > 0 ? "open" : "NOT open"));
+    if (do_udp)  fprintf(stderr," CHUDP enabled on port %d (%s)\n",
+			 udpport, chudp_dynamic ? "dynamic" : "static");
+    if (do_ether)  fprintf(stderr," Ethernet enabled on interface %s,"
+			   " address %02X:%02X:%02X:%02X:%02X:%02X\n",
+			   ifname, myea[0], myea[1], myea[2], myea[3], myea[4], myea[5]);
+  }
+  print_arp_table();
+  print_routing_table();
+  print_chudp_config();
+  print_link_stats();
+}
+
 void
 usage(char *pname)
 {
@@ -3334,6 +3356,16 @@ main(int argc, char *argv[])
   pthread_t threads[5];
   int ti = 0;
 
+  // Block SIGINFO/SIGUSR1 in all threads, enable it in main thread below
+  sigset_t ss;
+  sigemptyset(&ss);
+#ifdef SIGINFO
+  sigaddset(&ss, SIGINFO);
+#endif
+  sigaddset(&ss, SIGUSR1);
+  if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
+    perror("pthread_sigmask(SIG_BLOCK)");
+
   if (do_unix || unixsock > 0) {
     if (verbose) fprintf(stderr, "Starting thread for UNIX socket\n");
     if (pthread_create(&threads[ti++], NULL, &unix_input, NULL) < 0) {
@@ -3377,14 +3409,33 @@ main(int argc, char *argv[])
     }
   }
 
+  // Now unblock SIGINFO/SIGUSR1 in this thread
+  if (pthread_sigmask(SIG_UNBLOCK, &ss, NULL) < 0)
+    perror("pthread_sigmask(SIG_BLOCK emptyset)");
+
+  // and set up a handler
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = print_stats;
+  sigemptyset(&sa.sa_mask);
+
+#ifdef SIGINFO
+  // Easy debugging, press ^T - but why do I get two signals?
+  if (verbose || debug) fprintf(stderr,"Enabling SIGINFO\n");
+  sigaddset(&sa.sa_mask, SIGINFO);
+  if (sigaction(SIGINFO, &sa, NULL) < 0)
+    perror("sigaction(SIGINFO)");
+#endif
+  if (verbose || debug) fprintf(stderr,"Enabling SIGUSR1\n");
+  sigaddset(&sa.sa_mask, SIGUSR1);
+  if (sigaction(SIGUSR1, &sa, NULL) < 0)
+    perror("sigaction(SIGUSR1)");
+
   while(1) {
     sleep(15);			/* ho hum. */
 #if COLLECT_STATS
     if (stats || verbose) {
-      print_link_stats();
-      print_routing_table();
-      print_chudp_config();
-      print_arp_table();
+      print_stats(0);
     }
 #endif
   }
