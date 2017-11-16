@@ -74,7 +74,11 @@ routing table (for subnets up to nr 122). This is used by e.g. the
 functions CHAOS:SHOW-ROUTING-PATH and CHAOS:SHOW-ROUTING-TABLE on LMI
 systems, the CHAOS:PRINT-ROUTING-TABLE function on Symbolics systems,
 and if you're lucky, the DUMP-ROUTING-TABLE command of the CHATST
-program in ITS.
+program in ITS. 
+
+It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
+the start of the bridge program, which is more interesting than the
+host uptime (e.g. wrt the STATUS statistics).
 
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
