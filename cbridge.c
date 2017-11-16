@@ -36,8 +36,6 @@
 
 // Separate links from routes?
 
-// perhaps implement TIME for the bridge?
-
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
 // add parameters for various constans (arp age limit, reparsing interval...)
@@ -242,6 +240,8 @@ static int ifix;		/* ethernet interface index */
 #endif
 
 int unixsock = 0, udpsock = 0, chfd = 0, arpfd = 0;
+
+time_t boottime;
 
 // Config stuff
 char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STATUS prot */
@@ -2113,6 +2113,86 @@ dump_routing_table_responder(u_char *rfc, int len)
   send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
 }
 
+int
+make_time_pkt(u_char *pkt, int pklen, time_t t)
+{
+  u_char *data = (u_char *)&pkt[CHAOS_HEADERSIZE];
+  // LSB first (see MIT AIM 628) and in 11 order
+  data[1] = t & 0xff;
+  data[0] = (t>>8) & 0xff;
+  data[3] = (t>>16) & 0xff;
+  data[2] = (t>>24) & 0xff;
+  if (debug)
+    fprintf(stderr,"Time pkt: %#x => %02x %02x %02x %02x\n",
+	    t, data[0], data[1], data[2], data[3]);
+  return 4;
+}
+
+// @@@@ lots of copy-paste here, generalize
+void
+uptime_responder(u_char *rfc, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)rfc;
+  u_short src = ch_srcaddr(ch);
+  u_short dst = ch_destaddr(ch);
+  u_char ans[CH_PK_MAXLEN];
+  struct chaos_header *ap = (struct chaos_header *)&ans;
+  int i;
+
+  if (verbose || debug) {
+    fprintf(stderr,"Handling UPTIME from %#o to %#o\n",
+	    src, dst);
+  }  
+
+  memset(ans, 0, sizeof(ans));
+  set_ch_opcode(ap, CHOP_ANS);
+  set_ch_destaddr(ap, src);
+  set_ch_destindex(ap, ch_srcindex(ch));
+  set_ch_srcaddr(ap, dst);
+  set_ch_srcindex(ap, ch_destindex(ch));
+
+  time_t now = time(NULL);
+  i = make_time_pkt((u_char *)ap, sizeof(ans), (now-boottime)*60);
+  if (verbose || debug) {
+    fprintf(stderr,"Responding to UPTIME with %d bytes\n", i);
+  }
+  set_ch_nbytes(ap, i);
+
+  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
+}
+
+void
+time_responder(u_char *rfc, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)rfc;
+  u_short src = ch_srcaddr(ch);
+  u_short dst = ch_destaddr(ch);
+  u_char ans[CH_PK_MAXLEN];
+  struct chaos_header *ap = (struct chaos_header *)&ans;
+  int i;
+
+  if (verbose || debug) {
+    fprintf(stderr,"Handling TIME from %#o to %#o\n",
+	    src, dst);
+  }  
+
+  memset(ans, 0, sizeof(ans));
+  set_ch_opcode(ap, CHOP_ANS);
+  set_ch_destaddr(ap, src);
+  set_ch_destindex(ap, ch_srcindex(ch));
+  set_ch_srcaddr(ap, dst);
+  set_ch_srcindex(ap, ch_destindex(ch));
+
+  time_t now = time(NULL);
+  i = make_time_pkt((u_char *)ap, sizeof(ans), now+2208988800L);  /* see RFC 868 */
+  if (verbose || debug) {
+    fprintf(stderr,"Responding to TIME with %d bytes\n", i);
+  }
+  set_ch_nbytes(ap, i);
+
+  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
+}
+
 #if COLLECT_STATS
 void 
 status_responder(u_char *rfc, int len)
@@ -2352,7 +2432,8 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 #if COLLECT_STATS
     // should potentially handle BRD packets, but nobody sends them anyway?
     if (ch_opcode(ch) == CHOP_RFC
-	&& strncmp((char *)&data[CHAOS_HEADERSIZE],"STATUS",6)
+	// "STATUS" in pdp11 format
+	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"TSTASU",6) == 0) 
 	&& ((ch_nbytes(ch) == 6) || data[CHAOS_HEADERSIZE+7] == ' ')) {
       if (verbose) fprintf(stderr,"RFC for STATUS received, responding\n");
       status_responder(data, dlen);
@@ -2360,28 +2441,44 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     else
 #endif // COLLECT_STATS
     if (ch_opcode(ch) == CHOP_RFC
-	&& strncmp((char *)&data[CHAOS_HEADERSIZE],"DUMP-ROUTING-TABLE",18)
+	// "DUMP-ROUTING-TABLE" in pdp11 format
+	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"UDPMR-UOITGNT-BAEL",18) == 0)
 	&& (ch_nbytes(ch) == 18)) {
       if (verbose) fprintf(stderr,"RFC for DUMP-ROUTING-TABLE received, responding\n");
       dump_routing_table_responder(data, dlen);
     }
+    else if (ch_opcode(ch) == CHOP_RFC
+	// "UPTIME" in pdp11 format
+	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"PUITEM",6) == 0)
+	&& (ch_nbytes(ch) == 6)) {
+      if (verbose) fprintf(stderr,"RFC for UPTIME received, responding\n");
+      uptime_responder(data, dlen);
+    }
+    else if (ch_opcode(ch) == CHOP_RFC
+	// "TIME" in pdp11 format
+	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"ITEM",4) == 0)
+	&& (ch_nbytes(ch) == 4)) {
+      if (verbose) fprintf(stderr,"RFC for TIME received, responding\n");
+      time_responder(data, dlen);
+    }
     else
-      if (debug) {
-	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding.\n",
+      if (verbose) {
+	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
 		ch_opcode_name(ch_opcode(ch)),
 		dchad);
 	if (ch_opcode(ch) == CHOP_RFC) {
-	  fprintf(stderr," Contact: ");
+	  fprintf(stderr,"; Contact: ");
 	  int max = ch_nbytes(ch);
-	  u_char ch[3], *cp = &data[CHAOS_HEADERSIZE];
-	  while (*cp && (max > 0)) {
-	    ch_char(*cp,(char *)ch);
-	    fprintf(stderr,"%s %d", ch, *cp);
-	    cp++;
-	    max--;
-	  }
+	  u_char *cp = &data[CHAOS_HEADERSIZE];
+	  u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
+	  if (cont != NULL) {
+	    ch_11_gets(cp, cont, max);
+	    fprintf(stderr,"%s\n", cont);
+	    free(cont);
+	  } else
+	    fprintf(stderr,"calloc(%d) failed\n", max+1);
+	} else
 	  fprintf(stderr,"\n");
-	}
       }
     return;			/* after checking for RUT */
   }
@@ -3351,6 +3448,9 @@ main(int argc, char *argv[])
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
   }
+
+  // remember when we restarted. This is more interesting than the host boot time.
+  boottime = time(NULL);
 
   // Now start the different threads
   pthread_t threads[5];
