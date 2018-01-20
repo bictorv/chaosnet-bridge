@@ -112,7 +112,7 @@
 
 #include <pthread.h>
 
-#include "chaos.h"		/* chaos pkt format etc */
+#include "cbridge-chaos.h"	/* chaos pkt format etc */
 #include "chudp.h"		/* chudp pkt format etc */
 #include "chaosd.h"		/* chaos-over-unix-sockets */
 
@@ -2123,7 +2123,7 @@ make_time_pkt(u_char *pkt, int pklen, time_t t)
   data[3] = (t>>16) & 0xff;
   data[2] = (t>>24) & 0xff;
   if (debug)
-    fprintf(stderr,"Time pkt: %#x => %02x %02x %02x %02x\n",
+    fprintf(stderr,"Time pkt: %#lx => %02x %02x %02x %02x\n",
 	    t, data[0], data[1], data[2], data[3]);
   return 4;
 }

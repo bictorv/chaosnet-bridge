@@ -1,6 +1,6 @@
 all: cbridge
 
-cbridge: cbridge.c chaosd.h chaos.h chudp.h
+cbridge: cbridge.c chaosd.h cbridge-chaos.h chudp.h
 	$(CC) $(CFLAGS) -o cbridge cbridge.c -lpthread
 
 clean:
