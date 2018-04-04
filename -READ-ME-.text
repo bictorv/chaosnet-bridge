@@ -1,5 +1,6 @@
 This program is a bridge between Chaosnet implementations. It supports
-- Chaos-over-Ethernet (protocol nr 0804, cf IANA)
+- Chaos-over-Ethernet (protocol nr 0x0804, cf
+  https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml)
 - Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator,
   see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see
@@ -95,7 +96,9 @@ macOS, using ctrl-T in bash), that signal does the same.
 Future work (let me know if you do it!):
 ========================================
 - validate configuration (at least warn about crazy things)
+- rewrite BPF part using libpcap
 - minimize copying (not much of a problem?) - see comments in code
+- implement Chaos-over-DTLS to have some security
 - make Open Genera use tap instead of tun, to allow Chaosnet (quite
   different project, but for Chaos interoperability)
 - add support for Chaos-over-IP (encapsulating using IP protocol 16,
@@ -175,32 +178,49 @@ RUT pkt is received, describing a new or better route to a subnet.
 Examples:
 =========
 
-    ; Define a chaos-over-udp link to UP, who has address 3143
-    link chudp up.update.uu.se host 3143
-    ; Define a route to subnet 6 over UP, who knows everyone
-    route subnet 6 bridge 3143 
-    ; Define the Chaos-over-Ether subnet nr 7 (hosts 3400-3777)
-    link ether subnet 7
-    ; Define host 401 on the Chaos-over-unix-socket
-    link unix host 401 
+Assuming your local Chaosnet network is over Ethernet, and uses subnet 11 (octal).
+
+    ; My default Chaosnet address
+    chaddr 4401
+    ; Define a chaos-over-udp link to the Global Chaosnet router, which has address 3040
+    link chudp router.aosnet.ch host 3040
+    ; Define a route to subnet 6 over that - it knows everyone
+    route subnet 6 bridge 3040
+    ; Define a local Chaos-over-Ether subnet nr 11 (hosts 4400-4777)
+    link ether subnet 11
+    ; A chaos-over-udp link to the ITS configured below
+    link chudp localhost:42043 host 4411
+
+For a ITS/klh10 running on the same host as cbridge, you can use
+    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
+
+If you let ITS/klh10 use Chaos-over-Ethernet, you do not need the last
+"link chudp" line in the cbridge config, and in klh10.ini you can use
+    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 ifmeth=pcap
+
+The ITS will pick up routing info from cbridge. (Of course you also
+need to configure ITS to use address 4411.)
+
 
 ----------------------------------------------------------------
 
 Notes:
 ======
+For more info on the Global Chaosnet, see https://aosnet.ch.
+
 Separate threads are started to handle input from different link
 types. Each thread is only started if the configuration needs it (e.g.
 if you configure an ether interface, or an ether link, the ethernet
 thread is started).
 
-Often the Ethernet link can not send and receive to the host system
+Often the Ethernet link can NOT send and receive to the host system
 running the bridge program, or other programs using the same
-mechanism, such as LambdaDelta. Run the bridge on another system on
-your network.
+mechanism, such as LambdaDelta or klh10 using Chaos-over-Ether. 
+Run the bridge on another system on your network.
 
-Q: if UP should be the main router for subnet 6, but that's only p2p
-   chudp links, how do we configure it to send RUTs for subnet 6 on
-   other nets it may be connected to?
+Q: if UP should be the main router for subnet 6, but that's only
+   point-2-point chudp links, how do we configure it to send RUTs for
+   subnet 6 on other nets it may be connected to?
 A: "route subnet 6 bridge 3143" works.
    Actual host routes have prio, this will add an indirect route,
    and no route will be found to self.

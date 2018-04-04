@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017, 2018 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -245,7 +245,9 @@ time_t boottime;
 
 // Config stuff
 char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STATUS prot */
-static u_short mychaddr = 0;	/* My Chaos address (only for ARP) */
+#define NCHADDR 8
+static int nchaddr = 0;
+static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int udpport = 42042;		// default port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
@@ -253,6 +255,15 @@ int do_unix = 0, do_udp = 0, do_ether = 0;
 
 // Whether to peek at non-RUT pkts to discover routes
 u_char peek_routing_info = 0;	// not implemented
+
+int is_mychaddr(u_short addr) 
+{
+  int i;
+  for (i = 0; i < nchaddr && i < NCHADDR; i++)
+    if (mychaddr[i] == addr)
+      return 1;
+  return 0;
+}
 
 void init_rttbl()
 {
@@ -462,7 +473,7 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
   u_short rsub, rcost;
   int i, pkdlen = ch_nbytes(cha);
 
-  if (pksrc == mychaddr) {
+  if (is_mychaddr(pksrc)) {
     // Already checked by caller
     if (debug) fprintf(stderr,"Got my pkt back (%#o), ignoring\n", pksrc);
     return;
@@ -627,7 +638,7 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
     if (rttbl_net[sub].rt_type != RT_NOPATH) {
       // Method: if < 0400: interface number; otherwise next hop address
-      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (rttbl_net[sub].rt_braddr == mychaddr)) {
+      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (is_mychaddr(rttbl_net[sub].rt_braddr))) {
 	// interface nr - use link type
 	if (rttbl_net[sub].rt_link == LINK_INDIRECT)
 	  data[sub*2] = htons(LINK_CHUDP);  /* assume this */
@@ -653,7 +664,7 @@ struct chroute *
 find_in_routing_table(u_short dchad, int only_host)
 {
   int i;
-  if (dchad == mychaddr) {
+  if (is_mychaddr(dchad)) {
     // The only reason for defining a route with "self" as destination
     // is when you have a subnet where all hosts are connected by
     // CHUDP links, and you want to announce the subnet by RUT.
@@ -697,7 +708,7 @@ find_in_routing_table(u_short dchad, int only_host)
       && rttbl_net[sub].rt_cost < RTCOST_HIGH) {
     if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
       // #### validate config once instead of every time, and simply return the recursive call here
-      if ((rttbl_net[sub].rt_braddr == mychaddr)
+      if (is_mychaddr(rttbl_net[sub].rt_braddr)
 	  // this case would be stupid
 	  || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
 	// This is an announce-only route, when we have individual
@@ -943,9 +954,9 @@ ch_dumpkt(unsigned char *ucp, int cnt)
   /* Now show trailer */
   if (len % 2)
     len++;			/* Align */
-  if (len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE > cnt)
-    fprintf(stderr,"[Incomplete trailer: pkt size %d < (len + trailer size) = %lu]\n",
-	    cnt, len+CHAOS_HEADERSIZE);
+  if (cnt < len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE)
+    fprintf(stderr,"[Incomplete trailer: pkt size %d < (header + len + trailer size) = %lu]\n",
+	    cnt, len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE);
   else {
     u_int cks = ch_checksum((u_char *)ch, len);
     fprintf(stderr,"HW trailer:\r\n  Dest: %o\r\n  Source: %o\r\n  Checksum: %#x (%#x)\r\n",
@@ -1634,7 +1645,7 @@ send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *p
     for (cc = 0; cc < addrlen-1; cc++)
       printf("%02X:",addr[cc]);
     printf("%02X\n",addr[cc]);
-    if (debug) {
+    if (debug && (ethtype == ETHERTYPE_CHAOS)) {
       u_char pk[CH_PK_MAXLEN];
       ntohs_buf((u_short *)packet, (u_short *)pk, packetlen);
       ch_dumpkt(pk, packetlen);
@@ -1874,11 +1885,11 @@ get_packet (int if_fd, u_char *buf, int buflen)
 	       ntohs(arp->ar_pro));
 	printf(", dest addr ");
 	if (arp->ar_pln == 2)
-	  printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 ||
+	  printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 |
 			       buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
-	//else
+	else
 	  for (i = 0; i < arp->ar_pln; i++)
-	    printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
+	    printf("%#x ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
 	printf("from src ");
 	for (i = 0; i < arp->ar_hln; i++)
 	  printf("%02X ", buf[sizeof(struct arphdr)+i]);
@@ -1986,7 +1997,7 @@ u_char *find_arp_entry(u_short daddr)
 {
   int i;
   if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, *charp_len);
-  if (daddr == mychaddr) {	// #### maybe also look for rt_myaddr matches...
+  if (is_mychaddr(daddr)) {	// #### maybe also look for rt_myaddr matches...
     fprintf(stderr,"#### Looking up ARP for my own address, BUG!\n");
     return NULL;
   }
@@ -2029,7 +2040,7 @@ u_short find_ether_chaos_address() {
     }
   }
   PTUNLOCK(rttbl_lock);
-  return (ech == 0 ? mychaddr : ech);
+  return (ech == 0 ? mychaddr[0] : ech);  // hmm, are defaults good?
 }
 
 void
@@ -2276,7 +2287,7 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   // HW dest is next-hop destination
   tr->ch_hw_destaddr = rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch));
   // HW sender is me!
-  tr->ch_hw_srcaddr = rt->rt_myaddr > 0 ? htons(rt->rt_myaddr) : htons(mychaddr);
+  tr->ch_hw_srcaddr = rt->rt_myaddr > 0 ? htons(rt->rt_myaddr) : htons(mychaddr[0]);
 
   int cks = ch_checksum(data,dlen-2); /* Don't checksum the checksum field */
   tr->ch_hw_checksum = htons(cks);
@@ -2287,6 +2298,8 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 #if CHAOS_ETHERP
   case LINK_ETHER:
     if (debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
+    // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
+    dlen -= CHAOS_HW_TRAILERSIZE;
     htons_buf((u_short *)ch, (u_short *)ch, dlen);
     if (dchad == 0) {		/* broadcast */
       if (debug) fprintf(stderr,"Forward: Broadcasting on ether from %#o\n", schad);
@@ -2375,6 +2388,8 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     }
   }
 #endif
+  // @@@@ If a valid trailer exists (e.g. not Ether), consider using the dest there, constructed by e.g. ITS.
+  // @@@@ But we do know about routing, so don't?
   u_short dchad = ch_destaddr(ch);  /* destination */
   u_char fwc = ch_fc(ch);	/* forwarding count */
 
@@ -2405,7 +2420,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   struct chroute *rt = find_in_routing_table(dchad, 0);
 
   // From me?
-  if ((ch_srcaddr(ch) == mychaddr) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
+  if (is_mychaddr(ch_srcaddr(ch)) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
     // Should not happen. Unless Unix sockets.
     if (src_linktype != LINK_UNIXSOCK) {
       if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, type %s, link %s) \n",
@@ -2427,7 +2442,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   peek_routing(data, dlen, type, cost, src_linktype); /* check for RUT */
 
   // To me?
-  if ((dchad == mychaddr) || (rt != NULL && rt->rt_myaddr == dchad)) {
+  if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
     // @@@@ make this more generic at some point, if more protocols are added.
 #if COLLECT_STATS
     // should potentially handle BRD packets, but nobody sends them anyway?
@@ -2526,7 +2541,7 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
   struct chaos_header *cha = (struct chaos_header *)pkt;
 
   // Update source address
-  set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr : rt->rt_myaddr));
+  set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
   switch (rt->rt_link) {
 #if CHAOS_ETHERP
@@ -2619,7 +2634,7 @@ void send_chaos_pkt(u_char *pkt, int len)
 
   // Update source address, perhaps	  
   if (ch_srcaddr(cha) == 0)
-    set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr : rt->rt_myaddr));
+    set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
   if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (%s)\n",
 		       ch_opcode_name(ch_opcode(cha)),
@@ -2720,7 +2735,7 @@ void * unix_input(void *v)
 	srcaddr = tr->ch_hw_srcaddr;
       } else
 	srcaddr = ch_srcaddr(ch);
-      if (srcaddr == mychaddr) {
+      if (is_mychaddr(srcaddr)) {
 	// Unix socket server/chaosd echoes everything to everyone
 	// (This is checked also in forward_chaos_pkt, but optimize a little?)
 	if (debug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
@@ -2799,6 +2814,10 @@ void handle_arp_input(u_char *data, int dlen)
   u_short dchad =  ntohs((data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln]<<8) |
 			 data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]);
 
+  // don't create a storm
+  if (memcmp(sead, eth_brd, ETHER_ADDR_LEN) == 0)
+    return;
+
   if (eth_chaddr == 0) {
     eth_chaddr = find_ether_chaos_address();
     if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
@@ -2811,7 +2830,7 @@ void handle_arp_input(u_char *data, int dlen)
 
   /* See if we proxy for this one */
   if (arp->ar_op == htons(ARPOP_REQUEST)) {
-    if (dchad == eth_chaddr || dchad == mychaddr) {
+    if (dchad == eth_chaddr || is_mychaddr(dchad)) {
       if (verbose) printf("ARP: Sending reply for %#o (me) to %#o\n", dchad, schad);
       send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
     } else {
@@ -3034,6 +3053,11 @@ int parse_route_config()
 	return -1;
       }
       rt->rt_myaddr = sval;
+      if (nchaddr < NCHADDR)
+	mychaddr[nchaddr++] = sval;
+      else
+	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
+		NCHADDR);
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -3185,6 +3209,11 @@ int parse_link_config()
 	return -1;
       }
       rt->rt_myaddr = sval;
+      if (nchaddr < NCHADDR)
+	mychaddr[nchaddr++] = sval;
+      else
+	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
+		NCHADDR);
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -3241,12 +3270,15 @@ int parse_config_line(char *line)
   if (strcasecmp(tok, "chaddr") == 0) {
     tok = strtok(NULL," \t\r\n");
     if (tok != NULL) {
-      if (sscanf(tok,"%ho",&mychaddr) != 1) {
-	mychaddr = 0;
+      if (nchaddr >= NCHADDR)
+	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
+		NCHADDR);
+      else if (sscanf(tok,"%ho",&mychaddr[nchaddr++]) != 1) {
+	mychaddr[--nchaddr] = 0;
 	fprintf(stderr,"chaddr: bad octal argument %s\n",tok);
 	return -1;
       } else if (verbose)
-	printf("Using default chaos address %#o\n", mychaddr);
+	printf("Using default Chaos address %#o\n", mychaddr[nchaddr-1]);
     }
     return 0;
   }
@@ -3266,7 +3298,7 @@ int parse_config_line(char *line)
     tok = strtok(NULL, " \t\r\n");
     udpport = atoi(tok);
     do_udp = 1;
-    // #### check for "dynamic" arg, for dynamic updates from new sources
+    // check for "dynamic" arg, for dynamic updates from new sources
     tok = strtok(NULL, " \t\r\n");
     if (tok != NULL) {
       if (strncmp(tok,"dynamic",sizeof("dynamic")) == 0)
@@ -3332,10 +3364,17 @@ void parse_config(char *cfile)
 void
 print_stats(int sig)
 {
+  int i;
   if (sig != 0) {
     // fprintf(stderr,"Signal %d received\n", sig);
-    fprintf(stderr,"My Chaosnet host name %s, address %#o\n",
-	    myname, mychaddr);
+    fprintf(stderr,"My Chaosnet host name %s, main address %#o\n",
+	    myname, mychaddr[0]);
+    if (nchaddr > 1) {
+      fprintf(stderr," additional addresses ");
+      for (i = 1; i < nchaddr && i < NCHADDR; i++)
+	fprintf(stderr,"%#o ", mychaddr[i]);
+      fprintf(stderr,"\n");
+    }
     if (do_unix) fprintf(stderr," Unix socket enabled and %s\n",
 			 (unixsock > 0 ? "open" : "NOT open"));
     if (do_udp)  fprintf(stderr," CHUDP enabled on port %d (%s)\n",
@@ -3409,6 +3448,7 @@ main(int argc, char *argv[])
 
   parse_config(cfile);
 
+#if 0
   // Print config
   if (verbose) {
     printf("Using Chaos host name %s\n", myname);
@@ -3421,9 +3461,10 @@ main(int argc, char *argv[])
     print_arp_table();
 #endif // CHAOS_ETHERP
   }
+#endif // 0
 
   // Check config, validate settings
-  if (mychaddr == 0) {
+  if (mychaddr[0] == 0) {
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
     exit(1);
   }
@@ -3448,6 +3489,12 @@ main(int argc, char *argv[])
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
   }
+
+#if 1
+  if (verbose)
+    // Print config
+    print_stats(1);
+#endif
 
   // remember when we restarted. This is more interesting than the host boot time.
   boottime = time(NULL);
