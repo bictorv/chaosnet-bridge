@@ -165,6 +165,7 @@ LINKTYPE:
 Note that while links implicitly define a route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;
 you need an additional route definition for the subnet.
+(See example below.)
 
 A link definition is automatically created when using "dynamic" chudp
 and a chudp pkt arrives from a new source.

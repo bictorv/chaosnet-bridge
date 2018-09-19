@@ -33,6 +33,16 @@
 /* Read MIT AIM 628, in particular secions 3.6 and 3.7. */
 
 // TODO
+// implement CHUDP over TCP using additional two-byte record length header
+// - new thread for reception,
+// - try integrating in rest of code as a special case of CHUDP (config "chudp tcp:host:port")
+// -- incl reparse thread
+// - add connection management
+// -- when sender finds link down, count as aborted,
+//    tell receiver to reopen (doesn't it also discover this at the same time?)
+// -- when receiver thread gets error, reopen (with some back-off)
+// -- use some field in chudest to signal open/dead?
+// port to libpcap
 
 // Separate links from routes?
 
@@ -195,7 +205,8 @@ pthread_mutex_t charp_lock, rttbl_lock, chudp_lock, linktab_lock;
 // CHUDP table
 #define CHUDPDEST_NAME_LEN 128
 struct chudest {
-  struct sockaddr_in chu_sin;	/* IP addr */
+  int use_tcp;			/* whether to use TCP or UDP */
+  struct sockaddr_in chu_sin;	/* IP addr + port */
   u_short chu_addr;		/* chaos address (or subnet) */
   char chu_name[CHUDPDEST_NAME_LEN]; /* name given in config, to reparse perhaps */
 };
@@ -248,10 +259,11 @@ char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STAT
 #define NCHADDR 8
 static int nchaddr = 0;
 static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
-int udpport = 42042;		// default port
+int udpport = 42042;		// default UDP port
+int tcpport = 42042;		// default TCP port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
-int do_unix = 0, do_udp = 0, do_ether = 0;
+int do_unix = 0, do_udp = 0, do_tcp = 0, do_ether = 0;
 
 // Whether to peek at non-RUT pkts to discover routes
 u_char peek_routing_info = 0;	// not implemented
@@ -365,18 +377,21 @@ void print_chudp_config()
   printf("CHUDP config: %d routes\n", *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
     char *ip = inet_ntoa(chudpdest[i].chu_sin.sin_addr);
-    printf(" dest %#o, host %s (%s) port %d\n",
+    printf(" dest %#o, host %s (%s) port %d (%s)\n",
 	   chudpdest[i].chu_addr, ip,
 	   chudpdest[i].chu_name,
-	   ntohs(chudpdest[i].chu_sin.sin_port));
+	   ntohs(chudpdest[i].chu_sin.sin_port),
+	   chudpdest[i].use_tcp ? "TCP" : "UDP");
   }
 }
 
-void add_chudp_dest(u_short srcaddr, struct sockaddr_in *sin) 
+void add_chudp_dest(u_short srcaddr, struct sockaddr_in *sin, int usetcp) 
 {
   if (*chudpdest_len < CHUDPDEST_MAX) {
-    if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
+    if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o (%s).\n", srcaddr,
+				  usetcp ? "TCP" : "UDP");
     PTLOCK(chudp_lock);
+    chudpdest[*chudpdest_len].use_tcp = usetcp;
     chudpdest[*chudpdest_len].chu_addr = srcaddr;
     chudpdest[*chudpdest_len].chu_sin.sin_family = AF_INET;
     chudpdest[*chudpdest_len].chu_sin.sin_port = sin->sin_port;
@@ -1031,7 +1046,7 @@ chudp_send_pkt(int sock, struct sockaddr_in *sout, unsigned char *buf, int len)
 }
 
 int
-chudp_receive(int sock, unsigned char *buf, int buflen)
+chudp_receive(int sock, int usetcp, unsigned char *buf, int buflen)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
   struct chudp_header *cuh = (struct chudp_header *)buf;
@@ -1040,12 +1055,16 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   int i, cnt, cks;
   u_int sinlen;
 
-  memset(&sin,0,sizeof(sin));
-  sinlen = sizeof(sin);
-  cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *)&sin, &sinlen);
-  if (cnt < 0) {
-    perror("recvfrom");
-    exit(1);
+  if (!usetcp) {
+    memset(&sin,0,sizeof(sin));
+    sinlen = sizeof(sin);
+    cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *)&sin, &sinlen);
+    if (cnt < 0) {
+      perror("recvfrom");
+      exit(1);
+    }
+  } else {
+    // @@@@
   }
   ip = inet_ntoa(sin.sin_addr);
   if ((cnt < CHUDP_HEADERSIZE) ||
