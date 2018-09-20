@@ -398,7 +398,7 @@ void add_chudp_dest(u_short srcaddr, struct sockaddr *sin) // was sockaddr_in
     memset(&chudpdest[*chudpdest_len], 0, sizeof(struct chudest));
     chudpdest[*chudpdest_len].chu_addr = srcaddr;
 #if 1
-    memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, sin->sa_len);
+    memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
 #else
     /* family and port are compatible for v4/v6 */
     chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_family = sin->sin_family;
@@ -1026,7 +1026,7 @@ int chudp_connect(u_short port, sa_family_t family)
   if (family == AF_INET6) {
     struct sockaddr_in6 sin6;
     int one = 1;
-    if (setsockopt(sock, SOL_SOCKET, IPV6_V6ONLY, &one, sizeof(one)) < 0)
+    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0)
       perror("setsockopt(IPV6_V6ONLY)");
     sin6.sin6_family = family;
     sin6.sin6_port = htons(port);
@@ -3567,12 +3567,12 @@ main(int argc, char *argv[])
       //exit(1);
       fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
   }
-  if (do_udp) {
-    if ((udpsock = chudp_connect(udpport, AF_INET)) < 0)
-      exit(1);
-  }
   if (do_udp6) {
     if ((udp6sock = chudp_connect(udpport, AF_INET6)) < 0)
+      exit(1);
+  }
+  if (do_udp) {
+    if ((udpsock = chudp_connect(udpport, AF_INET)) < 0)
       exit(1);
   }
   if (do_ether) {
