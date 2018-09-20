@@ -44,10 +44,11 @@
 
 // Separate links from routes?
 
+// validate conf (subnets vs bridges etc)
+// - multiple links/routes to same chaddr
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
 // add parameters for various constans (arp age limit, reparsing interval...)
-// validate conf (subnets vs bridges etc)
 // minimize copying
 // - now net order is swapped to host order when receiving from Ether and Unix,
 //   and then swapped back before forwarding,
@@ -378,7 +379,9 @@ void print_chudp_config()
   printf("CHUDP config: %d routes\n", *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
     if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
-		  &chudpdest[i].chu_sa.chu_sin.sin_addr, ip, sizeof(ip))
+		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
+		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
+		   : (void *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr), ip, sizeof(ip))
 	== NULL)
       strerror_r(errno, ip, sizeof(ip));
     //    char *ip = inet_ntoa(chudpdest[i].chu_sa.chu_sin.sin_addr);
