@@ -33,15 +33,6 @@
 
 // TODO
 
-// IPv6: enabled by parsing a chudp host with a v6 address or with explicit chudp config.
-// - all sockaddr_in => union sockaddr_in6  X
-// -- using chu_sin.sin_addr, check sin_family first X
-// - (re)parse ipv6 addr in config (parse_link_config, reparse_chudp_names) X
-// - chudp_connect, need another socket(?) X
-// -- also forward_chaos_pkt_on_route X, chudp_input
-// -- minor hack chudp_send_pkt X, chudp_receive X
-
-
 // Separate links from routes?
 
 // validate conf (subnets vs bridges etc)
