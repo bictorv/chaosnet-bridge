@@ -34,11 +34,15 @@
 // TODO
 
 // stats about who was last seen when (new chaos protocol?)
-
-// Separate links from routes?
-
+// - and pkt counts in/out?
+// - and from where (last hop router)
+// - persistent storage?
+// rewrite using pcap
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
+
+// Separate datastructures for links and routes, simplifying things.
+
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
 // add parameters for various constans (arp age limit, reparsing interval...)
