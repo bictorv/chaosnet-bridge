@@ -27,19 +27,25 @@
    - Chaos-over-IP (direct address mapping, used by pdp10x) #### TODO
 
    Does not hack BRD packets (yet), but noone seems to use them anyway?
-   Does not even try to support IPv6.
 */
 
 /* Read MIT AIM 628, in particular secions 3.6 and 3.7. */
 
 // TODO
 
-// Separate links from routes?
+// stats about who was last seen when (new chaos protocol?)
+// - and pkt counts in/out?
+// - and from where (last hop router)
+// - persistent storage?
+// rewrite using pcap
+// validate conf (subnets vs bridges etc)
+// - multiple links/routes to same chaddr
+
+// Separate datastructures for links and routes, simplifying things.
 
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
 // add parameters for various constans (arp age limit, reparsing interval...)
-// validate conf (subnets vs bridges etc)
 // minimize copying
 // - now net order is swapped to host order when receiving from Ether and Unix,
 //   and then swapped back before forwarding,
@@ -195,7 +201,11 @@ pthread_mutex_t charp_lock, rttbl_lock, chudp_lock, linktab_lock;
 // CHUDP table
 #define CHUDPDEST_NAME_LEN 128
 struct chudest {
-  struct sockaddr_in chu_sin;	/* IP addr */
+  union {
+    struct sockaddr chu_saddr;	/* generic sockaddr */
+    struct sockaddr_in chu_sin;	/* IP addr */
+    struct sockaddr_in6 chu_sin6;  /* IPv6 addr */
+  } chu_sa;
   u_short chu_addr;		/* chaos address (or subnet) */
   char chu_name[CHUDPDEST_NAME_LEN]; /* name given in config, to reparse perhaps */
 };
@@ -239,7 +249,7 @@ static u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
 static int ifix;		/* ethernet interface index */
 #endif
 
-int unixsock = 0, udpsock = 0, chfd = 0, arpfd = 0;
+int unixsock = 0, udpsock = 0, udp6sock = 0, chfd = 0, arpfd = 0;
 
 time_t boottime;
 
@@ -251,7 +261,7 @@ static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int udpport = 42042;		// default port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
-int do_unix = 0, do_udp = 0, do_ether = 0;
+int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
 
 // Whether to peek at non-RUT pkts to discover routes
 u_char peek_routing_info = 0;	// not implemented
@@ -362,25 +372,41 @@ print_routing_table() {
 void print_chudp_config()
 {
   int i;
+  char ip[INET6_ADDRSTRLEN];
   printf("CHUDP config: %d routes\n", *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
-    char *ip = inet_ntoa(chudpdest[i].chu_sin.sin_addr);
+    if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
+		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
+		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
+		   : (void *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr), ip, sizeof(ip))
+	== NULL)
+      strerror_r(errno, ip, sizeof(ip));
+    //    char *ip = inet_ntoa(chudpdest[i].chu_sa.chu_sin.sin_addr);
     printf(" dest %#o, host %s (%s) port %d\n",
 	   chudpdest[i].chu_addr, ip,
 	   chudpdest[i].chu_name,
-	   ntohs(chudpdest[i].chu_sin.sin_port));
+	   ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
   }
 }
 
-void add_chudp_dest(u_short srcaddr, struct sockaddr_in *sin) 
+void add_chudp_dest(u_short srcaddr, struct sockaddr *sin) // was sockaddr_in
 {
   if (*chudpdest_len < CHUDPDEST_MAX) {
     if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
     PTLOCK(chudp_lock);
+    /* clear any non-specified fields */
+    memset(&chudpdest[*chudpdest_len], 0, sizeof(struct chudest));
     chudpdest[*chudpdest_len].chu_addr = srcaddr;
-    chudpdest[*chudpdest_len].chu_sin.sin_family = AF_INET;
-    chudpdest[*chudpdest_len].chu_sin.sin_port = sin->sin_port;
-    memcpy(&chudpdest[*chudpdest_len].chu_sin.sin_addr.s_addr, &sin->sin_addr, sizeof(sin->sin_addr));
+#if 1
+    memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
+#else
+    /* family and port are compatible for v4/v6 */
+    chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_family = sin->sin_family;
+    chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_port = sin->sin_port;
+    /* addr is in the same place, but different lenght */
+    memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_addr.s_addr, &sin->sin_addr,
+	   (sin->sin_family == AF_INET ? sizeof(sin->sin_addr) : sizeof(sin6_addr));
+#endif
     (*chudpdest_len)++;
     if (verbose) print_chudp_config();
     PTUNLOCK(chudp_lock);
@@ -422,22 +448,32 @@ void reparse_chudp_names()
 {
   int i, res;
   struct in_addr in;
+  struct in6_addr in6;
   struct addrinfo *he;
   struct addrinfo hi;
 
   memset(&hi, 0, sizeof(hi));
-  hi.ai_family = PF_INET;
+  hi.ai_family = PF_UNSPEC;
+  hi.ai_flags = AI_ADDRCONFIG;
 
   PTLOCK(chudp_lock);
   for (i = 0; i < *chudpdest_len; i++) {
     if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
-	&& inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
+	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
+	&& (inet_pton(AF_INET6, chudpdest[i].chu_name, &in6) == 0))  /* and not an explicit ipv6 addr */
       {
 	// if (verbose) fprintf(stderr,"Re-parsing chudp host name %s\n", chudpdest[i].chu_name);
 	
 	if ((res = getaddrinfo(chudpdest[i].chu_name, NULL, &hi, &he)) == 0) {
-	  struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	  memcpy(&chudpdest[i].chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
+	  if (he->ai_family == AF_INET) {
+	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	    memcpy(&chudpdest[i].chu_sa.chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
+	  } else if (he->ai_family == AF_INET6) {
+	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	    memcpy(&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
+	  } else
+	    fprintf(stderr,"Error re-parsing chudp host name %s: unsupported address family %d\n",
+		    chudpdest[i].chu_name, he->ai_family);
 	  // if (verbose) fprintf(stderr," success: %s\n", inet_ntoa(s->sin_addr));
 	  freeaddrinfo(he);
 	} else if (stats || verbose) {
@@ -974,32 +1010,51 @@ dumppkt(unsigned char *ucp, int cnt)
 
 /* **** CHUDP protocol functions **** */
 
-int chudp_connect(u_short port) 
+int chudp_connect(u_short port, sa_family_t family) 
 {
   int sock;
-  struct sockaddr_in sin;
 
-  if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+  if ((family != AF_INET) && (family != AF_INET6)) {
+    fprintf(stderr,"Unsupported address family %d - should be AF_INET or AF_INET6\n", family);
+    return -1;
+  }
+
+  if ((sock = socket(family, SOCK_DGRAM, 0)) < 0) {
     perror("socket failed");
     exit(1);
   }
-  sin.sin_family = AF_INET;
-  sin.sin_port = htons(port);
-  sin.sin_addr.s_addr = INADDR_ANY;
-  if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
-    perror("bind failed");
-    exit(1);
+  if (family == AF_INET6) {
+    struct sockaddr_in6 sin6;
+    int one = 1;
+    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0)
+      perror("setsockopt(IPV6_V6ONLY)");
+    sin6.sin6_family = family;
+    sin6.sin6_port = htons(port);
+    memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
+    if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
+      perror("bind(v6) failed");
+      exit(1);
+    }
+  } else {
+    struct sockaddr_in sin;
+    sin.sin_family = family;
+    sin.sin_port = htons(port);
+    sin.sin_addr.s_addr = INADDR_ANY;
+    if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
+      perror("bind failed");
+      exit(1);
+    }
   }
   return sock;
 }
 
 void
-chudp_send_pkt(int sock, struct sockaddr_in *sout, unsigned char *buf, int len)
+chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
   unsigned short cks;
   int i;
-  char *ip;
+  char ip[INET6_ADDRSTRLEN];
 
   i = CHUDP_HEADERSIZE+CHAOS_HEADERSIZE+ch_nbytes(ch)+CHAOS_HW_TRAILERSIZE;
   if ((i % 2) == 1)
@@ -1014,17 +1069,24 @@ chudp_send_pkt(int sock, struct sockaddr_in *sout, unsigned char *buf, int len)
   }
 
 #if 1
-  ip = inet_ntoa(sout->sin_addr);
+  //  ip = inet_ntoa(sout->sin_addr);
+  if (inet_ntop(sout->sa_family,
+		(sout->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sout)->sin_addr : (void *)&((struct sockaddr_in6 *)sout)->sin6_addr),
+		ip, sizeof(ip))
+
+      == NULL)
+    strerror_r(errno, ip, sizeof(ip));
   if (verbose || debug) {
     fprintf(stderr,"CHUDP: Sending %s: %lu + %lu + %d + %lu = %d bytes to %s:%d\n",
 	    ch_opcode_name(ch_opcode(ch)),
 	    CHUDP_HEADERSIZE, CHAOS_HEADERSIZE, ch_nbytes(ch), CHAOS_HW_TRAILERSIZE, i,
-	    ip, ntohs(sout->sin_port));
+	    ip, ntohs(((struct sockaddr_in *)sout)->sin_port));
     if (debug)
       dumppkt(buf, i);
   }
 #endif
-  if (sendto(sock, buf, i, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in)) < 0) {
+  if (sendto(sock, buf, i, 0, sout,
+	     (sout->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
     perror("sendto failed");
     exit(1);
   }
@@ -1035,24 +1097,29 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
   struct chudp_header *cuh = (struct chudp_header *)buf;
-  struct sockaddr_in sin;
-  char *ip;
+  struct sockaddr_in6 sin;	// #### sockaddr_in6 is larger than sockaddr_in and sockaddr
+  char ip[INET6_ADDRSTRLEN];
   int i, cnt, cks;
   u_int sinlen;
 
   memset(&sin,0,sizeof(sin));
   sinlen = sizeof(sin);
-  cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *)&sin, &sinlen);
+  cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *) &sin, &sinlen);
   if (cnt < 0) {
     perror("recvfrom");
     exit(1);
   }
-  ip = inet_ntoa(sin.sin_addr);
+  if (inet_ntop(sin.sin6_family,
+		(sin.sin6_family == AF_INET ? (void *)&((struct sockaddr_in *)&sin)->sin_addr
+		 : (void *)&((struct sockaddr_in6 *)&sin)->sin6_addr),
+		ip, sizeof(ip))
+	== NULL)
+      strerror_r(errno, ip, sizeof(ip));
   if ((cnt < CHUDP_HEADERSIZE) ||
       (cuh->chudp_version != CHUDP_VERSION) ||
       (cuh->chudp_function != CHUDP_PKT)) {
     if (verbose) fprintf(stderr,"Bad CHUDP header (size %d) from %s:%d\n",cnt,
-			 ip, ntohs(sin.sin_port));
+			 ip, ntohs(sin.sin6_port));
     // #### look up the source in chudpdest, count rejected pkt
     return 0;
   }
@@ -1060,12 +1127,18 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   PTLOCK(chudp_lock);
   if (debug) fprintf(stderr,"Looking up %s among %d chudp entries\n", ip, *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
-    if (memcmp((u_char *)&chudpdest[i].chu_sin.sin_addr, (u_char *)&sin.sin_addr, sizeof(sin.sin_addr)) == 0) {
+    if ((chudpdest[i].chu_sa.chu_saddr.sa_family == sin.sin6_family)
+	&& (((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET) &&
+	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin.sin_addr, (u_char *)&((struct sockaddr_in *)&sin)->sin_addr, sizeof(struct in_addr)) == 0))
+	    ||
+	    ((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET6) &&
+	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&((struct sockaddr_in6 *)&sin)->sin6_addr, sizeof(struct in6_addr)) == 0))))
+	  {
       found = 1;
-      if (chudpdest[i].chu_sin.sin_port != sin.sin_port) {
+      if (chudpdest[i].chu_sa.chu_sin.sin_port != sin.sin6_port) {
 	if (verbose) fprintf(stderr,"CHUDP from %s port different from configured: %d # %d (dropping)\n",
-			     ip, ntohs(sin.sin_port),
-			     ntohs(chudpdest[i].chu_sin.sin_port));
+			     ip, ntohs(sin.sin6_port),
+			     ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
 	// #### if configured to use dynamic updates/additions also for this case?
 	PTUNLOCK(chudp_lock);
 	return 0;
@@ -1084,10 +1157,10 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 
   if (!found) {
     if (verbose) fprintf(stderr,"CHUDP from unknown source %s:%d\n",
-			 ip, ntohs(sin.sin_port));
+			 ip, ntohs(sin.sin6_port));
     // if configured to use dynamic updates/additions, do it
     if (chudp_dynamic) {
-      add_chudp_dest(srcaddr, &sin);
+      add_chudp_dest(srcaddr, (struct sockaddr *)&sin);
     } else
       return 0;
   }
@@ -1095,7 +1168,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   if (verbose || debug) {
     fprintf(stderr,"CHUDP: Received %d bytes (%s) from %s:%d (%#o)\n",
 	    cnt, ch_opcode_name(ch_opcode(ch)),
-	    ip, ntohs(sin.sin_port), srcaddr);
+	    ip, ntohs(sin.sin6_port), srcaddr);
     if (debug)
       dumppkt(buf, cnt);
   }
@@ -2361,7 +2434,10 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 	  ) {
 	if (verbose || debug) fprintf(stderr,"Forward CHUDP to dest %#o over %#o (%s)\n", dchad, chudpdest[i].chu_addr, chudpdest[i].chu_name);
 	found = 1;
-	chudp_send_pkt(udpsock, &chudpdest[i].chu_sin, (u_char *)&chubuf, dlen);
+	if (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET)
+	  chudp_send_pkt(udpsock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
+	else
+	  chudp_send_pkt(udp6sock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
       }
     }
     PTUNLOCK(chudp_lock);
@@ -2754,13 +2830,14 @@ void * unix_input(void *v)
 void * chudp_input(void *v)
 {
   /* CHUDP -> others thread */
+  int sock = (int)*(int *)v;
   u_int len;
   u_char data[CH_PK_MAXLEN+CHUDP_HEADERSIZE];
   struct chaos_header *ch = (struct chaos_header *)&data[CHUDP_HEADERSIZE];
 
   while (1) {
     bzero(data,sizeof(data));
-    len = chudp_receive(udpsock, data, sizeof(data));
+    len = chudp_receive(sock, data, sizeof(data));
     /*       len = CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE; */
     if (len >= (CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + CHAOS_HW_TRAILERSIZE)) {
       len -= CHUDP_HEADERSIZE;
@@ -3104,12 +3181,14 @@ int parse_link_config()
   u_short addr, subnetp, sval;
   struct addrinfo *he, hints;
   struct sockaddr_in *s;
+  struct sockaddr_in6 *s6;
   struct chroute rte;
   struct chroute *rt = &rte;
   char *tok = strtok(NULL," \t\r\n");
 
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = PF_INET;
+  hints.ai_family = PF_UNSPEC;
+  hints.ai_flags = AI_ADDRCONFIG;
 
   memset(rt, 0, sizeof(rte));
   if (tok == NULL) {
@@ -3130,7 +3209,6 @@ int parse_link_config()
   } else if (strcasecmp(tok, "chudp") == 0) {
     int res;
 
-    do_udp = 1;
     rt->rt_link = LINK_CHUDP;
     rt->rt_type = RT_FIXED;
     rt->rt_cost = RTCOST_ASYNCH;
@@ -3146,10 +3224,21 @@ int parse_link_config()
     if (sep) *sep = '\0';
     if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
       // chudpdest[*chudpdest_len].chu_addr = (subnet_p ? rt->rt_braddr : addr);
-      s = (struct sockaddr_in *)he->ai_addr;
-      chudpdest[*chudpdest_len].chu_sin.sin_family = AF_INET;
-      chudpdest[*chudpdest_len].chu_sin.sin_port = htons(port);
-      memcpy(&chudpdest[*chudpdest_len].chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
+      chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_family = he->ai_family;
+      chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_port = htons(port);
+      if (he->ai_family == AF_INET) {
+	do_udp = 1;
+	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
+      } else if (he->ai_family == AF_INET6) {
+	do_udp6 = 1;
+	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
+      } else {
+	fprintf(stderr,"error parsing chudp host %s: unknown address family %d\n",
+		tok, he->ai_family);
+	return -1;
+      }
       memcpy(&chudpdest[*chudpdest_len].chu_name, tok, CHUDPDEST_NAME_LEN);
       (*chudpdest_len)++;
       if (sep) *sep = ':';
@@ -3193,9 +3282,9 @@ int parse_link_config()
 	      " link chudp %s:%d host NN\n"
 	      " route subnet %o bridge NN\n"
 	      "where NN is the actual chudp host\n",
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sin.sin_port),
+	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
 	      addr,
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sin.sin_port),
+	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
 	      addr);
       return -1;
     }
@@ -3299,18 +3388,21 @@ int parse_config_line(char *line)
     udpport = atoi(tok);
     do_udp = 1;
     // check for "dynamic" arg, for dynamic updates from new sources
-    tok = strtok(NULL, " \t\r\n");
-    if (tok != NULL) {
+    ;
+    while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
       if (strncmp(tok,"dynamic",sizeof("dynamic")) == 0)
 	chudp_dynamic = 1;
       else if (strncmp(tok,"static",sizeof("static")) == 0)
 	chudp_dynamic = 0;
+      else if (strncmp(tok,"ipv6", sizeof("ipv6")) == 0)
+	do_udp6 = 1;
       else {
 	fprintf(stderr,"bad chudp keyword %s\n", tok);
 	return -1;
       }
     }
-    if (verbose) printf("Using CHUDP port %d (%s)\n",udpport, chudp_dynamic ? "dynamic" : "static");
+    if (verbose) printf("Using CHUDP port %d (%s)%s\n",udpport, chudp_dynamic ? "dynamic" : "static",
+			(do_udp6 ? ", listening to IPv6" : ""));
     return 0;
   }
   else if (strcasecmp(tok, "ether") == 0) {
@@ -3377,7 +3469,7 @@ print_stats(int sig)
     }
     if (do_unix) fprintf(stderr," Unix socket enabled and %s\n",
 			 (unixsock > 0 ? "open" : "NOT open"));
-    if (do_udp)  fprintf(stderr," CHUDP enabled on port %d (%s)\n",
+    if (do_udp || do_udp6)  fprintf(stderr," CHUDP enabled on port %d (%s)\n",
 			 udpport, chudp_dynamic ? "dynamic" : "static");
     if (do_ether)  fprintf(stderr," Ethernet enabled on interface %s,"
 			   " address %02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -3475,8 +3567,12 @@ main(int argc, char *argv[])
       //exit(1);
       fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
   }
+  if (do_udp6) {
+    if ((udp6sock = chudp_connect(udpport, AF_INET6)) < 0)
+      exit(1);
+  }
   if (do_udp) {
-    if ((udpsock = chudp_connect(udpport)) < 0)
+    if ((udpsock = chudp_connect(udpport, AF_INET)) < 0)
       exit(1);
   }
   if (do_ether) {
@@ -3522,8 +3618,15 @@ main(int argc, char *argv[])
   }
   if (udpsock > 0) {
     if (verbose) fprintf(stderr, "Starting thread for UDP socket\n");
-    if (pthread_create(&threads[ti++], NULL, &chudp_input, NULL) < 0) {
+    if (pthread_create(&threads[ti++], NULL, &chudp_input, &udpsock) < 0) {
       perror("pthread_create(chudp_input)");
+      exit(1);
+    }
+  }
+  if (udp6sock > 0) {
+    if (verbose) fprintf(stderr, "Starting thread for UDP v6 socket\n");
+    if (pthread_create(&threads[ti++], NULL, &chudp_input, &udp6sock) < 0) {
+      perror("pthread_create(chudp_input v6)");
       exit(1);
     }
   }
@@ -3548,7 +3651,7 @@ main(int argc, char *argv[])
     perror("pthread_create(route_cost_updater)");
     exit(1);
   }
-  if (do_udp) {
+  if (do_udp || do_udp6) {
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
     if (pthread_create(&threads[ti++], NULL, &reparse_chudp_names_thread, NULL) < 0) {
       perror("pthread_create(route_cost_updater)");

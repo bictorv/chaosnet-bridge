@@ -123,10 +123,12 @@ Global settings:
  myname name 
 	set my Chaosnet host name, max 32 bytes, for STATUS. 
 	Defaults to "real" host name up to first period.
- chudp portnr [dynamic | static]
+ chudp portnr [dynamic | static | ipv6 ]
 	set my chudp portnr (default 42042). If "dynamic", add new
 	chudp destinations dynamically when receiving pkts from
-	unknown sources.
+	unknown sources. 
+	With ipv6 option, listens to both v4 and v6 (enabled also by
+	defining a chudp link where the host has an ipv6 addr).
  ether ifname
        use this ether interface, default eth0
 
