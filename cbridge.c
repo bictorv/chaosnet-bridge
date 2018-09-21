@@ -33,6 +33,8 @@
 
 // TODO
 
+// stats about who was last seen when (new chaos protocol?)
+
 // Separate links from routes?
 
 // validate conf (subnets vs bridges etc)
@@ -3382,8 +3384,8 @@ int parse_config_line(char *line)
     udpport = atoi(tok);
     do_udp = 1;
     // check for "dynamic" arg, for dynamic updates from new sources
-    tok = strtok(NULL, " \t\r\n");
-    if (tok != NULL) {
+    ;
+    while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
       if (strncmp(tok,"dynamic",sizeof("dynamic")) == 0)
 	chudp_dynamic = 1;
       else if (strncmp(tok,"static",sizeof("static")) == 0)
