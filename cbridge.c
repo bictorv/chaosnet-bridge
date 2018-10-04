@@ -33,13 +33,13 @@
 
 // TODO
 
-// stats about who was last seen when (new chaos protocol?)
-// - and pkt counts in/out?
-// - and from where (last hop router)
-// - persistent storage?
 // rewrite using pcap
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
+// - make sure thois host has a subnet-specific chaos addr on all defined links
+// detect unexpected traffic
+// - e.g. source addr 3150 from link with addr 3160 (which has another link)
+// - or traffic from a defined subnet arriving on a different link
 
 // Separate datastructures for links and routes, simplifying things.
 
@@ -180,6 +180,16 @@ struct chroute *rttbl_host;
 int *rttbl_host_len;
 #define RTTBL_HOST_MAX 64
 
+// keep track of when we last saw a host, and from where (and how many pkts we've seen from it)
+struct hostat {
+  u_int32_t hst_in;		/* pkts received */
+  u_int16_t hst_last_hop;	/* last hop router */
+  time_t hst_last_seen;		/* time last seen */
+};
+// array indexed first by net, then by host. Second level dynamically allocated.
+struct hostat **hosttab;
+pthread_mutex_t hosttab_lock;
+
 // Info on this host's direct connection to a subnet. See STATUS protocol in AIM 628.
 struct linkstat {
   u_int32_t pkt_in;		/* pkts received */
@@ -313,6 +323,52 @@ void print_link_stats()
     }
   }
   PTUNLOCK(linktab_lock);
+}
+
+void init_hosttab()
+{
+  if (pthread_mutex_init(&hosttab_lock, NULL) != 0)
+    perror("pthread_mutex_init(hosttab_lock)");
+  // 256 networks
+  if ((hosttab = malloc(sizeof(struct hostat *)*256)) == NULL)
+    perror("malloc(hosttab)");
+  memset((char *)hosttab, 0, sizeof(struct hostat *)*256);
+}
+
+// call this with hosttab_lock held
+struct hostat *
+find_hostat_entry(u_short addr)
+{
+  struct hostat *net = hosttab[addr>>8];
+  if (net == NULL) {
+    if ((net = malloc(sizeof(struct hostat)*256)) == NULL) 
+      perror("malloc(hosttab entry)");
+    memset((char *)net, 0, sizeof(struct hostat)*256);
+    hosttab[addr>>8] = net;
+  }
+  return &hosttab[addr>>8][addr&0xff];
+}
+
+void print_host_stats()
+{
+  int n, i;
+  PTLOCK(hosttab_lock);
+  printf("Host stats:\n"
+	 "Host\t  In\t Via\t Last seen\n");
+  for (n = 0; n < 256; n++) {
+    struct hostat *he = hosttab[n];
+    if (he != NULL) {
+      for (i = 0; i < 256; i++) {
+	// fprintf(stderr,"hosttab[%d][%i] = %p\n", n, i, he[i]);
+	if (he[i].hst_in != 0 || he[i].hst_last_hop != 0 || he[i].hst_last_seen != 0) {
+	  printf("%#o\t%7d\t%#o\t%d\n", (n << 8) | i,
+		 he[i].hst_in, he[i].hst_last_hop,
+		 he[i].hst_last_seen > 0 ? time(NULL) - he[i].hst_last_seen : 0);
+	}
+      }
+    }
+  }
+  PTUNLOCK(hosttab_lock);
 }
 
 void init_chudpdest()
@@ -1124,8 +1180,17 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
     return 0;
   }
   int found = 0;
+
+#if 1
+  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
+  u_short srctrailer = 0, srcaddr = ch_srcaddr(ch);
+  if (cnt >= CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
+    // Prefer HW sender (i.e. the chudp host rather than origin host)
+    srctrailer = ntohs(tr->ch_hw_srcaddr);
+#endif
+
   PTLOCK(chudp_lock);
-  if (debug) fprintf(stderr,"Looking up %s among %d chudp entries\n", ip, *chudpdest_len);
+  if (debug) fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
     if ((chudpdest[i].chu_sa.chu_saddr.sa_family == sin.sin6_family)
 	&& (((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET) &&
@@ -1135,6 +1200,27 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&((struct sockaddr_in6 *)&sin)->sin6_addr, sizeof(struct in6_addr)) == 0))))
 	  {
       found = 1;
+#if 0 // needs more testing
+      {
+	/* Check for pkts with a header source which exists on another link wrt link source */
+	/* It's OK to receive a pkt from an addr which is not the link's, since there may be a whole net behind it,
+	   but not OK if it's from a another link's address - that's misconfigured, here or there. */
+	if (chudpdest[i].chu_addr != srcaddr) {	 // not from the link address
+	  struct chroute *rt = find_in_routing_table(srcaddr, 0); // find its link
+	  if ((rt != NULL) && (rt->rt_dest == srcaddr)) { // it's on another link!
+	    if (verbose) fprintf(stderr,"CHUDP host %#o is on another link than where it came from (%#o), rejecting/dropping\n",
+				 srcaddr, chudpdest[i].chu_addr);
+#if COLLECT_STATS
+	    PTLOCK(linktab_lock);
+	    linktab[(chudpdest[i].chu_addr)>>8].pkt_rejected++;
+	    PTUNLOCK(linktab_lock);
+#endif
+	    PTUNLOCK(chudp_lock);
+	    return 0;
+	  }
+	}
+      }
+#endif
       if (chudpdest[i].chu_sa.chu_sin.sin_port != sin.sin6_port) {
 	if (verbose) fprintf(stderr,"CHUDP from %s port different from configured: %d # %d (dropping)\n",
 			     ip, ntohs(sin.sin6_port),
@@ -1148,12 +1234,14 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   }
   PTUNLOCK(chudp_lock);
 
+#if 0
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
   u_short srcaddr = ch_srcaddr(ch);
-
+#else
   if (cnt >= CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
     // Prefer HW sender (i.e. the chudp host rather than origin host)
     srcaddr = ntohs(tr->ch_hw_srcaddr);
+#endif
 
   if (!found) {
     if (verbose) fprintf(stderr,"CHUDP from unknown source %s:%d\n",
@@ -2305,8 +2393,9 @@ status_responder(u_char *rfc, int len)
 
   int maxentries = 12;		// max 244 words in a Chaos pkt, 16 for Node name, 18 per entry below
   // Low-order half of 32-bit word comes first
-  for (i = 0; i < 256 && maxentries-- > 0; i++) {
-    if (linktab[i].pkt_in != 0 || linktab[i].pkt_out != 0 || linktab[i].pkt_crcerr != 0) {
+  for (i = 0; i < 256 && maxentries > 0; i++) {
+    if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)) {
+      maxentries--;
       *dp++ = htons(i + 0400);		/* subnet + 0400 */
       *dp++ = htons(16);		/* length in 16-bit words */
       *dp++ = htons(linktab[i].pkt_in & 0xffff);
@@ -2331,6 +2420,57 @@ status_responder(u_char *rfc, int len)
     fprintf(stderr,"WARNING: your linktab contains too many networks (%d),\n"
 	    " %d of them do not fit in STATUS pkt\n",
 	    12+maxentries, maxentries);
+  set_ch_nbytes(ap, (dp-(u_short *)&ans[CHAOS_HEADERSIZE])*2);
+
+  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
+}
+
+
+void 
+lastcn_responder(u_char *rfc, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)rfc;
+  u_short src = ch_srcaddr(ch);
+  u_short dst = ch_destaddr(ch);
+  u_char ans[CH_PK_MAXLEN];
+  struct chaos_header *ap = (struct chaos_header *)&ans;
+  int i, n;
+
+  memset(ans, 0, sizeof(ans));
+  set_ch_opcode(ap, CHOP_ANS);
+  set_ch_destaddr(ap, src);
+  set_ch_destindex(ap, ch_srcindex(ch));
+  set_ch_srcaddr(ap, dst);
+  set_ch_srcindex(ap, ch_destindex(ch));
+
+  u_short *dp = (u_short *)&ans[CHAOS_HEADERSIZE];
+
+  int words_per_entry = 7;	// see below
+  int maxentries = 244/words_per_entry;
+  // Low-order half of 32-bit word comes first
+  time_t now = time(NULL);
+  for (n = 0; n < 256 && maxentries > 0; n++) {
+    struct hostat *he = hosttab[n];
+    if (he != NULL) {
+      for (i = 0; i < 256 && maxentries > 0; i++) {
+	if (he[i].hst_in != 0 || he[i].hst_last_hop != 0 || he[i].hst_last_seen != 0) {
+	  *dp++ = htons(words_per_entry); /* length in 16-bit words */
+	  *dp++ = htons((n << 8) | i);	/* host addr */
+	  *dp++ = htons(he[i].hst_in & 0xffff);	 /* input pkts from it */
+	  *dp++ = htons(he[i].hst_in>>16);
+	  *dp++ = htons(he[i].hst_last_hop);  /* last seen from this router */
+	  u_int when = he[i].hst_last_seen > 0 ? now - he[i].hst_last_seen : 0;
+	  *dp++ = htons(when & 0xffff);	 /* how many seconds ago */
+	  *dp++ = htons(when >> 16);
+	  maxentries--;
+	}
+      }
+    }
+  }
+  if (maxentries == 0)
+    fprintf(stderr,"WARNING: your hosttab contains too many addesses,\n"
+	    " %d of them do not fit in LASTCN pkt\n",
+	    maxentries);
   set_ch_nbytes(ap, (dp-(u_short *)&ans[CHAOS_HEADERSIZE])*2);
 
   send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
@@ -2474,6 +2614,12 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     PTLOCK(linktab_lock);
     linktab[src>>8].pkt_in++;
     PTUNLOCK(linktab_lock);
+    PTLOCK(hosttab_lock);
+    struct hostat *he = find_hostat_entry(ch_srcaddr(ch));
+    he->hst_in++;
+    he->hst_last_seen = time(NULL);
+    he->hst_last_hop = schad;
+    PTUNLOCK(hosttab_lock);
   } else if (debug)
     fprintf(stderr,"No source given in forward from %#o to %#o\n",
 	    schad, dchad);
@@ -2528,6 +2674,13 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 	&& ((ch_nbytes(ch) == 6) || data[CHAOS_HEADERSIZE+7] == ' ')) {
       if (verbose) fprintf(stderr,"RFC for STATUS received, responding\n");
       status_responder(data, dlen);
+    }
+    if (ch_opcode(ch) == CHOP_RFC
+	// "LASTCN" in pdp11 format
+	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"ALTSNC",6) == 0) 
+	&& ((ch_nbytes(ch) == 6) || data[CHAOS_HEADERSIZE+7] == ' ')) {
+      if (verbose) fprintf(stderr,"RFC for LASTCN received, responding\n");
+      lastcn_responder(data, dlen);
     }
     else
 #endif // COLLECT_STATS
@@ -3479,6 +3632,7 @@ print_stats(int sig)
   print_routing_table();
   print_chudp_config();
   print_link_stats();
+  print_host_stats();
 }
 
 void
@@ -3503,6 +3657,7 @@ main(int argc, char *argv[])
 #endif // CHAOS_ETHERP
 #if COLLECT_STATS
   init_linktab();
+  init_hosttab();
 #endif
   if (gethostname(myname, sizeof(myname)) < 0) {
     perror("gethostname");

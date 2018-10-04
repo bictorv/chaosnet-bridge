@@ -81,6 +81,10 @@ It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the
 host uptime (e.g. wrt the STATUS statistics).
 
+A non-standard contact LASTCN is also supported, which reponds with
+info about which hosts the bridge has received packets from, from what
+other host (e.g. another router) and how long ago.
+
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
 "myname" configuration parameter (defaults to "real" host name up to
