@@ -33,15 +33,13 @@
 
 // TODO
 
-// stats about who was last seen when (new chaos protocol?)
-// - and pkt counts in/out?
-// - and from where (last hop router)
-// - persistent storage?
 // rewrite using pcap
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
+// - make sure thois host has a subnet-specific chaos addr on all defined links
 // detect unexpected traffic
 // - e.g. source addr 3150 from link with addr 3160 (which has another link)
+// - or traffic from a defined subnet arriving on a different link
 
 // Separate datastructures for links and routes, simplifying things.
 
@@ -2395,8 +2393,9 @@ status_responder(u_char *rfc, int len)
 
   int maxentries = 12;		// max 244 words in a Chaos pkt, 16 for Node name, 18 per entry below
   // Low-order half of 32-bit word comes first
-  for (i = 0; i < 256 && maxentries-- > 0; i++) {
-    if (linktab[i].pkt_in != 0 || linktab[i].pkt_out != 0 || linktab[i].pkt_crcerr != 0) {
+  for (i = 0; i < 256 && maxentries > 0; i++) {
+    if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)) {
+      maxentries--;
       *dp++ = htons(i + 0400);		/* subnet + 0400 */
       *dp++ = htons(16);		/* length in 16-bit words */
       *dp++ = htons(linktab[i].pkt_in & 0xffff);
