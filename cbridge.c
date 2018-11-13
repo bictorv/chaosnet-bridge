@@ -1143,8 +1143,11 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
 #endif
   if (sendto(sock, buf, i, 0, sout,
 	     (sout->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
-    perror("sendto failed");
+    if (verbose || debug)
+      perror("sendto failed");
+#if 0 // don't die here, some link may be down. Ideally don't retry until "later"
     exit(1);
+#endif
   }
 }
 
