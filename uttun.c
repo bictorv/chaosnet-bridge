@@ -14,6 +14,10 @@
 */
 // TODO:
 // - TLS (without + with cert verification)
+// -x parameters for key and cert (and CA-cert, for trust chain)
+// -- do the cert hacking, scripts to create them, cf OpenSSL cookbook at feistyduck.com
+// -- create key + chaos CA cert + CSRs + ...
+// -- check that verification works
 // - statistics
 // - keep-alive?
 /*
@@ -34,7 +38,10 @@
 // **** TLS stuff.
 // See https://wiki.openssl.org/index.php/Simple_TLS_Server,
 //     https://github.com/CloudFundoo/SSL-TLS-clientserver
-# define UTTUN_TLS 0
+# define UTTUN_TLS 1
+#endif
+#ifndef UTTUN_TLS_VERIFY
+# define UTTUN_TLS_VERIFY 1
 #endif
 
 #include <stdio.h>
@@ -53,6 +60,8 @@
 #if UTTUN_TLS
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/asn1.h>
+#include <openssl/x509.h>
 #endif
 
 // connect from remote/client (non-permanent-IP) end to server (with permanent IP)
@@ -95,6 +104,11 @@ int tsock; // TCP socket, bidirectional
 int tursock; // TCP ur-socket (for listen/accept)
 #if UTTUN_TLS
 SSL *uttun_ssl; // SSL conn
+#if UTTUN_TLS_VERIFY
+char tls_key_file[PATH_MAX] = "key.pem";
+char tls_cert_file[PATH_MAX] = "cert.pem";
+char tls_ca_file[PATH_MAX] = "cacert.pem";
+#endif
 #endif
 
 struct sockaddr_in udpdest;	/* where to send pkts read from TCP */
@@ -118,6 +132,7 @@ pthread_mutex_t trace_print_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define TRACE_UDP 2
 #define TRACE_TCP 4
 #define TRACE_PACKETS 8
+#define TRACE_TLS 16
 int trace = 0;
 
 void dumppkt(unsigned char *ucp, int cnt);
@@ -498,8 +513,8 @@ udp_receive(int sock, unsigned char *buf, int buflen)
 void init_openssl()
 { 
   SSL_library_init();
-    SSL_load_error_strings();	
-    OpenSSL_add_ssl_algorithms();
+  SSL_load_error_strings();	
+  OpenSSL_add_ssl_algorithms();
 }
 
 void cleanup_openssl()
@@ -543,31 +558,55 @@ void configure_context(SSL_CTX *ctx)
 
     /* Set the key and cert */
     // @@@@ parameter
-    if (SSL_CTX_use_certificate_file(ctx, "cert.pem", SSL_FILETYPE_PEM) <= 0) {
+    if (SSL_CTX_use_certificate_file(ctx, tls_cert_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
     }
 
     // @@@@ parameter
-    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+    if (SSL_CTX_use_PrivateKey_file(ctx, tls_key_file, SSL_FILETYPE_PEM) <= 0 ) {
         ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
     }
 
     if (SSL_CTX_check_private_key(ctx) != 1) {
-      fprintf(stderr,"Private key and certificate is not matching\n");
+      fprintf(stderr,"Private key and certificate do not match\n");
       exit(EXIT_FAILURE);
     }
 #if UTTUN_TLS_VERIFY
     // See function man pages for instructions on generating CERT files
-    if (!SSL_CTX_load_verify_locations(ctx, SSL_SERVER_RSA_CA_CERT, NULL)) {
+    if (!SSL_CTX_load_verify_locations(ctx, tls_ca_file, NULL)) {
 	ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
       }
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-    SSL_CTX_set_verify_depth(ctx, 1);
+    // go up to "higher level CA"
+    SSL_CTX_set_verify_depth(ctx, 2);
 #endif
 }
+
+void
+describe_tls_cert(X509 *cert)
+{
+  X509_NAME *subj, *issuer;
+  ASN1_TIME *notafter;
+
+  subj = X509_get_subject_name(cert);
+  issuer = X509_get_issuer_name(cert);
+  notafter = X509_get_notAfter(cert);
+
+  fprintf(stderr,"TLS cert Subject:\n");
+  X509_NAME_print_ex_fp(stderr, subj, 2, XN_FLAG_ONELINE);
+  fprintf(stderr,"TLS cert Issuer:\n");
+  X509_NAME_print_ex_fp(stderr, issuer, 2, XN_FLAG_ONELINE);
+  fprintf(stderr,"TLS cert expires:\n");
+  // what??
+  BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+  ASN1_TIME_print(b, notafter);
+  BIO_free(b);
+  fprintf(stderr,"\n");
+}
+
 #endif // UTTUN_TLS
 
 // **** read from UDP, send on TCP
@@ -663,12 +702,31 @@ void *tcp_listener(void *arg)
 
 	verifyresult = SSL_get_verify_result(ssl);
 	if(verifyresult != X509_V_OK) {
-	  fprintf(stderr,"Certificate Verify Failed\n"); 
+	  if (trace & TRACE_TLS) {
+	    fprintf(stderr,"TLS client certificate verification failed - closing connection\n");
+	    // describe cert
+	    describe_tls_cert(ssl_client_cert);
+	  }
+	  X509_free(ssl_client_cert);				
+	  SSL_free(ssl);
+	  uttun_ssl = NULL;
+	  close(tsock);
+	  continue;
+	} else if (trace & TRACE_TLS) {
+	  fprintf(stderr,"TLS client verification succeeded\n");
+	  // describe cert
+	  describe_tls_cert(ssl_client_cert);
 	}
 	X509_free(ssl_client_cert);				
       }
-    else
-      fprintf(stderr,"There is no client certificate\n");
+    else {
+      if (trace & TRACE_TLS)
+	fprintf(stderr,"There is no client certificate - closing connection\n");
+      SSL_free(ssl);
+      uttun_ssl = NULL;
+      close(tsock);
+      continue;
+    }
 #endif
     uttun_ssl = ssl;
 #endif
@@ -727,12 +785,31 @@ void *tcp_connector(void *arg)
 
 	verifyresult = SSL_get_verify_result(ssl);
 	if(verifyresult != X509_V_OK) {
-	  fprintf(stderr,"Certificate Verify Failed\n"); 
+	  if (trace & TRACE_TLS) {
+	    fprintf(stderr,"TLS server certificate verification failed - closing connection\n");
+	    // describe cert
+	    describe_tls_cert(ssl_server_cert);
+	  }
+	  X509_free(ssl_server_cert);				
+	  SSL_free(ssl);
+	  uttun_ssl = NULL;
+	  close(tsock);
+	  continue;
+	} else if (trace & TRACE_TLS) {
+	  fprintf(stderr,"TLS server verification succeeded\n");
+	  // describe cert
+	  describe_tls_cert(ssl_server_cert);
 	}
 	X509_free(ssl_server_cert);				
       }
-    else
-      fprintf(stderr,"There is no server certificate\n");
+    else {
+      if (trace & TRACE_TLS)
+	fprintf(stderr,"There is no server certificate - closing connection\n");
+      SSL_free(ssl);
+      uttun_ssl = NULL;
+      close(tsock);
+      continue;
+    }
 #endif
     uttun_ssl = ssl;
 #endif
@@ -829,7 +906,12 @@ int main(int argc, char *argv[])
 
   // parse args
   // -u host:port -t host:port -p port -t[ut]
-  while ((c = getopt(argc, argv, "u:t:d:")) != -1) {
+#if UTTUN_TLS && UTTUN_TLS_VERIFY
+  char opts[] = "u:t:d:k:c:a";
+#else
+  char opts[] = "u:t:d:";
+#endif
+  while ((c = getopt(argc, argv, opts)) != -1) {
     switch (c) {
     case 'd':
       if (strncmp(optarg,"t",1) == 0)
@@ -840,6 +922,8 @@ int main(int argc, char *argv[])
 	trace |= TRACE_SIGNALS;
       else if (strncmp(optarg,"p",1) == 0)
 	trace |= TRACE_PACKETS;
+      else if (strncmp(optarg,"T",1) == 0)
+	trace |= TRACE_TLS;
       else if (strncmp(optarg,"a",1) == 0)
 	trace = 0xffff;
       else if ((val = atoi(optarg)) != 0)
@@ -860,9 +944,30 @@ int main(int argc, char *argv[])
 	exit(1);
       server_end = 0;
       break;
+#if UTTUN_TLS
+    case 'k':
+      strncpy(tls_key_file,optarg, sizeof(tls_key_file));
+      break;
+    case 'c':
+      strncpy(tls_cert_file,optarg, sizeof(tls_cert_file));
+      break;
+#if UTTUN_TLS_VERIFY
+    case 'a':
+      strncpy(tls_ca_file,optarg, sizeof(tls_ca_file));
+      break;
+#endif
+#endif
     default:
       fprintf(stderr,"unknown option '%c'\n", c);
-      fprintf(stderr,"usage: %s [-u [myport:]host[:port]] | [-t [myport:]host[:port]] [-d t|u|s|p|a]\n"
+      fprintf(stderr,"usage: %s [-u [myport:]host[:port]] | [-t [myport:]host[:port]] [-d t|u|s|p|a]",argv[0]);
+#if UTTUN_TLS
+      fprintf(stderr,"%s", " [-k keyfile] [-c certfile]");
+#if UTTUN_TLS_VERIFY
+      fprintf(stderr,"%s", " [-a cafile]");
+#endif
+	fprintf(stderr,"%s","\n");
+#endif
+      fprintf(stderr,"%s",
 	      "  -u for UDP destination (where to send TCP data)\n"
 	      "  -t for TCP destination (where to send UDP data)\n"
 	      "     (omit this for the server end)\n"
@@ -871,8 +976,17 @@ int main(int argc, char *argv[])
 	      "  -d t for tracing the TCP thread (4)\n"
 	      "  -d p for printing pkts received as Chaosnet pkts (8)\n"
 	      "  -d a for tracing everything\n"
-	      "  -d N for enabling trace bits N (e.g. 7 for all threads, but not Chaos pkts)\n",
-	      argv[0]);
+	      "  -d N for enabling trace bits N (e.g. 7 for all threads, but not Chaos pkts)\n");
+#if UTTUN_TLS
+      fprintf(stderr,"%s",
+	      "  -d T for tracing TLS (16)\n"
+	      "  -k keyfile which contains the TLS private key\n"
+	      "  -c certfile which contains the TLS certificate\n");
+#if UTTUN_TLS_VERIFY
+      fprintf(stderr,"%s",
+	      "  -a cafile which contains the TLS CA certificate\n");
+#endif
+#endif
       exit(1);
     }
   }
