@@ -32,16 +32,7 @@
 /* Read MIT AIM 628, in particular secions 3.6 and 3.7. */
 
 // TODO
-// implement CHUDP over TCP using additional two-byte record length header
-// - new thread for reception,
-// - try integrating in rest of code as a special case of CHUDP (config "chudp tcp:host:port")
-// -- incl reparse thread
-// - add connection management
-// -- when sender finds link down, count as aborted,
-//    tell receiver to reopen (doesn't it also discover this at the same time?)
-// -- when receiver thread gets error, reopen (with some back-off)
-// -- use some field in chudest to signal open/dead?
-// port to libpcap
+// implement CHUDP over TLS using additional two-byte record length header
 
 // rewrite using pcap
 // validate conf (subnets vs bridges etc)
@@ -279,7 +270,6 @@ char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STAT
 static int nchaddr = 0;
 static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int udpport = 42042;		// default UDP port
-int tcpport = 42042;		// default TCP port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
 int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
