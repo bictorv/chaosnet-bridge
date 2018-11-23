@@ -13,13 +13,22 @@
    thing anyway). The drawback is the cert management...
 */
 // TODO:
-// - TLS (without + with cert verification)
-// -x parameters for key and cert (and CA-cert, for trust chain)
-// -- do the cert hacking, scripts to create them, cf OpenSSL cookbook at feistyduck.com
-// -- create key + chaos CA cert + CSRs + ...
-// -- check that verification works
+// x TLS (with cert verification)
 // - statistics
 // - keep-alive?
+
+// PoC working, now integrate in cbridge:
+// - need more than one TLS listener
+// - need to know which TLS conn to send UDP pkts to - cbridge knows
+// - make a library of it
+// -- TLS reader thread for each defined server link
+// -- TLS sender: no thread, just a route thing
+// -- TLS keep-open thread
+// - skip CHUDP header, just send Chaos pkts with record length
+// -- possibly check pkts coming from the right address (trailer) like CHUDP (in cbridge)
+// - locks:
+// -- per link: reconnect (mutex + cond) + tcp_is_open (mutex + cond)
+
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -107,7 +116,7 @@ SSL *uttun_ssl; // SSL conn
 #if UTTUN_TLS_VERIFY
 char tls_key_file[PATH_MAX] = "key.pem";
 char tls_cert_file[PATH_MAX] = "cert.pem";
-char tls_ca_file[PATH_MAX] = "cacert.pem";
+char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";
 #endif
 #endif
 
@@ -386,21 +395,31 @@ int tcp_read_record(int fd, u_char *buf, int blen)
 // **** low-level stuff
 int tcp_server_accept(int sock)
 {
-  struct sockaddr_in caddr;
+  struct sockaddr caddr;
   int fd;
-  u_int clen = sizeof(struct sockaddr_in);
+  u_int clen = sizeof(struct sockaddr);
+  u_int *slen = &clen;
+  struct sockaddr *sa = &caddr;
 
-  if ((fd = accept(sock, (struct sockaddr *)&caddr, &clen)) < 0) {
+
+  if ((fd = accept(sock, (struct sockaddr *)sa, slen)) < 0) {
     perror("accept");
+    fprintf(stderr,"errno = %d\n", errno);
     // @@@@ better error handling, back off and try again? what could go wrong here?
     exit(1);
   }
   // @@@@ log stuff about the connection
   // @@@@ maybe validate/authenticate the other end
-  if (trace & TRACE_TCP)
-    tprintln("  TCP accept connection from %s port %d",
-	     inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port));
- 
+  if (trace & TRACE_TCP) {
+    char ip6[INET6_ADDRSTRLEN];
+    if (inet_ntop(sa->sa_family,
+		  (sa->sa_family == AF_INET ?
+		   (void *)&((struct sockaddr_in *)sa)->sin_addr :
+		   (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
+		  ip6, sizeof(ip6)) == NULL)
+      strerror_r(errno,ip6,sizeof(ip6));
+    tprintln("  TCP accept connection from %s port %d", ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+  }
   return fd;
 }
 
@@ -522,7 +541,7 @@ void cleanup_openssl()
     EVP_cleanup();
 }
 
-SSL_CTX *create_some_context(SSL_METHOD *method)
+SSL_CTX *create_some_context(const SSL_METHOD *method)
 {
     SSL_CTX *ctx;
 
@@ -538,7 +557,7 @@ SSL_CTX *create_some_context(SSL_METHOD *method)
 
 SSL_CTX *create_client_context()
 {
-  SSL_METHOD *method;
+  const SSL_METHOD *method;
 
     method = SSLv23_client_method();
     return create_some_context(method);
@@ -546,7 +565,7 @@ SSL_CTX *create_client_context()
 
 SSL_CTX *create_server_context()
 {
-   SSL_METHOD *method;
+   const SSL_METHOD *method;
     method = SSLv23_server_method();
     return create_some_context(method);
 }
@@ -557,28 +576,28 @@ void configure_context(SSL_CTX *ctx)
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
     /* Set the key and cert */
-    // @@@@ parameter
     if (SSL_CTX_use_certificate_file(ctx, tls_cert_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
     }
-
-    // @@@@ parameter
     if (SSL_CTX_use_PrivateKey_file(ctx, tls_key_file, SSL_FILETYPE_PEM) <= 0 ) {
         ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
     }
-
+    // Check key and cert
     if (SSL_CTX_check_private_key(ctx) != 1) {
       fprintf(stderr,"Private key and certificate do not match\n");
+      ERR_print_errors_fp(stderr);
       exit(EXIT_FAILURE);
     }
 #if UTTUN_TLS_VERIFY
-    // See function man pages for instructions on generating CERT files
+    // Load CA cert chain
     if (!SSL_CTX_load_verify_locations(ctx, tls_ca_file, NULL)) {
 	ERR_print_errors_fp(stderr);
 	exit(EXIT_FAILURE);
       }
+    // Make sure to verify the peer (both server and client)
+    // Consider adding a callback to validate CN/subjectAltName?
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
     // go up to "higher level CA"
     SSL_CTX_set_verify_depth(ctx, 2);
@@ -595,16 +614,82 @@ describe_tls_cert(X509 *cert)
   issuer = X509_get_issuer_name(cert);
   notafter = X509_get_notAfter(cert);
 
-  fprintf(stderr,"TLS cert Subject:\n");
+  tprintln("TLS cert Subject:");
   X509_NAME_print_ex_fp(stderr, subj, 2, XN_FLAG_ONELINE);
-  fprintf(stderr,"TLS cert Issuer:\n");
-  X509_NAME_print_ex_fp(stderr, issuer, 2, XN_FLAG_ONELINE);
-  fprintf(stderr,"TLS cert expires:\n");
-  // what??
-  BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-  ASN1_TIME_print(b, notafter);
-  BIO_free(b);
   fprintf(stderr,"\n");
+  tprintln("TLS cert Issuer:");
+  X509_NAME_print_ex_fp(stderr, issuer, 2, XN_FLAG_ONELINE);
+  fprintf(stderr,"\n");
+  tprintln("TLS cert expires:");
+  // What an additional complexity
+  BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+  BIO_puts(b, "  ");
+  ASN1_TIME_print(b, notafter);
+  BIO_puts(b, "\n");
+  BIO_free(b);
+}
+
+// this only checks there is a CN which is not totally bogus.
+// Maybe let it check the CN/subjectAltName against a configured/expected such.
+int
+validate_cn(X509 *cert)
+{
+  // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
+  int common_name_loc = -1, subj_alt_name_loc = -1;
+  X509_NAME_ENTRY *common_name_entry = NULL, *subj_alt_name_entry = NULL;
+  ASN1_STRING *common_name_asn1 = NULL, *subj_alt_name_asn1 = NULL;
+  char *common_name_str = NULL, *subj_alt_name_str = NULL;
+
+  // Find the position of the CN field in the Subject field of the certificate
+  common_name_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) cert), NID_commonName, -1);
+  if (common_name_loc < 0) {
+    if (trace & TRACE_TLS)
+      tprintln("TLS validate_cn: can't find CN");
+    return 0;
+  }
+
+  // Extract the CN field
+  common_name_entry = X509_NAME_get_entry(X509_get_subject_name((X509 *) cert), common_name_loc);
+  if (common_name_entry == NULL) {
+    if (trace & TRACE_TLS)
+      tprintln("TLS validate_cn: can't extract CN");
+    return 0;
+  }
+
+  // Convert the CN field to a C string
+  common_name_asn1 = X509_NAME_ENTRY_get_data(common_name_entry);
+  if (common_name_asn1 == NULL) {
+    if (trace & TRACE_TLS)
+      tprintln("TLS validate_cn: can't convert CN to C string");
+    return 0;
+  }			
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+  common_name_str = (char *) ASN1_STRING_data(common_name_asn1);
+#else
+  common_name_str = (char *) ASN1_STRING_get0_data(common_name_asn1);
+#endif
+  // Make sure there isn't an embedded NUL character in the CN
+  if (ASN1_STRING_length(common_name_asn1) != strlen(common_name_str)) {
+    if (trace & TRACE_TLS)
+      tprintln("TLS validate_cn: malformed CN (NUL in CN)");
+    return 0; // MalformedCertificate;
+  }
+
+  // same for NID_subject_alt_name? But too hairy to include in cert?
+  // maybe not with openssl 1.1.1, see https://security.stackexchange.com/a/183973
+
+  if (trace & TRACE_TLS)
+    tprintln("TLS: found CN %s", common_name_str);
+
+  // Find Chaosnet addr of CN through DNS:
+  // this is just too much work with a poorly documented library (libresolv)
+  // which also seems to think it needs to connect over chaosnet to find chaosnet data.
+  // Instead, can we find the subjectAltName and let that be just an int 0x701 etc?
+  // Seems too hairy (yet) to include it in cert.
+  // Just trust it, but maybe log CN anyway?
+  // Stuff it in link datastructure, or compare to a configured token there?
+
+  return 1;			// success
 }
 
 #endif // UTTUN_TLS
@@ -680,16 +765,41 @@ void *tcp_listener(void *arg)
     tsock = tcp_server_accept(tursock);
 #if UTTUN_TLS
     if ((ssl = SSL_new(ctx)) == NULL) {
-      fprintf(stderr,"SSL_new failed");
+      fprintf(stderr,"SSL_new failed\n");
       ERR_print_errors_fp(stderr);
       close(tsock);
       continue;
     }
     SSL_set_fd(ssl, tsock);
-    if (SSL_accept(ssl) <= 0) {
-      ERR_print_errors_fp(stderr);
+    int v = 0;
+    if ((v = SSL_accept(ssl)) <= 0) {
+      // this already catches verification - client end gets "SSL alert number 48"?
+      int err = SSL_get_error(ssl, v);
+      tprintln("SSL_accept failed: %d", err);
+      if ((err != SSL_ERROR_SSL) && (trace & TRACE_TLS)) {
+	ERR_print_errors_fp(stderr);
+	//1975129200:error:1417C086:SSL routines:tls_process_client_certificate:certificate verify failed:../ssl/statem/statem_srvr.c:2893:
+      }
+      X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
+      if (ssl_client_cert) {
+	long verifyresult = SSL_get_verify_result(ssl);
+	if (trace & TRACE_TLS) {
+	  if(verifyresult != X509_V_OK) {
+	    tprintln("TLS client certificate verification failed");
+	  } else {
+	    tprintln("TLS client verification succeeded when SSL_accept failed???");
+	  }
+	  // describe cert
+	  describe_tls_cert(ssl_client_cert);
+	}
+      } else {
+	// this seems to be the case (for self-signed cert)
+	if (trace & TRACE_TLS)
+	  tprintln("TLS: There is no client certificate - closing connection");
+      }
       close(tsock);
       SSL_free(ssl);
+      // ideally, back off?
       continue;
     }
 #if UTTUN_TLS_VERIFY
@@ -703,7 +813,7 @@ void *tcp_listener(void *arg)
 	verifyresult = SSL_get_verify_result(ssl);
 	if(verifyresult != X509_V_OK) {
 	  if (trace & TRACE_TLS) {
-	    fprintf(stderr,"TLS client certificate verification failed - closing connection\n");
+	    tprintln("TLS client certificate verification failed - closing connection");
 	    // describe cert
 	    describe_tls_cert(ssl_client_cert);
 	  }
@@ -713,15 +823,22 @@ void *tcp_listener(void *arg)
 	  close(tsock);
 	  continue;
 	} else if (trace & TRACE_TLS) {
-	  fprintf(stderr,"TLS client verification succeeded\n");
+	  tprintln("TLS client verification succeeded");
 	  // describe cert
 	  describe_tls_cert(ssl_client_cert);
+	  // @@@@ find CN and verify it
 	}
-	X509_free(ssl_client_cert);				
-      }
+	int valid = validate_cn(ssl_client_cert);
+	X509_free(ssl_client_cert);
+	if (!valid) {
+	  if (trace & TRACE_TLS)
+	    tprintln("TLS client CN invalid");
+	  continue;
+	}
+    }
     else {
       if (trace & TRACE_TLS)
-	fprintf(stderr,"There is no client certificate - closing connection\n");
+	tprintln("TLS: There is no client certificate - closing connection\n");
       SSL_free(ssl);
       uttun_ssl = NULL;
       close(tsock);
@@ -763,7 +880,7 @@ void *tcp_connector(void *arg)
 
 #if UTTUN_TLS
     if ((ssl = SSL_new(ctx)) == NULL) {
-      fprintf(stderr,"SSL_new failed");
+      tprintln("SSL_new failed");
       ERR_print_errors_fp(stderr);
       close(tsock);
       continue;
@@ -786,7 +903,7 @@ void *tcp_connector(void *arg)
 	verifyresult = SSL_get_verify_result(ssl);
 	if(verifyresult != X509_V_OK) {
 	  if (trace & TRACE_TLS) {
-	    fprintf(stderr,"TLS server certificate verification failed - closing connection\n");
+	    tprintln("TLS server certificate verification failed - closing connection");
 	    // describe cert
 	    describe_tls_cert(ssl_server_cert);
 	  }
@@ -796,15 +913,21 @@ void *tcp_connector(void *arg)
 	  close(tsock);
 	  continue;
 	} else if (trace & TRACE_TLS) {
-	  fprintf(stderr,"TLS server verification succeeded\n");
+	  tprintln("TLS server verification succeeded");
 	  // describe cert
 	  describe_tls_cert(ssl_server_cert);
 	}
-	X509_free(ssl_server_cert);				
+	int valid = validate_cn(ssl_server_cert);
+	X509_free(ssl_server_cert);
+	if (!valid) {
+	  if (trace & TRACE_TLS)
+	    tprintln("TLS client CN invalid");
+	  continue;
+	}
       }
     else {
       if (trace & TRACE_TLS)
-	fprintf(stderr,"There is no server certificate - closing connection\n");
+	tprintln("There is no server certificate - closing connection");
       SSL_free(ssl);
       uttun_ssl = NULL;
       close(tsock);
@@ -905,9 +1028,8 @@ int main(int argc, char *argv[])
   memset(&tcpdest, 0, sizeof(tcpdest));
 
   // parse args
-  // -u host:port -t host:port -p port -t[ut]
 #if UTTUN_TLS && UTTUN_TLS_VERIFY
-  char opts[] = "u:t:d:k:c:a";
+  char opts[] = "u:t:d:k:c:a:";
 #else
   char opts[] = "u:t:d:";
 #endif
