@@ -81,6 +81,10 @@ It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the
 host uptime (e.g. wrt the STATUS statistics).
 
+A non-standard contact LASTCN is also supported, which reponds with
+info about which hosts the bridge has received packets from, from what
+other host (e.g. another router) and how long ago.
+
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
 "myname" configuration parameter (defaults to "real" host name up to
@@ -123,10 +127,12 @@ Global settings:
  myname name 
 	set my Chaosnet host name, max 32 bytes, for STATUS. 
 	Defaults to "real" host name up to first period.
- chudp portnr [dynamic | static]
+ chudp portnr [dynamic | static | ipv6 ]
 	set my chudp portnr (default 42042). If "dynamic", add new
 	chudp destinations dynamically when receiving pkts from
-	unknown sources.
+	unknown sources. 
+	With ipv6 option, listens to both v4 and v6 (enabled also by
+	defining a chudp link where the host has an ipv6 addr).
  ether ifname
        use this ether interface, default eth0
 
