@@ -172,6 +172,7 @@ void tprintln(char *fmt, ...)
 
 // **** signalling between threads
 void please_reopen_tcp()
+// called by tcp_write_record, tcp_read_record on failure
 {
   if (trace & TRACE_SIGNALS)
     tprintln("! please_reopen_tcp");
@@ -186,6 +187,7 @@ void please_reopen_tcp()
     perror("pthread_mutex_unlock(reconnect)");
 }
 void wait_for_reconnect_signal()
+// called by tcp_connector, tcp_listener
 {
   /* wait for someone to ask for reconnection, typically after an error in read/write */
   if (trace & TRACE_SIGNALS)

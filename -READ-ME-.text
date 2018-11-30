@@ -44,8 +44,6 @@ When configured to use Ethernet, ARP for Chaosnet is used:
   ethernet-chaos mappings
 - Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts
   (e.g chudp or unix-socket hosts)
-- if compiled with PEEK_ARP=1, also peeks chaos/ethernet translations
-  from received packets.
 
 Currently only one Ethernet interface is supported.
 
@@ -61,8 +59,9 @@ When configured to use Chaos-over-UDP
 
 When configured to use Chaos-over-unix-sockets, you need to also run
 the "chaosd" server (found with the usim CADR emulator, see
-http://www.unlambda.com/cadr/). There can be only one such server per
-host system (on the same host as the bridge).
+http://www.unlambda.com/cadr/, or at https://github.com/LM-3/chaos).
+There can be only one such server per host system (on the same host as
+the bridge).
 
 When configuring your Chaosnets, you should really think about routing
 and subnets properly. Trying to interconnect two "segments" of the
@@ -70,12 +69,20 @@ same subnet on different media is harder to get right than
 interconnecting two different subnets. Attaching single hosts to a
 subnet through this bridge is more doable.
 
+Supported Chaosnet protocols
+============================
 The bridge responds to the DUMP-ROUTING-TABLE contact, which sends the
 routing table (for subnets up to nr 122). This is used by e.g. the
 functions CHAOS:SHOW-ROUTING-PATH and CHAOS:SHOW-ROUTING-TABLE on LMI
 systems, the CHAOS:PRINT-ROUTING-TABLE function on Symbolics systems,
 and if you're lucky, the DUMP-ROUTING-TABLE command of the CHATST
 program in ITS. 
+
+When cbridge is compiled to collect statistics, it also responds to
+the STATUS protocol (see AI Memo 628), using the host name from the
+"myname" configuration parameter (defaults to "real" host name up to
+first period). Yes, it could try to look it up in Chaosnet DNS given
+the chaddr parameter, but... [libresolv won't play nicely with Chaos.]
 
 It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the
@@ -84,12 +91,6 @@ host uptime (e.g. wrt the STATUS statistics).
 A non-standard contact LASTCN is also supported, which reponds with
 info about which hosts the bridge has received packets from, from what
 other host (e.g. another router) and how long ago.
-
-When cbridge is compiled to collect statistics, it also responds to
-the STATUS protocol (see AI Memo 628), using the host name from the
-"myname" configuration parameter (defaults to "real" host name up to
-first period). Yes, it could try to look it up in Chaosnet DNS given
-the chaddr parameter, but...
 
 If the process receives a SIGUSR1 signal, it prints things about its
 configuration, routing and statistics. If SIGINFO is defined (e.g. on
@@ -100,9 +101,10 @@ macOS, using ctrl-T in bash), that signal does the same.
 Future work (let me know if you do it!):
 ========================================
 - validate configuration (at least warn about crazy things)
+- add support for Chaos-over-TLS (e.g. for hosts without stable IP,
+  and some security)
 - rewrite BPF part using libpcap
 - minimize copying (not much of a problem?) - see comments in code
-- implement Chaos-over-DTLS to have some security
 - make Open Genera use tap instead of tun, to allow Chaosnet (quite
   different project, but for Chaos interoperability)
 - add support for Chaos-over-IP (encapsulating using IP protocol 16,
@@ -133,6 +135,17 @@ Global settings:
 	unknown sources. 
 	With ipv6 option, listens to both v4 and v6 (enabled also by
 	defining a chudp link where the host has an ipv6 addr).
+ tls [ key keyfile ] [ cert certfile ] [ ca-chain ca-chain-cert-file ] [ myaddr %o ] [ server portnr ]
+        set up for TLS using the private key in keyfile, the cert in
+	certfile, and the CA trust chain in ca-chain-cert-file.
+
+	If "server" is specified, a TLS server is started listening to
+	portnr (default 42042, if at EOL). TLS servers are always
+	"dynamic" in that they listen to connections from anywhere,
+	but accept only those using certificates trusted by the CA
+	trust chain. Server-end connections are added dynamically at
+	runtime, and can not be pre-declared. The local address is set
+	to the myaddr parameter, or the global chaddr.
  ether ifname
        use this ether interface, default eth0
 
@@ -166,7 +179,9 @@ LINKTYPE:
  chudp host:port
 		this is a Chaos-over-UDP link to host (ip or name) on
 		port (default 42042). Default type: fixed, cost: asynch.
-
+ tls host:port  this is a Chaos-over-TLS link, client end, connecting
+		to host (ip or name) at port (default 42042).
+		Default type: fixed, cost: asynch.
 
 Note that while links implicitly define a route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;
@@ -192,6 +207,7 @@ Assuming your local Chaosnet network is over Ethernet, and uses subnet 11 (octal
     ; Define a chaos-over-udp link to the Global Chaosnet router, which has address 3040
     link chudp router.aosnet.ch host 3040
     ; Define a route to subnet 6 over that - it knows everyone
+    ; This is not really needed, since 3040 will send routing info about this net
     route subnet 6 bridge 3040
     ; Define a local Chaos-over-Ether subnet nr 11 (hosts 4400-4777)
     link ether subnet 11
@@ -209,6 +225,40 @@ The ITS will pick up routing info from cbridge. (Of course you also
 need to configure ITS to use address 4411.)
 
 
+Example: MX-11
+==============
+
+A different example is the config for MX-11 (aka router.aosnet.ch).
+
+The MX-11 serves as a hub for a number of hosts connecting through
+CHUDP (mostly ITS systems, but also BSD and MINITS). They have
+individual addresses on net 6. 
+
+The name of MX-11 (used e.g. in STATUS replies):
+    myname MX-11
+The "main" Chaosnet address of MX-11 is
+    chaddr 3040
+and it listens to CHUDP on the standard port, also over IPv6
+    chudp 42042 ipv6
+It uses the standard name for the ethernet interface
+    ether eth0
+
+The config for the CHUDP hosts consists of lines
+    link chudp hostN host addrN
+where hostN is the host name or IP of a host, and addrN is its
+Chaosnet addess. 
+
+Additionally, MX-11 connects to the local ethernet (where an old
+Symbolics lisp machine might be running). NOTE the declaration of
+"myaddr" for net 1, which means that packets cbridge sends on this net
+are sent from address 440. A router/bridge should always have (and
+use) an address specific to each net.
+    link ether subnet 1 myaddr 440
+
+To tell cbridge to send routing info about net 6, which only has
+individual host links, a route declaration is necessary.
+    route subnet 6 bridge 3040
+
 ----------------------------------------------------------------
 
 Notes:
@@ -225,10 +275,10 @@ running the bridge program, or other programs using the same
 mechanism, such as LambdaDelta or klh10 using Chaos-over-Ether. 
 Run the bridge on another system on your network.
 
-Q: if UP should be the main router for subnet 6, but that's only
+Q: if MX-11 should be the main router for subnet 6, but that's only
    point-2-point chudp links, how do we configure it to send RUTs for
    subnet 6 on other nets it may be connected to?
-A: "route subnet 6 bridge 3143" works.
+A: "route subnet 6 bridge 3040" works.
    Actual host routes have prio, this will add an indirect route,
    and no route will be found to self.
 
