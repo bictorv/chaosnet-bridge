@@ -3764,7 +3764,6 @@ void tls_wait_for_tcp_open(struct tls_dest *td)
 // write a record length (two bytes MSB first) and that many bytes
 int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 {
-  // tlsdest_lock already locked by caller
   int wrote;
   SSL *ssl;
 
@@ -3783,7 +3782,9 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   obuf[1] = len & 0xff;
   memcpy(obuf+2, buf, len);
 
+  PTLOCK(tlsdest_lock);
   if ((ssl = td->tls_ssl) == NULL) {
+    PTUNLOCK(tlsdest_lock);
     if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
     tls_please_reopen_tcp(td);
     return -1;
@@ -3795,6 +3796,7 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     if (tls_debug)
       ERR_print_errors_fp(stderr);
     // close/free etc
+    PTUNLOCK(tlsdest_lock);
     tls_please_reopen_tcp(td);
     return wrote;
   }
@@ -3802,6 +3804,7 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
   else if (tls_debug || debug)
     fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
+  PTUNLOCK(tlsdest_lock);
 
   return wrote;
 }
