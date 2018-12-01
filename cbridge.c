@@ -3691,7 +3691,7 @@ void tls_please_reopen_tcp(struct tls_dest *td)
     // need to also disable network routes this is a bridge for
     int i;
     for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
+      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
     PTUNLOCK(rttbl_lock);
