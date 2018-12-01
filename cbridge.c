@@ -3688,6 +3688,12 @@ void tls_please_reopen_tcp(struct tls_dest *td)
     if (rt != NULL)
       rt->rt_type = RT_NOPATH;
     else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
+    // need to also disable network routes this is a bridge for
+    int i;
+    for (i = 0; i < 0xff; i++) {
+      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
+	rttbl_net[i].rt_type = RT_NOPATH;
+    }
     PTUNLOCK(rttbl_lock);
   } else {
     // let connector thread do the closing/freeing
