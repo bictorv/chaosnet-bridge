@@ -3267,7 +3267,9 @@ SSL_CTX *tls_create_server_context()
 void tls_configure_context(SSL_CTX *ctx)
 {
   // Auto-select elliptic curve
+#ifdef SSL_CTX_set_ecdh_auto
     SSL_CTX_set_ecdh_auto(ctx, 1);
+#endif
 
     /* Set the key and cert */
     if (SSL_CTX_use_certificate_file(ctx, tls_cert_file, SSL_FILETYPE_PEM) <= 0) {
@@ -3763,13 +3765,7 @@ void tls_wait_for_tcp_open(struct tls_dest *td)
 int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 {
   int wrote;
-  SSL *ssl = td->tls_ssl;
-
-  if (ssl == NULL) {
-    if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td);
-    return -1;
-  }
+  SSL *ssl;
 
   if (len > 0xffff) {
     fprintf(stderr,"tls_write_record: too long: %#x  > 0xffff\n", len);
@@ -3785,6 +3781,14 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   obuf[0] = (len >> 8) & 0xff;
   obuf[1] = len & 0xff;
   memcpy(obuf+2, buf, len);
+
+  PTLOCK(tlsdest_lock);
+  if ((ssl = td->tls_ssl) == NULL) {
+    PTUNLOCK(tlsdest_lock);
+    if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
+    tls_please_reopen_tcp(td);
+    return -1;
+  }
   if ((wrote = SSL_write(ssl, obuf, 2+len)) <= 0) {
     int err = SSL_get_error(ssl, wrote);
     // punt;
@@ -3792,13 +3796,15 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     if (tls_debug)
       ERR_print_errors_fp(stderr);
     // close/free etc
+    PTUNLOCK(tlsdest_lock);
     tls_please_reopen_tcp(td);
+    return wrote;
   }
   else if (wrote != len+2)
     fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
   else if (tls_debug || debug)
     fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
-
+  PTUNLOCK(tlsdest_lock);
 
   return wrote;
 }
@@ -3826,7 +3832,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   PTUNLOCK(tlsdest_lock);
 
   if ((cnt) < 0) {
-    perror("read record length");
+    if (tls_debug) perror("read record length");
     tls_please_reopen_tcp(td);
     return -1;
   }
@@ -4048,7 +4054,7 @@ void * tls_input(void *v)
 	    bzero(data,sizeof(data));  /* clear data */
 	    if ((len = tls_read_record(&tlsdest[tindex], data, sizeof(data))) < 0) {
 	      // error handled by tls_read_record
-	      perror("tls_read_record");
+	      if (tls_debug) perror("tls_read_record");
 	      continue; // to next fd
 	    } else if (len == 0) {
 	      // just a mark

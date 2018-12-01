@@ -5,6 +5,7 @@ This program is a bridge between Chaosnet implementations. It supports
   see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see
   http://www.unlambda.com/cadr/) 
+- Chaos-over-TLS (see below)
 
 For the original Chaosnet report, MIT AI Memo 628 by David A. Moon,
 see the attached PDF (original location
@@ -63,6 +64,19 @@ http://www.unlambda.com/cadr/, or at https://github.com/LM-3/chaos).
 There can be only one such server per host system (on the same host as
 the bridge).
 
+When configured to use Chaos-over-TLS, it needs some certificate
+infrastructure. I'm working on one for the Global Chaosnet. There are
+different reasons to want to use TLS: one is for improved security
+(confidentiality, authenticity), and the other is for clients which
+don't have externally reachable and stable IP addresses and thus are
+not reachable by UDP. TCP would suffice, but since clients don't have
+stable IPs, it would be hard to firewall - instead you need an open
+server which s not so nice. TLS helps with authentication. TLS is
+asymmetric, in the sense that one end is the server which the clients
+connect to. The implementation is not yet tested for cbridges which
+have both roles, but might work. :-) 
+Needs libssl1.1 and libssl-dev to compile.
+
 When configuring your Chaosnets, you should really think about routing
 and subnets properly. Trying to interconnect two "segments" of the
 same subnet on different media is harder to get right than
@@ -101,15 +115,16 @@ macOS, using ctrl-T in bash), that signal does the same.
 Future work (let me know if you do it!):
 ========================================
 - validate configuration (at least warn about crazy things)
-- add support for Chaos-over-TLS (e.g. for hosts without stable IP,
-  and some security)
 - rewrite BPF part using libpcap
 - minimize copying (not much of a problem?) - see comments in code
 - make Open Genera use tap instead of tun, to allow Chaosnet (quite
   different project, but for Chaos interoperability)
 - add support for Chaos-over-IP (encapsulating using IP protocol 16,
-  used by the pdp10x FPGA implementation). But the IP address mapping
-  is crazy^W very limited, and if you just want encapsulation, use UDP?
+  used by the pdp10x FPGA implementation). See also  "Cisco's
+  implementation of Chaosnet", with the same type of mapping
+  https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
+  But the IP address mapping is crazy^W very limited, and if you just
+  want encapsulation, use UDP?
 
 
 ----------------------------------------------------------------
