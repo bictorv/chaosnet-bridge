@@ -2666,9 +2666,9 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     // send it in network order, with trailer
     if (debug) fprintf(stderr,"Forward: Sending on TLS from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
 
+    struct tls_dest *td = NULL;
     PTLOCK(tlsdest_lock);
-    found = 0;
-    for (i = 0; (i < *tlsdest_len) && !found; i++) {
+    for (i = 0; i < *tlsdest_len; i++) {
       if (
 	  /* direct link to destination */
 	  (tlsdest[i].tls_addr == dchad)
@@ -2680,13 +2680,16 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 	  (rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
 	  ) {
 	if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
-	found = 1;
-	htons_buf((u_short *)ch, (u_short *)ch, dlen);
-	tls_write_record(&tlsdest[i], data, dlen);
+	td = &tlsdest[i];
+	break;
       }
     }
     PTUNLOCK(tlsdest_lock);
-    if (!found && (verbose || debug))
+    if (td != NULL) {
+      htons_buf((u_short *)ch, (u_short *)ch, dlen);
+      tls_write_record(td, data, dlen);
+    }
+    if (td == NULL && (verbose || debug))
       fprintf(stderr, "Can't find TLS link to %#o via %#o/%#o\n",
 	      dchad, rt->rt_dest, rt->rt_braddr);
     break;
