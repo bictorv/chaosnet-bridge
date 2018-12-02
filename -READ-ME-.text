@@ -12,7 +12,7 @@ see the attached PDF (original location
 http://hdl.handle.net/1721.1/6353) or
 https://lm-3.github.io/amber.html for an HTML:ized version.
 
-It was written by Björn Victor (bjorn@victor.se) in 2017, based on
+It was written by Björn Victor (bjorn@victor.se) in 2017-2018, based on
 earlier code (from 2005) for pairwise bridging (ether-chudp,
 chudp-unix), where the Chaos-over-unix-sockets was based on code by
 Brad Parker (brad@heeltoe.com, see http://www.unlambda.com/cadr/).
@@ -25,12 +25,13 @@ http://klh10.trailing-edge.com/).
 You can configure the bridge to connect subnets and/or individual hosts. 
 Use cases could be
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
-  others using LambdaDelta (use a Chaos-over-UDP link between them).
+  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS
+  link between them). 
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
-  with others using usim (use a Chaos-over-UDP link between them).
+  with others using usim (use a Chaos-over-UDP or -TLS link between them).
 - connecting ITSes running on klh10 - rather than configuring your
   klh10 to handle all other chudp hosts and iptables to forward chudp
-  pkts over the tun interface, keep chudp routing in the bridge
+  pkts over the tun interface, keep routing in the bridge
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
 - and interconnecting these three, of course!
@@ -66,22 +67,29 @@ the bridge).
 
 When configured to use Chaos-over-TLS, it needs some certificate
 infrastructure. I'm working on one for the Global Chaosnet. There are
-different reasons to want to use TLS: one is for improved security
-(confidentiality, authenticity), and the other is for clients which
-don't have externally reachable and stable IP addresses and thus are
-not reachable by UDP. TCP would suffice, but since clients don't have
-stable IPs, it would be hard to firewall - instead you need an open
-server which s not so nice. TLS helps with authentication. TLS is
-asymmetric, in the sense that one end is the server which the clients
-connect to. The implementation is not yet tested for cbridges which
-have both roles, but might work. :-) 
-Needs libssl1.1 and libssl-dev to compile.
+different reasons to want to use TLS:
+- one is for improved security (confidentiality, authenticity), and
+- another is for clients which don't have externally reachable and
+  stable IP addresses and thus are not reachable by UDP. TCP would
+  suffice, but since clients don't have stable IPs, it would be hard
+  to firewall - instead you need an open server which is not so nice.
+  TLS helps with authentication. 
+TLS is asymmetric, in the sense that one end is the server which the
+clients connect to. The implementation is not yet tested for cbridges
+which have both roles, but might work. :-) 
+(My preliminary impression is that it is faster than CHUDP!)
+Needs libssl-dev to compile.
 
 When configuring your Chaosnets, you should really think about routing
 and subnets properly. Trying to interconnect two "segments" of the
 same subnet on different media is harder to get right than
 interconnecting two different subnets. Attaching single hosts to a
 subnet through this bridge is more doable.
+
+If the process receives a SIGUSR1 signal, it prints things about its
+configuration, routing and statistics. If SIGINFO is defined (e.g. on
+macOS, using ctrl-T in bash), that signal does the same.
+
 
 Supported Chaosnet protocols
 ============================
@@ -104,11 +112,14 @@ host uptime (e.g. wrt the STATUS statistics).
 
 A non-standard contact LASTCN is also supported, which reponds with
 info about which hosts the bridge has received packets from, from what
-other host (e.g. another router) and how long ago.
-
-If the process receives a SIGUSR1 signal, it prints things about its
-configuration, routing and statistics. If SIGINFO is defined (e.g. on
-macOS, using ctrl-T in bash), that signal does the same.
+other host (e.g. another router) and how long ago. Each entry consists of
+word 0: length of entry in 16-bit words (7)
+     1: host addr which was seen
+     2: # input pkts from that (least significant 16 bits)
+     3:   (most significant 16 bits)
+     4: address the host was last seen from (e.g. a bridge)
+     6: how many seconds ago was the host seen (LSB 16 bits)
+     7:   (MSB 16 bits)
 
 ----------------------------------------------------------------
 
@@ -133,6 +144,7 @@ Command line options:
 =====================
  -d	turns on debug (lots of it)
  -v	turns on verbose (less detail)
+ -t	turns on TLS debug (lots)
  -c cf	reads config from file cf, default cbridge.conf
 
 Configuration syntax:
@@ -251,10 +263,12 @@ individual addresses on net 6.
 
 The name of MX-11 (used e.g. in STATUS replies):
     myname MX-11
-The "main" Chaosnet address of MX-11 is
+The "main" Chaosnet address of MX-11 (on net 6) is
     chaddr 3040
 and it listens to CHUDP on the standard port, also over IPv6
     chudp 42042 ipv6
+It also acts as a TLS server for Chaos-over-TLS
+    tls key private/router.aosnet.ch.key.pem cert certs/router.aosnet.ch.cert.pem ca-chain ca-chain.cert.pem ipv6 server
 It uses the standard name for the ethernet interface
     ether eth0
 
@@ -280,20 +294,12 @@ Notes:
 ======
 For more info on the Global Chaosnet, see https://aosnet.ch.
 
-Separate threads are started to handle input from different link
-types. Each thread is only started if the configuration needs it (e.g.
-if you configure an ether interface, or an ether link, the ethernet
-thread is started).
+Separate threads are started to handle input from different link types
+(several for TLS). Each thread is only started if the configuration
+needs it (e.g. if you configure an ether interface, or an ether link,
+the ethernet thread is started).
 
 Often the Ethernet link can NOT send and receive to the host system
 running the bridge program, or other programs using the same
 mechanism, such as LambdaDelta or klh10 using Chaos-over-Ether. 
 Run the bridge on another system on your network.
-
-Q: if MX-11 should be the main router for subnet 6, but that's only
-   point-2-point chudp links, how do we configure it to send RUTs for
-   subnet 6 on other nets it may be connected to?
-A: "route subnet 6 bridge 3040" works.
-   Actual host routes have prio, this will add an indirect route,
-   and no route will be found to self.
-
