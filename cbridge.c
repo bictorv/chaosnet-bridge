@@ -23,6 +23,7 @@
    Should support as many as desired of
    - Chaos-over-Ethernet [#### currently only one interface]
    - CHUDP (Chaos-over-UDP, used by klh10/its)
+   - Chaos-over-TLS (using two bytes of record length)
    - chaosd (Unix socket protocol, used by the usim CADR emulator)
    - Chaos-over-IP (direct address mapping, used by pdp10x) #### TODO
      see also "Cisco's implementation of Chaosnet", same type of mapping
@@ -34,9 +35,6 @@
 /* Read MIT AIM 628, in particular secions 3.6 and 3.7. */
 
 // TODO
-// implement Chaos over TLS using additional two-byte record length header
-// - implement pkt counting/linkstat (pass linkstat to sender fcn to make it easier to count pkts?)
-//
 
 // rewrite using pcap (replace BPF) - then implement multiple interfaces?
 // validate conf (subnets vs bridges etc)
