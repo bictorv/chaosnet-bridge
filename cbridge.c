@@ -735,8 +735,8 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 	PTLOCK(rttbl_lock);
 	rttbl_net[rsub].rt_type = RT_BRIDGE; // type;
 	rttbl_net[rsub].rt_cost = (rcost + cost);  /* add the cost to go to that bridge */
-	// Subnet routes via CHUDP must be indirect (look up bridge host too)
-	rttbl_net[rsub].rt_link = (linktype == LINK_CHUDP ? LINK_INDIRECT : linktype);
+	// Subnet routes via CHUDP/TLS must be indirect (look up bridge host too)
+	rttbl_net[rsub].rt_link = (linktype == LINK_CHUDP ? LINK_INDIRECT : (linktype == LINK_TLS ? LINK_INDIRECT : linktype));
 	rttbl_net[rsub].rt_braddr = src;
 	rttbl_net[rsub].rt_dest = src & 0xff00;
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
@@ -3660,6 +3660,11 @@ void *tls_connector(void *arg)
 	// tell others about it
 	tls_inform_tcp_is_open(td);
 
+	// @@@@ send a SNS pkt to get route initiated (tell server about our Chaos address)
+	// SNS is suppsed to be only for existing connections, but
+	// what happens if we send one anyway? Nothing, since the
+	// recipient is a cbridge - we handle it.
+
 	// wait for someone to ask us to reconnect
 	tls_wait_for_reconnect_signal(td);
 	// close the old, go back and open new
@@ -3684,14 +3689,14 @@ void tls_please_reopen_tcp(struct tls_dest *td)
     close_tlsdest(td);    
     PTLOCK(rttbl_lock);
     // also disable routing entry
-    struct chroute *rt = find_in_routing_table(chaddr, 1, 0);
+    struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
     if (rt != NULL)
       rt->rt_type = RT_NOPATH;
     else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
     // need to also disable network routes this is a bridge for
     int i;
     for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
+      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
     PTUNLOCK(rttbl_lock);
