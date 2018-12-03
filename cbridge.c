@@ -385,11 +385,12 @@ void print_link_stats()
   int i;
   PTLOCK(linktab_lock);
   printf("Link stats:\n"
-	 "Subnet\t  In\t Out\t CRC\t Bad\t Rej\n");
+	 "Subnet\t  In\t Out\t Abort\t Lost\t CRC\t Ram\t Bitc\t Rej\n");
   for (i = 0; i < 256; i++) {
     if (linktab[i].pkt_in != 0 || linktab[i].pkt_out != 0 || linktab[i].pkt_crcerr != 0) {
-      printf("%#o\t%7d\t%7d\t%7d\t%7d\t%7d\n", i,
-	     linktab[i].pkt_in, linktab[i].pkt_out, linktab[i].pkt_crcerr,
+      printf("%#o\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\n", i,
+	     linktab[i].pkt_in, linktab[i].pkt_out, linktab[i].pkt_aborted, linktab[i].pkt_lost,
+	     linktab[i].pkt_crcerr, linktab[i].pkt_crcerr_post,
 	     linktab[i].pkt_badlen, linktab[i].pkt_rejected);
     }
   }
@@ -499,19 +500,24 @@ print_routing_table() {
   int i;
   fprintf(stderr,"Routing tables follow:\n");
   if (*rttbl_host_len > 0) {
-    fprintf(stderr,"Host\tBridge\tType\tLink\tCost\tMyAddr\n");
+    fprintf(stderr,"Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
     for (i = 0; i < *rttbl_host_len; i++)
       if (rttbl_host[i].rt_link != LINK_NOLINK)
-	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%#o\n",
-		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type), rt_linkname(rttbl_host[i].rt_link), rttbl_host[i].rt_cost, rttbl_host[i].rt_myaddr);
+	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
+		rt_linkname(rttbl_host[i].rt_link),
+		rttbl_host[i].rt_myaddr,
+		rttbl_host[i].rt_cost,
+		rttbl_host[i].rt_cost_updated > 0 ? time(NULL) - rttbl_host[i].rt_cost_updated : 0);
   }
-  fprintf(stderr,"Net\tBridge\tType\tLink\tCost\tAge\tMyAddr\n");
+  fprintf(stderr,"Net\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
   for (i = 0; i < 0xff; i++)
     if (rttbl_net[i].rt_link != LINK_NOLINK)
-      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%ld\t%#o\n",
-	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link), rttbl_net[i].rt_cost,
-	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0,
-	      rttbl_net[i].rt_myaddr);
+      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link),
+	      rttbl_net[i].rt_myaddr,
+	      rttbl_net[i].rt_cost,
+	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
 #if CHAOS_TLS
@@ -2794,8 +2800,6 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     }
   }
 #endif
-  // @@@@ If a valid trailer exists (e.g. not Ether), consider using the dest there, constructed by e.g. ITS.
-  // @@@@ But we do know about routing, so don't?
   u_short dchad = ch_destaddr(ch);  /* destination */
   u_char fwc = ch_fc(ch);	/* forwarding count */
 
@@ -3361,6 +3365,7 @@ add_tls_route(int tindex, u_short srcaddr)
     // old route exists
     if (tls_debug) fprintf(stderr,"TLS route to %#o found (type %s), updating to Fixed\n", srcaddr, rt_typename(srcrt->rt_type));
     srcrt->rt_type = RT_FIXED;
+    srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
   } else {
     if (*rttbl_host_len < RTTBL_HOST_MAX) {
       // make a routing entry for host srcaddr through tls link at tlsindex
@@ -3371,7 +3376,7 @@ add_tls_route(int tindex, u_short srcaddr)
       rttbl_host[*rttbl_host_len].rt_type = RT_FIXED;
       rttbl_host[*rttbl_host_len].rt_link = LINK_TLS;
       rttbl_host[*rttbl_host_len].rt_cost = RTCOST_ASYNCH;
-      rttbl_host[*rttbl_host_len].rt_cost_updated = time(NULL);
+      rttbl_host[*rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
       srcrt = &rttbl_host[*rttbl_host_len];
       (*rttbl_host_len)++;
       if (verbose) print_routing_table();
@@ -3730,18 +3735,37 @@ void *tls_connector(void *arg)
 
 // signalling stuff
 
-void tls_please_reopen_tcp(struct tls_dest *td)
+void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 // called by tls_write_record, tls_read_record on failure
 {
+  u_short chaddr = td->tls_addr;
+
+  // Count this as a lost/aborted pkt.
+  // Lost (on input):
+  //  "The number of incoming packets from this subnet lost because the
+  //  host had not yet read a previous packet out of the interface and
+  //  consequently the interface could not capture the packet"
+  // Aborted (on output):
+  //  "The number of transmissions to this subnet aborted by
+  //  collisions or because the receiver was busy."
+  PTLOCK(linktab_lock);
+  if (inputp)
+    linktab[chaddr>>8].pkt_lost++;
+  else
+    linktab[chaddr>>8].pkt_aborted++;
+  PTUNLOCK(linktab_lock);
+
   if (td->tls_serverp) {
     // no signalling to do, just close/free stuff
-    u_short chaddr = td->tls_addr;
     close_tlsdest(td);    
     PTLOCK(rttbl_lock);
     // also disable routing entry
     struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
-    if (rt != NULL)
+    if (rt != NULL) {
+      if (rt->rt_type != RT_NOPATH)
+	rt->rt_cost_updated = time(NULL); // cost isn't updated, but keep track of state change
       rt->rt_type = RT_NOPATH;
+    }
     else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
     // need to also disable network routes this is a bridge for
     int i;
@@ -3850,7 +3874,7 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   if ((ssl = td->tls_ssl) == NULL) {
     PTUNLOCK(tlsdest_lock);
     if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 0);
     return -1;
   }
   if ((wrote = SSL_write(ssl, obuf, 2+len)) <= 0) {
@@ -3861,7 +3885,7 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
       ERR_print_errors_fp(stderr);
     PTUNLOCK(tlsdest_lock);
     // close/free etc
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 0);
     return wrote;
   }
   else if (wrote != len+2)
@@ -3887,7 +3911,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   if (ssl == NULL) {
     PTUNLOCK(tlsdest_lock);
     if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return 0;
   }
 
@@ -3897,14 +3921,14 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 
   if (cnt < 0) {
     if (tls_debug) perror("read record length");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return -1;
   }
   if (cnt == 0) {
     // EOF
     if (tls_debug)
       fprintf(stderr,"TLS read record: record len: 0 bytes read - please reopen\n");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return 0;
   } else if (cnt != 2) {
     if (tls_debug)
@@ -3921,7 +3945,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     fprintf(stderr,"TLS read record: record len %d\n", rlen);
   if (rlen > blen) {
     fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return -1;
   }
 
@@ -3929,7 +3953,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   if ((ssl = td->tls_ssl) == NULL) {
     PTUNLOCK(tlsdest_lock);
     if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return 0;
   }
   actual = SSL_read(ssl, buf, rlen);
@@ -3937,7 +3961,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 
   if (actual < 0) {
     perror("read record");
-    tls_please_reopen_tcp(td);
+    tls_please_reopen_tcp(td, 1);
     return -1;
   }
   if (actual < rlen) {
@@ -3950,20 +3974,20 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
       if ((ssl = td->tls_ssl) == NULL) {
 	PTUNLOCK(tlsdest_lock);
 	if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-	tls_please_reopen_tcp(td);
+	tls_please_reopen_tcp(td, 1);
 	return 0;
       }
       actual = SSL_read(ssl, &buf[p], rlen-p);
       PTUNLOCK(tlsdest_lock);
       if (actual < 0) {
 	perror("re-read record");
-	tls_please_reopen_tcp(td);
+	tls_please_reopen_tcp(td, 1);
 	return -1;
       }
       if (tls_debug)
 	fprintf(stderr,"TLS read record: read %d more bytes\n", actual);
       if (actual == 0) {
-	tls_please_reopen_tcp(td);
+	tls_please_reopen_tcp(td, 1);
 	return -1;
       }
       p += actual;
@@ -4062,7 +4086,7 @@ void * tls_input(void *v)
   struct chaos_header *cha = (struct chaos_header *)&data;
 
   // @@@@ random number - parameter, or remove?
-  sleep(2); // wait for things to settle
+  sleep(2); // wait for things to settle, connection to open
 
   while (1) {
     FD_ZERO(&rfd);
@@ -4109,6 +4133,7 @@ void * tls_input(void *v)
 	  PTUNLOCK(tlsdest_lock);
 	  if (tls_debug) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
 	  if (tindex >= 0) {
+	    int serverp = tlsdest[tindex].tls_serverp;
 	    bzero(data,sizeof(data));  /* clear data */
 	    if ((len = tls_read_record(&tlsdest[tindex], data, sizeof(data))) < 0) {
 	      // error handled by tls_read_record
@@ -4141,7 +4166,7 @@ void * tls_input(void *v)
 	    if (srcrt == NULL) {
 	      // add route
 	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
-	      if (!do_tls_server)
+	      if (!serverp)
 		fprintf(stderr,"TLS: No source route found for incoming data, but we are a client?? (source %#o, tlsdest %d)\n",
 			srcaddr, tindex);
 	      srcrt = add_tls_route(tindex, srcaddr);
