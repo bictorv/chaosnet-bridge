@@ -347,6 +347,30 @@ int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
 // Whether to peek at non-RUT pkts to discover routes
 u_char peek_routing_info = 0;	// not implemented
 
+// RFC handler struct (the contacts this process handles)
+struct rfc_handler {
+  char *contact;
+  void (*handler)(u_char *, int);
+};
+
+// declare some handlers
+void status_responder(u_char *, int);
+void lastcn_responder(u_char *, int);
+void dump_routing_table_responder(u_char *, int);
+void uptime_responder(u_char *, int);
+void time_responder(u_char *, int);
+
+// the contacts and their handler function
+struct rfc_handler mycontacts[] = {
+  { "STATUS", &status_responder },
+  { "LASTCN", &lastcn_responder },
+  { "DUMP-ROUTING-TABLE", &dump_routing_table_responder },
+  { "UPTIME", &uptime_responder },
+  { "TIME", &time_responder }
+};
+// KEEP THIS IN SYNC
+#define MAX_CONTACT 5
+
 int is_mychaddr(u_short addr) 
 {
   int i;
@@ -577,16 +601,7 @@ void add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
     /* clear any non-specified fields */
     memset(&chudpdest[*chudpdest_len], 0, sizeof(struct chudest));
     chudpdest[*chudpdest_len].chu_addr = srcaddr;
-#if 1
     memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
-#else
-    /* family and port are compatible for v4/v6 */
-    chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_family = sin->sin_family;
-    chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_port = sin->sin_port;
-    /* addr is in the same place, but different lenght */
-    memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_addr.s_addr, &sin->sin_addr,
-	   (sin->sin_family == AF_INET ? sizeof(sin->sin_addr) : sizeof(sin6_addr)));
-#endif
     (*chudpdest_len)++;
     if (verbose) print_chudp_config();
     PTUNLOCK(chudp_lock);
@@ -2681,6 +2696,9 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
       if (debug) fprintf(stderr,"Forward: Broadcasting on ether from %#o\n", schad);
       send_packet(chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
     } else {
+      if (rt->rt_type == RT_BRIDGE)
+	// the bridge is on Ether, but the dest might not be
+	dchad = rt->rt_braddr;
       u_char *eaddr = find_arp_entry(dchad);
       if (eaddr != NULL) {
 	if (debug) fprintf(stderr,"Forward: Sending on ether from %#o to %#o\n", schad, dchad);
@@ -2859,45 +2877,20 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 
   // To me?
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
-    // @@@@ make this more generic at some point, if more protocols are added.
-#if COLLECT_STATS
-    // should potentially handle BRD packets, but nobody sends them anyway?
-    if (ch_opcode(ch) == CHOP_RFC
-	// "STATUS" in pdp11 format
-	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"TSTASU",6) == 0) 
-	&& ((ch_nbytes(ch) == 6) || data[CHAOS_HEADERSIZE+7] == ' ')) {
-      if (verbose) fprintf(stderr,"RFC for STATUS received, responding\n");
-      status_responder(data, dlen);
-    }
-    if (ch_opcode(ch) == CHOP_RFC
-	// "LASTCN" in pdp11 format
-	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"ALTSNC",6) == 0) 
-	&& ((ch_nbytes(ch) == 6) || data[CHAOS_HEADERSIZE+7] == ' ')) {
-      if (verbose) fprintf(stderr,"RFC for LASTCN received, responding\n");
-      lastcn_responder(data, dlen);
-    }
-    else
-#endif // COLLECT_STATS
-    if (ch_opcode(ch) == CHOP_RFC
-	// "DUMP-ROUTING-TABLE" in pdp11 format
-	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"UDPMR-UOITGNT-BAEL",18) == 0)
-	&& (ch_nbytes(ch) == 18)) {
-      if (verbose) fprintf(stderr,"RFC for DUMP-ROUTING-TABLE received, responding\n");
-      dump_routing_table_responder(data, dlen);
-    }
-    else if (ch_opcode(ch) == CHOP_RFC
-	// "UPTIME" in pdp11 format
-	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"PUITEM",6) == 0)
-	&& (ch_nbytes(ch) == 6)) {
-      if (verbose) fprintf(stderr,"RFC for UPTIME received, responding\n");
-      uptime_responder(data, dlen);
-    }
-    else if (ch_opcode(ch) == CHOP_RFC
-	// "TIME" in pdp11 format
-	&& (strncmp((char *)&data[CHAOS_HEADERSIZE],"ITEM",4) == 0)
-	&& (ch_nbytes(ch) == 4)) {
-      if (verbose) fprintf(stderr,"RFC for TIME received, responding\n");
-      time_responder(data, dlen);
+    if (ch_opcode(ch) == CHOP_RFC) {
+      // see what contact they look for
+      int i;
+      u_char *cname = (u_char *)calloc(ch_nbytes(ch)+1, sizeof(u_char));
+      ch_11_gets(&data[CHAOS_HEADERSIZE], cname, ch_nbytes(ch));
+      for (i = 0; i < MAX_CONTACT; i++) {
+	if ((strncmp((char *)cname, (char *)mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
+	    && (ch_nbytes(ch) == strlen(mycontacts[i].contact))) {
+	  if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);
+	  // call the handler
+	  (*mycontacts[i].handler)(data, dlen);
+	  break;
+	}
+      }
     }
     else
       if (verbose) {
@@ -2911,6 +2904,8 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 	  u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
 	  if (cont != NULL) {
 	    ch_11_gets(cp, cont, max);
+	    char *space = index((char *)cont, ' ');
+	    if (space) *space = '\0'; // show only contact name, not args
 	    fprintf(stderr,"%s\n", cont);
 	    free(cont);
 	  } else
@@ -3062,11 +3057,13 @@ void send_chaos_pkt(u_char *pkt, int len)
   if (ch_srcaddr(cha) == 0)
     set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
-  if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (%s)\n",
+  if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (%s) dest %#o %s bridge %#o\n",
 		       ch_opcode_name(ch_opcode(cha)),
 		       ch_srcaddr(cha),
 		       ch_destaddr(cha),
-		       rt_linkname(rt->rt_link));
+		       rt_linkname(rt->rt_link),
+		       rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr
+		       );
 #if COLLECT_STATS
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest>>8].pkt_out++;
