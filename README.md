@@ -3,6 +3,7 @@ This program is a bridge between Chaosnet implementations. It supports
   https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml)
 - Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator,
   see https://its.victor.se/wiki/ch11) - now with IPv6 support
+- Chaos-over-TLS (using a two-byte record length header)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see
   http://www.unlambda.com/cadr/) 
 

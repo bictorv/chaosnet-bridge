@@ -23,8 +23,11 @@
    Should support as many as desired of
    - Chaos-over-Ethernet [#### currently only one interface]
    - CHUDP (Chaos-over-UDP, used by klh10/its)
+   - Chaos-over-TLS (using two bytes of record length)
    - chaosd (Unix socket protocol, used by the usim CADR emulator)
    - Chaos-over-IP (direct address mapping, used by pdp10x) #### TODO
+     see also "Cisco's implementation of Chaosnet", same type of mapping
+     https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
 
    Does not hack BRD packets (yet), but noone seems to use them anyway?
 */
@@ -33,19 +36,20 @@
 
 // TODO
 
-// rewrite using pcap
+// rewrite using pcap (replace BPF) - then implement multiple interfaces?
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
 // - make sure thois host has a subnet-specific chaos addr on all defined links
 // detect unexpected traffic
 // - e.g. source addr 3150 from link with addr 3160 (which has another link)
 // - or traffic from a defined subnet arriving on a different link
+// firewall??
 
 // Separate datastructures for links and routes, simplifying things.
 
 // add a more silent variant of output, which just notes new chudp
 //   links, new routes, real weirdness, etc.
-// add parameters for various constans (arp age limit, reparsing interval...)
+// add parameters for various constants (arp age limit, reparsing interval...)
 // minimize copying
 // - now net order is swapped to host order when receiving from Ether and Unix,
 //   and then swapped back before forwarding,
@@ -58,6 +62,11 @@
 #ifndef CHAOS_ETHERP
 // enable the Chaos-over-Ether code
 #define CHAOS_ETHERP 1
+#endif
+
+#ifndef CHAOS_TLS
+// enable the Chaos-over-TLS code
+#define CHAOS_TLS 1
 #endif
 
 #ifndef ETHER_BPF
@@ -78,6 +87,9 @@
 // Peek at sender's MAC address to update ARP table, to avoid ARP traffic.
 // This is a quite inefficient way of finding addresses, I think.
 #define PEEK_ARP 0
+#endif
+#if PEEK_ARP
+# warn PEEK_ARP is inefficent and not well tested.
 #endif
 
 #include <stdio.h>
@@ -118,6 +130,13 @@
 
 #include <pthread.h>
 
+#if CHAOS_TLS
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/asn1.h>
+#include <openssl/x509.h>
+#endif
+
 #include "cbridge-chaos.h"	/* chaos pkt format etc */
 #include "chudp.h"		/* chudp pkt format etc */
 #include "chaosd.h"		/* chaos-over-unix-sockets */
@@ -143,9 +162,13 @@ enum { RT_NOPATH=0,		/* @@@@ where is this from? */
        RT_BRIDGE,		/* Bridge (perhaps known via RUT packet) */
 };
 // Link implementation types
-enum { LINK_ETHER=1,		/* Chaos-over-Ethernet */
+enum { LINK_NOLINK=0,
+       LINK_ETHER,		/* Chaos-over-Ethernet */
        LINK_UNIXSOCK,		/* Chaos-over-Unix sockets ("chaosd") */
        LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
+#if CHAOS_TLS
+       LINK_TLS,		/* Chaos-over-TLS */
+#endif
        LINK_INDIRECT,		/* look up the bridge address */
 };
 
@@ -223,6 +246,54 @@ struct chudest *chudpdest;	/* shared mem allocation */
 int *chudpdest_len;
 #define CHUDPDEST_MAX 64
 
+#if CHAOS_TLS
+// TLS stuff
+#define CHAOS_TLS_PORT 42042
+#define CBRIDGE_TCP_MAXLEN (CH_PK_MAXLEN+2+12)
+// timeout in select (and if no open connections)
+#define TLS_INPUT_RETRY_TIMEOUT 1
+
+char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
+char tls_key_file[PATH_MAX];	/* private key */
+char tls_cert_file[PATH_MAX];	/* certificate */
+// @@@@ should allow for different addrs on different ports/links. Punt for now.
+u_short tls_myaddr = 0;		/* my chaos address on TLS links */
+int tls_server_port = 42042;
+int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
+
+int tls_debug = 0;
+int do_tls = 0, do_tls_server = 0;
+int do_tls_ipv6 = 0;
+
+// max length of a CN
+#define TLSDEST_NAME_LEN 128
+// here is a TLS destination
+struct tls_dest {
+  u_short tls_addr;		/* remote chaos address */
+  char tls_name[TLSDEST_NAME_LEN]; /* name given in (client) config or from CN (in servers) */
+  int tls_serverp; /* 1 if server end - don't bother with mutex/cond stuff */
+  union {			/* The IP of the other end */
+    struct sockaddr tls_saddr;	/* generic sockaddr */
+    struct sockaddr_in tls_sin;	/* IP addr */
+    struct sockaddr_in6 tls_sin6;  /* IPv6 addr */
+  } tls_sa;
+  pthread_mutex_t tcp_is_open_mutex;  /* is TCP open? */
+  pthread_cond_t tcp_is_open_cond;
+  pthread_mutex_t tcp_reconnect_mutex;  /* would you please reconnect me? */
+  pthread_cond_t tcp_reconnect_cond;
+  int tls_sock;			/* TCP socket */
+  SSL *tls_ssl;			/* SSL conn */
+};
+pthread_mutex_t tlsdest_lock;	/* for locking tlsdest */
+struct tls_dest *tlsdest;	/* table of tls_dest entries */
+int *tlsdest_len;
+#define TLSDEST_MAX 32
+
+int tls_write_record(struct tls_dest *td, u_char *buf, int len);
+void tls_inform_tcp_is_open(struct tls_dest *td);
+void tls_wait_for_reconnect_signal(struct tls_dest *td);
+#endif // CHAOS_TLS
+
 #if CHAOS_ETHERP
 // ARP stuff
 #ifndef ETHERTYPE_CHAOS
@@ -268,7 +339,7 @@ char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STAT
 #define NCHADDR 8
 static int nchaddr = 0;
 static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
-int udpport = 42042;		// default port
+int udpport = 42042;		// default UDP port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
 int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
@@ -314,11 +385,12 @@ void print_link_stats()
   int i;
   PTLOCK(linktab_lock);
   printf("Link stats:\n"
-	 "Subnet\t  In\t Out\t CRC\t Bad\t Rej\n");
+	 "Subnet\t  In\t Out\t Abort\t Lost\t CRC\t Ram\t Bitc\t Rej\n");
   for (i = 0; i < 256; i++) {
     if (linktab[i].pkt_in != 0 || linktab[i].pkt_out != 0 || linktab[i].pkt_crcerr != 0) {
-      printf("%#o\t%7d\t%7d\t%7d\t%7d\t%7d\n", i,
-	     linktab[i].pkt_in, linktab[i].pkt_out, linktab[i].pkt_crcerr,
+      printf("%#o\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\t%7d\n", i,
+	     linktab[i].pkt_in, linktab[i].pkt_out, linktab[i].pkt_aborted, linktab[i].pkt_lost,
+	     linktab[i].pkt_crcerr, linktab[i].pkt_crcerr_post,
 	     linktab[i].pkt_badlen, linktab[i].pkt_rejected);
     }
   }
@@ -361,7 +433,7 @@ void print_host_stats()
       for (i = 0; i < 256; i++) {
 	// fprintf(stderr,"hosttab[%d][%i] = %p\n", n, i, he[i]);
 	if (he[i].hst_in != 0 || he[i].hst_last_hop != 0 || he[i].hst_last_seen != 0) {
-	  printf("%#o\t%7d\t%#o\t%d\n", (n << 8) | i,
+	  printf("%#o\t%7d\t%#o\t%ld\n", (n << 8) | i,
 		 he[i].hst_in, he[i].hst_last_hop,
 		 he[i].hst_last_seen > 0 ? time(NULL) - he[i].hst_last_seen : 0);
 	}
@@ -370,6 +442,21 @@ void print_host_stats()
   }
   PTUNLOCK(hosttab_lock);
 }
+
+#if CHAOS_TLS
+void init_tlsdest()
+{
+  if (pthread_mutex_init(&tlsdest_lock, NULL) != 0)
+    perror("pthread_mutex_init(tlsdest_lock)");
+  if ((tlsdest = malloc(sizeof(struct chudest)*TLSDEST_MAX)) == NULL)
+    perror("malloc(tlsdest)");
+  if ((tlsdest_len = malloc(sizeof(int))) == NULL)
+    perror("malloc(tlsdest_len)");
+  memset((char *)tlsdest, 0, sizeof(struct chudest)*TLSDEST_MAX);
+  *tlsdest_len = 0;
+}
+
+#endif
 
 void init_chudpdest()
 {
@@ -388,6 +475,9 @@ char *rt_linkname(u_char linktype)
   switch (linktype) {
   case LINK_UNIXSOCK: return "Unix";
   case LINK_CHUDP: return "CHUDP";
+#if CHAOS_TLS
+  case LINK_TLS: return "TLS";
+#endif
   case LINK_ETHER: return "Ether";
   case LINK_INDIRECT: return "Indir";
   default: return "Unknown?";
@@ -410,20 +500,54 @@ print_routing_table() {
   int i;
   fprintf(stderr,"Routing tables follow:\n");
   if (*rttbl_host_len > 0) {
-    fprintf(stderr,"Host\tBridge\tType\tLink\tCost\tMyAddr\n");
+    fprintf(stderr,"Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
     for (i = 0; i < *rttbl_host_len; i++)
-      if (rttbl_host[i].rt_type != RT_NOPATH)
-	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%#o\n",
-		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type), rt_linkname(rttbl_host[i].rt_link), rttbl_host[i].rt_cost, rttbl_host[i].rt_myaddr);
+      if (rttbl_host[i].rt_link != LINK_NOLINK)
+	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
+		rt_linkname(rttbl_host[i].rt_link),
+		rttbl_host[i].rt_myaddr,
+		rttbl_host[i].rt_cost,
+		rttbl_host[i].rt_cost_updated > 0 ? time(NULL) - rttbl_host[i].rt_cost_updated : 0);
   }
-  fprintf(stderr,"Net\tBridge\tType\tLink\tCost\tAge\tMyAddr\n");
+  fprintf(stderr,"Net\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
   for (i = 0; i < 0xff; i++)
-    if (rttbl_net[i].rt_type != RT_NOPATH)
-      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%ld\t%#o\n",
-	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link), rttbl_net[i].rt_cost,
-	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0,
-	      rttbl_net[i].rt_myaddr);
+    if (rttbl_net[i].rt_link != LINK_NOLINK)
+      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link),
+	      rttbl_net[i].rt_myaddr,
+	      rttbl_net[i].rt_cost,
+	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
+
+#if CHAOS_TLS
+void print_tlsdest_config()
+{
+  int i;
+  char ip[INET6_ADDRSTRLEN];
+  PTLOCK(tlsdest_lock);
+  printf("TLS destination config: %d links\n", *tlsdest_len);
+  for (i = 0; i < *tlsdest_len; i++) {
+    if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
+      if (inet_ntop(tlsdest[i].tls_sa.tls_saddr.sa_family,
+		    (tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
+		     ? (void *)&tlsdest[i].tls_sa.tls_sin.sin_addr
+		     : (void *)&tlsdest[i].tls_sa.tls_sin6.sin6_addr), ip, sizeof(ip))
+	  == NULL)
+	strerror_r(errno, ip, sizeof(ip));
+    } else
+      strcpy(ip, "[none]");
+    printf(" dest %#o, name %s, ",
+	   tlsdest[i].tls_addr, 
+	   tlsdest[i].tls_name);
+    if (tlsdest[i].tls_serverp) printf("(server) ");
+    printf("host %s port %d\n",
+	   ip, ntohs(tlsdest[i].tls_sa.tls_sin.sin_port));
+  }
+  PTUNLOCK(tlsdest_lock);
+}
+
+#endif // CHAOS_TLS
 
 void print_chudp_config()
 {
@@ -445,7 +569,7 @@ void print_chudp_config()
   }
 }
 
-void add_chudp_dest(u_short srcaddr, struct sockaddr *sin) // was sockaddr_in
+void add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
 {
   if (*chudpdest_len < CHUDPDEST_MAX) {
     if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
@@ -461,7 +585,7 @@ void add_chudp_dest(u_short srcaddr, struct sockaddr *sin) // was sockaddr_in
     chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_port = sin->sin_port;
     /* addr is in the same place, but different lenght */
     memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_addr.s_addr, &sin->sin_addr,
-	   (sin->sin_family == AF_INET ? sizeof(sin->sin_addr) : sizeof(sin6_addr));
+	   (sin->sin_family == AF_INET ? sizeof(sin->sin_addr) : sizeof(sin6_addr)));
 #endif
     (*chudpdest_len)++;
     if (verbose) print_chudp_config();
@@ -512,6 +636,7 @@ void reparse_chudp_names()
   hi.ai_family = PF_UNSPEC;
   hi.ai_flags = AI_ADDRCONFIG;
 
+  // @@@@ also reparse TLS hosts?
   PTLOCK(chudp_lock);
   for (i = 0; i < *chudpdest_len; i++) {
     if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
@@ -618,8 +743,8 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 	PTLOCK(rttbl_lock);
 	rttbl_net[rsub].rt_type = RT_BRIDGE; // type;
 	rttbl_net[rsub].rt_cost = (rcost + cost);  /* add the cost to go to that bridge */
-	// Subnet routes via CHUDP must be indirect (look up bridge host too)
-	rttbl_net[rsub].rt_link = (linktype == LINK_CHUDP ? LINK_INDIRECT : linktype);
+	// Subnet routes via CHUDP/TLS must be indirect (look up bridge host too)
+	rttbl_net[rsub].rt_link = (linktype == LINK_CHUDP ? LINK_INDIRECT : (linktype == LINK_TLS ? LINK_INDIRECT : linktype));
 	rttbl_net[rsub].rt_braddr = src;
 	rttbl_net[rsub].rt_dest = src & 0xff00;
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
@@ -753,7 +878,7 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
 }
 
 struct chroute *
-find_in_routing_table(u_short dchad, int only_host)
+find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 {
   int i;
   if (is_mychaddr(dchad)) {
@@ -769,13 +894,14 @@ find_in_routing_table(u_short dchad, int only_host)
 
   /* Check host routing table first */
   for (i = 0; i < *rttbl_host_len; i++) {
-    if (rttbl_host[i].rt_dest == dchad
+    if ((also_nopath || rttbl_host[i].rt_type != RT_NOPATH)
+	&& rttbl_host[i].rt_dest == dchad
 	// Check the cost, too.
 	&& rttbl_host[i].rt_cost < RTCOST_HIGH) {
       if (rttbl_host[i].rt_link == LINK_INDIRECT) {
 	// #### validate config once instead of every time, and simply return the recursive call here
 	if (rttbl_host[i].rt_braddr != 0) {
-	  struct chroute *res = find_in_routing_table(rttbl_host[i].rt_braddr, 0);
+	  struct chroute *res = find_in_routing_table(rttbl_host[i].rt_braddr, 0, also_nopath);
 	  if (res == NULL) {
 	    fprintf(stderr,"Warning: find route: Indirect link to %#o found, but no route to its bridge %#o\n",
 		    dchad, rttbl_host[i].rt_braddr);
@@ -795,7 +921,7 @@ find_in_routing_table(u_short dchad, int only_host)
 
   /* Then check subnet routing table */
   u_short sub = (dchad>>8)&0xff;
-  if (rttbl_net[sub].rt_type != RT_NOPATH
+  if ((also_nopath || rttbl_net[sub].rt_type != RT_NOPATH)
       // Check the cost, too.
       && rttbl_net[sub].rt_cost < RTCOST_HIGH) {
     if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
@@ -809,7 +935,7 @@ find_in_routing_table(u_short dchad, int only_host)
 	return NULL;
       else if (rttbl_net[sub].rt_braddr != 0) {
 
-	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 1);
+	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 1, also_nopath);
 	if (res == NULL) {
 	  fprintf(stderr,"Warning: find route: Indirect link to host %#o on subnet %#o found, but no route to its bridge %#o\n",
 		  dchad, sub, rttbl_net[sub].rt_braddr);
@@ -1209,7 +1335,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	/* It's OK to receive a pkt from an addr which is not the link's, since there may be a whole net behind it,
 	   but not OK if it's from a another link's address - that's misconfigured, here or there. */
 	if (chudpdest[i].chu_addr != srcaddr) {	 // not from the link address
-	  struct chroute *rt = find_in_routing_table(srcaddr, 0); // find its link
+	  struct chroute *rt = find_in_routing_table(srcaddr, 0, 0); // find its link
 	  if ((rt != NULL) && (rt->rt_dest == srcaddr)) { // it's on another link!
 	    if (verbose) fprintf(stderr,"CHUDP host %#o is on another link than where it came from (%#o), rejecting/dropping\n",
 				 srcaddr, chudpdest[i].chu_addr);
@@ -2368,6 +2494,38 @@ time_responder(u_char *rfc, int len)
   send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
 }
 
+#if CHAOS_TLS
+// send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
+void
+send_empty_sns(struct tls_dest *td)
+{
+  u_char pkt[CH_PK_MAXLEN];
+  struct chaos_header *ch = (struct chaos_header *)pkt;
+  u_short src = (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
+  u_short dst = td->tls_addr;
+  int i;
+
+  struct chroute *rt = find_in_routing_table(dst, 1, 0);
+  if (rt == NULL) {
+    if (tls_debug) fprintf(stderr,"Can't send SNS to %#o - no route found!\n", dst);
+    return;
+  } else
+    if (rt->rt_myaddr > 0)
+      src = rt->rt_myaddr;
+
+  if (verbose || debug || tls_debug) 
+    fprintf(stderr,"Sending SNS from %#o to %#o\n", src, dst);
+
+  memset(pkt, 0, sizeof(pkt));
+  set_ch_opcode(ch, CHOP_SNS);
+  set_ch_destaddr(ch, dst);
+  set_ch_srcaddr(ch, src);
+  set_ch_nbytes(ch, 0);
+
+  send_chaos_pkt((u_char *)ch, ch_nbytes(ch)+CHAOS_HEADERSIZE);
+}
+#endif // CHAOS_TLS
+
 #if COLLECT_STATS
 void 
 status_responder(u_char *rfc, int len)
@@ -2510,6 +2668,8 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 
 
 
+  int found = 0;
+
   switch (rt->rt_link) {
 #if CHAOS_ETHERP
   case LINK_ETHER:
@@ -2541,6 +2701,39 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
       u_send_chaos(unixsock, data, dlen);
     }
     break;
+#if CHAOS_TLS
+  case LINK_TLS:
+    // send it in network order, with trailer
+    if (debug) fprintf(stderr,"Forward: Sending on TLS from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
+
+    struct tls_dest *td = NULL;
+    PTLOCK(tlsdest_lock);
+    for (i = 0; i < *tlsdest_len; i++) {
+      if (
+	  /* direct link to destination */
+	  (tlsdest[i].tls_addr == dchad)
+	  /* route to bridge */
+	  || 
+	  (tlsdest[i].tls_addr == rt->rt_braddr)
+	  /* route to dest */
+	  || 
+	  (rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
+	  ) {
+	if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
+	td = &tlsdest[i];
+	break;
+      }
+    }
+    PTUNLOCK(tlsdest_lock);
+    if (td != NULL) {
+      htons_buf((u_short *)ch, (u_short *)ch, dlen);
+      tls_write_record(td, data, dlen);
+    }
+    if (td == NULL && (verbose || debug))
+      fprintf(stderr, "Can't find TLS link to %#o via %#o/%#o\n",
+	      dchad, rt->rt_dest, rt->rt_braddr);
+    break;
+#endif
   case LINK_CHUDP:
     if (debug) fprintf(stderr,"Forward: Sending on CHUDP from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
     /* Add CHUDP header, copy message only once (in case it needs to be sent more than once) */
@@ -2550,7 +2743,7 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     // Assert that dlen+CHUDP_HEADERSIZE <= sizeof(chubuf)
     memcpy(&chubuf[CHUDP_HEADERSIZE], data, dlen);
 
-    int found = 0;
+    found = 0;
 
     if (verbose || debug) {
       fprintf(stderr,"Looking for CHUDP dest for this route:\n");
@@ -2560,7 +2753,7 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     }
 
     PTLOCK(chudp_lock);
-    for (i = 0; i < *chudpdest_len; i++) {
+    for (i = 0; (i < *chudpdest_len) && !found; i++) {
       if (
 #if 0
 	  dchad == 0		/* broadcast: goes on all links */
@@ -2607,8 +2800,6 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     }
   }
 #endif
-  // @@@@ If a valid trailer exists (e.g. not Ether), consider using the dest there, constructed by e.g. ITS.
-  // @@@@ But we do know about routing, so don't?
   u_short dchad = ch_destaddr(ch);  /* destination */
   u_char fwc = ch_fc(ch);	/* forwarding count */
 
@@ -2642,7 +2833,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   }
   set_ch_fc(ch,fwc);		/* update */
 
-  struct chroute *rt = find_in_routing_table(dchad, 0);
+  struct chroute *rt = find_in_routing_table(dchad, 0, 0);
 
   // From me?
   if (is_mychaddr(ch_srcaddr(ch)) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
@@ -2778,7 +2969,7 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
   switch (rt->rt_link) {
 #if CHAOS_ETHERP
   case LINK_ETHER:
-    set_ch_destaddr(cha, 0);
+    set_ch_destaddr(cha, 0);	/* broadcast */
     break;
 #endif // CHAOS_ETHERP
   case LINK_UNIXSOCK:
@@ -2787,6 +2978,9 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
     else
       set_ch_destaddr(cha, 0);	/* subnet (broadcast) - does chaosd handle this? */
     break;
+#if CHAOS_TLS
+  case LINK_TLS: // fall through
+#endif
   case LINK_CHUDP:
     if ((rt->rt_dest & 0xff) == 0) {
       // subnet route - send it to the bridge
@@ -2857,7 +3051,7 @@ void send_chaos_pkt(u_char *pkt, int len)
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short dchad = ch_destaddr(cha);
 
-  struct chroute *rt = find_in_routing_table(dchad, 0);
+  struct chroute *rt = find_in_routing_table(dchad, 0, 0);
 
   if (rt == NULL) {
     if (debug) fprintf(stderr,"Can't find route to send pkt to %#o\n", dchad);
@@ -2973,7 +3167,7 @@ void * unix_input(void *v)
 	if (debug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
 	continue;
       }
-      struct chroute *srcrt = find_in_routing_table(srcaddr, 0);
+      struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
       forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
 			srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 			srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
@@ -3005,7 +3199,7 @@ void * chudp_input(void *v)
 	srcaddr = ntohs(tr->ch_hw_srcaddr);
       } else
 	srcaddr = ch_srcaddr(ch);
-      struct chroute *srcrt = find_in_routing_table(srcaddr, 0);
+      struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
       forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
 			srcrt != NULL ? srcrt->rt_type : RT_BRIDGE,
 			srcrt != NULL ? srcrt->rt_cost : RTCOST_ASYNCH,
@@ -3014,6 +3208,987 @@ void * chudp_input(void *v)
       if (len > 0 && verbose) fprintf(stderr,"chudp: Short packet %d bytes\n", len);
   }
 }
+
+#if CHAOS_TLS
+// One server thread which listens for new connections,
+// Client links: connect and wait for writers to ask for re-connection.
+// One input thread which selects on all tls_sock fields.
+// For input thread and for writers (through forward_on_link)
+// - If error on client link, ask for re-connection
+// - If error on server link, close/disable it (and wait for client to reconnect)
+// @@@@ Probably tons of memory leaks in SSL library.
+
+// See https://wiki.openssl.org/index.php/Simple_TLS_Server,
+//     https://github.com/CloudFundoo/SSL-TLS-clientserver
+
+void init_openssl()
+{ 
+  SSL_library_init();
+  SSL_load_error_strings();	
+  OpenSSL_add_ssl_algorithms();
+}
+
+// not used
+void cleanup_openssl()
+{
+    EVP_cleanup();
+}
+
+// Find Chaosnet addr of CN through DNS:
+// this is just too much work with a poorly documented library (libresolv)
+// which also seems to think it needs to connect over chaosnet to find chaosnet data.
+// Instead, can we find the subjectAltName and let that be just an int 0x701 etc?
+// Seems too hairy (yet) to include it in cert (maybe not with openssl
+// 1.1.1, see https://security.stackexchange.com/a/183973)
+
+u_char *
+tls_get_cert_cn(X509 *cert)
+{
+  // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
+  int common_name_loc = -1, subj_alt_name_loc = -1;
+  X509_NAME_ENTRY *common_name_entry = NULL, *subj_alt_name_entry = NULL;
+  ASN1_STRING *common_name_asn1 = NULL, *subj_alt_name_asn1 = NULL;
+  char *common_name_str = NULL, *subj_alt_name_str = NULL;
+
+  // Find the position of the CN field in the Subject field of the certificate
+  common_name_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) cert), NID_commonName, -1);
+  if (common_name_loc < 0) {
+    if (tls_debug)
+      fprintf(stderr,"TLS get_cert_cn: can't find CN");
+    return NULL;
+  }
+
+  // Extract the CN field
+  common_name_entry = X509_NAME_get_entry(X509_get_subject_name((X509 *) cert), common_name_loc);
+  if (common_name_entry == NULL) {
+    if (tls_debug)
+      fprintf(stderr,"TLS get_cert_cn: can't extract CN");
+    return NULL;
+  }
+
+  // Convert the CN field to a C string
+  common_name_asn1 = X509_NAME_ENTRY_get_data(common_name_entry);
+  if (common_name_asn1 == NULL) {
+    if (tls_debug)
+      fprintf(stderr,"TLS get_cert_cn: can't convert CN to C string");
+    return NULL;
+  }			
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+  common_name_str = (char *) ASN1_STRING_data(common_name_asn1);
+#else
+  common_name_str = (char *) ASN1_STRING_get0_data(common_name_asn1);
+#endif
+  // Make sure there isn't an embedded NUL character in the CN
+  if (ASN1_STRING_length(common_name_asn1) != strlen(common_name_str)) {
+    if (tls_debug)
+      fprintf(stderr,"TLS get_cert_cn: malformed CN (NUL in CN)\n");
+    return NULL; // MalformedCertificate;
+  }
+  return (u_char *)common_name_str;
+}
+
+SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
+{
+    SSL_CTX *ctx;
+
+    ctx = SSL_CTX_new(method);
+    if (!ctx) {
+	perror("Unable to create SSL context");
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+SSL_CTX *tls_create_client_context()
+{
+  const SSL_METHOD *method;
+
+    method = SSLv23_client_method();
+    return tls_create_some_context(method);
+}
+
+SSL_CTX *tls_create_server_context()
+{
+   const SSL_METHOD *method;
+    method = SSLv23_server_method();
+    return tls_create_some_context(method);
+}
+
+void tls_configure_context(SSL_CTX *ctx)
+{
+  // Auto-select elliptic curve
+#ifdef SSL_CTX_set_ecdh_auto
+    SSL_CTX_set_ecdh_auto(ctx, 1);
+#endif
+
+    /* Set the key and cert */
+    if (SSL_CTX_use_certificate_file(ctx, tls_cert_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, tls_key_file, SSL_FILETYPE_PEM) <= 0 ) {
+        ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+    }
+    // Check key and cert
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+      fprintf(stderr,"Private key and certificate do not match\n");
+      ERR_print_errors_fp(stderr);
+      exit(EXIT_FAILURE);
+    }
+    // Load CA cert chain
+    if (!SSL_CTX_load_verify_locations(ctx, tls_ca_file, NULL)) {
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+      }
+    // Make sure to verify the peer (both server and client)
+    // Consider adding a callback to validate CN/subjectAltName?
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    // go up to "higher level CA"
+    SSL_CTX_set_verify_depth(ctx, 2);
+}
+
+
+// Routes, tlsdest etc
+
+// Should only be called by server (clients have their routes set up by config)
+struct chroute *
+add_tls_route(int tindex, u_short srcaddr)
+{
+  struct chroute * srcrt = NULL;
+  PTLOCK(rttbl_lock);
+  // find any old entry (only host route, also nopath)
+  srcrt = find_in_routing_table(srcaddr, 1, 1);
+  if (srcrt != NULL) {
+    // old route exists
+    if (tls_debug) fprintf(stderr,"TLS route to %#o found (type %s), updating to Fixed\n", srcaddr, rt_typename(srcrt->rt_type));
+    srcrt->rt_type = RT_FIXED;
+    srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+  } else {
+    if (*rttbl_host_len < RTTBL_HOST_MAX) {
+      // make a routing entry for host srcaddr through tls link at tlsindex
+      // "link tls [tlsdest stuff] host [srcaddr]
+      rttbl_host[*rttbl_host_len].rt_dest = srcaddr;
+      rttbl_host[*rttbl_host_len].rt_braddr = 0;  /* direct, not through a bridge */
+      rttbl_host[*rttbl_host_len].rt_myaddr = tls_myaddr;  /* if 0, the main address is used */
+      rttbl_host[*rttbl_host_len].rt_type = RT_FIXED;
+      rttbl_host[*rttbl_host_len].rt_link = LINK_TLS;
+      rttbl_host[*rttbl_host_len].rt_cost = RTCOST_ASYNCH;
+      rttbl_host[*rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+      srcrt = &rttbl_host[*rttbl_host_len];
+      (*rttbl_host_len)++;
+      if (verbose) print_routing_table();
+    } else
+      fprintf(stderr,"%%%% host route table full (adding TLS for %#o), increase RTTBL_HOST_MAX!\n", srcaddr);
+  }
+  PTUNLOCK(rttbl_lock);
+  PTLOCK(tlsdest_lock);
+  if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr))
+    fprintf(stderr,"%%%% TLS link %d chaos address already known (%#o) but route not found - updating to %#o\n",
+	    tindex, tlsdest[tindex].tls_addr, srcaddr);
+  if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
+  tlsdest[tindex].tls_addr = srcaddr;
+  PTUNLOCK(tlsdest_lock);
+  return srcrt;
+}
+
+void
+close_tlsdest(struct tls_dest *td)
+{
+  PTLOCK(tlsdest_lock);
+  if (td->tls_serverp) {
+    // forget remote sockaddr
+    memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
+    // forget remote chaos addr
+    td->tls_addr = 0;
+  }
+  if (td->tls_ssl != NULL) {
+    SSL_free(td->tls_ssl);
+    td->tls_ssl = NULL;
+  }
+  if (td->tls_sock != 0) {
+    close(td->tls_sock);
+    td->tls_sock = 0;
+  }
+  PTUNLOCK(tlsdest_lock);
+}
+
+void
+update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ssl)
+{
+  // defining the client link adds the tlsdest entry, but need to fill in and initialize mutex/conds
+
+  // fill in tls_name, tls_sock, tls_ssl
+  PTLOCK(tlsdest_lock);
+#if 0
+  // don't - we need the "IP name" of the server
+  if (server_cn != NULL)
+    strncpy(td->tls_name, (char *)server_cn, TLSDEST_NAME_LEN);
+#endif
+  td->tls_serverp = 0;
+  td->tls_sock = tsock;
+  td->tls_ssl = ssl;
+
+  // initiate these
+  if (pthread_mutex_init(&td->tcp_is_open_mutex, NULL) != 0)
+    perror("pthread_mutex_init(update_client_tlsdest)");
+  if (pthread_cond_init(&td->tcp_is_open_cond, NULL) != 0)
+    perror("pthread_cond_init(update_client_tlsdest)");
+  if (pthread_mutex_init(&td->tcp_reconnect_mutex, NULL) != 0)
+    perror("pthread_mutex_init(update_client_tlsdest)");
+  if (pthread_cond_init(&td->tcp_reconnect_cond, NULL) != 0)
+    perror("pthread_cond_init(update_client_tlsdest)");
+  
+  PTUNLOCK(tlsdest_lock);
+}
+
+
+void
+add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len)
+{
+  // no tlsdest exists for server end, until it is connected
+  struct tls_dest *td = NULL;
+
+  PTLOCK(tlsdest_lock);
+  // look for name in tlsdest and reuse entry if it is closed
+  int i;
+  for (i = 0; i < *tlsdest_len; i++) {
+    if ((tlsdest[i].tls_name[0] != '\0') && tlsdest[i].tls_serverp && (strncmp(tlsdest[i].tls_name, (char *)name, TLSDEST_NAME_LEN) == 0)) {
+      td = &tlsdest[i];
+      break;
+    }
+  }
+  if (td != NULL) {
+    if (tls_debug) fprintf(stderr,"Reusing tlsdest for %s\n", name);
+    // update sock and ssl
+    td->tls_sock = sock;
+    td->tls_ssl = ssl;
+    // get sockaddr
+    memcpy((void *)&td->tls_sa.tls_saddr, sa, sa_len);
+  } else {
+    // crete a new entry
+    if (*tlsdest_len >= TLSDEST_MAX) {
+      PTUNLOCK(tlsdest_lock);
+      fprintf(stderr,"%%%% tlsdest is full! Increase TLSDEST_MAX\n");
+      return;
+    }
+    if (tls_debug) {
+      char ip6[INET6_ADDRSTRLEN];
+      if (inet_ntop(sa->sa_family,
+		    (sa->sa_family == AF_INET ?
+		     (void *)&((struct sockaddr_in *)sa)->sin_addr :
+		     (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
+		    ip6, sizeof(ip6)) == NULL)
+	strerror_r(errno,ip6,sizeof(ip6));
+      fprintf(stderr,"Adding new TLS destination %s from %s port %d\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+    }
+
+    memset(&tlsdest[*tlsdest_len], 0, sizeof(struct tls_dest));
+    // get sockaddr
+    memcpy(&tlsdest[*tlsdest_len].tls_sa, sa, sa_len);
+    if (name != NULL)
+      strncpy((char *)&tlsdest[*tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
+    tlsdest[*tlsdest_len].tls_serverp = 1;
+    tlsdest[*tlsdest_len].tls_sock = sock;
+    tlsdest[*tlsdest_len].tls_ssl = ssl;
+
+    (*tlsdest_len)++;
+  }
+  if (verbose) print_tlsdest_config();
+  PTUNLOCK(tlsdest_lock);
+
+  // add route when first pkt comes in, see tls_input
+}
+
+// TCP low-level things
+int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
+{
+  struct sockaddr caddr;
+  int fd;
+  u_int clen = sizeof(struct sockaddr);
+  u_int *slen = &clen;
+  struct sockaddr *sa = &caddr;
+
+  if ((saddr != NULL) && (*sa_len != 0)) {
+    // fill in sockaddr
+    sa = saddr;
+    slen = sa_len;
+  }
+
+
+  if ((fd = accept(sock, (struct sockaddr *)sa, slen)) < 0) {
+    perror("accept");
+    fprintf(stderr,"errno = %d\n", errno);
+    // @@@@ better error handling, back off and try again? what could go wrong here?
+    exit(1);
+  }
+  // @@@@ log stuff about the connection?
+  if (tls_debug) {
+    char ip6[INET6_ADDRSTRLEN];
+    if (inet_ntop(sa->sa_family,
+		  (sa->sa_family == AF_INET ?
+		   (void *)&((struct sockaddr_in *)sa)->sin_addr :
+		   (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
+		  ip6, sizeof(ip6)) == NULL)
+      strerror_r(errno,ip6,sizeof(ip6));
+    fprintf(stderr,"TCP accept connection from %s port %d\n", ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+  }
+  return fd;
+}
+
+int tcp_bind_socket(int type, u_short port) 
+{
+  int sock;
+
+  if ((sock = socket(do_tls_ipv6 ? AF_INET6 : AF_INET, type, 0)) < 0) {
+    perror("socket (TCP) failed");
+    exit(1);
+  }
+  // @@@@ SO_REUSEADDR or SO_REUSEPORT
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
+    perror("setsockopt(SO_REUSEADDR)");
+
+  if (tls_debug)
+    fprintf(stderr,"binding socket type %d (%s), %s, to port %d\n", 
+	     type, (type == SOCK_DGRAM ? "dgram" : (type == SOCK_STREAM ? "stream" : "?")),
+	    do_tls_ipv6 ? "IPv6" : "IPv4",
+	     port);
+  if (do_tls_ipv6) {
+    struct sockaddr_in6 sin6;
+#if 0
+    // For TLS, allow both IPv4 and IPv6
+    int one = 1;
+    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0)
+      perror("setsockopt(IPV6_V6ONLY)");
+#endif
+    sin6.sin6_family = AF_INET6;
+    sin6.sin6_port = htons(port);
+    memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
+    if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
+      perror("bind(v6) failed");
+      exit(1);
+    }
+  } else {
+    struct sockaddr_in sin;
+    memset(&sin,0,sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(port);
+    sin.sin_addr.s_addr = INADDR_ANY;
+    if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
+      perror("bind() failed");
+      exit(1);
+    }
+  }
+  return sock;
+}
+
+// TCP connector, with backoff
+int tcp_client_connect(struct sockaddr *sin)
+{
+  int sock, unlucky = 1, foo;
+  
+  while (unlucky) {
+    if (tls_debug) fprintf(stderr,"TCP connect: socket family %d (%s)\n",
+			   sin->sa_family,
+			   (sin->sa_family == AF_INET ? "IPv4" :
+			    (sin->sa_family == AF_INET6 ? "IPv6" : "??")));
+    if ((sock = socket(sin->sa_family, SOCK_STREAM, 0)) < 0) {
+      perror("socket(tcp)");
+      exit(1);
+    }
+
+    if (tls_debug) {
+      char ip[INET6_ADDRSTRLEN];
+      if (inet_ntop(sin->sa_family,
+		    (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
+		    ip, sizeof(ip)) == NULL)
+	strerror_r(errno, ip, sizeof(ip));
+      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
+    }
+
+    if (connect(sock, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
+      if (tls_debug) {
+	perror("connect (tcp)");
+	fprintf(stderr,"connect errno %d\n", errno);
+      }
+      // back off and try again - the other end might be down
+      if (tls_debug)
+	fprintf(stderr,"TCP connect: trying again in %d s\n", unlucky);
+      if ((foo = sleep(unlucky)) != 0) {
+	fprintf(stderr,"TCP connect: sleep returned %d\n", foo);
+      }
+      // Backoff: increase sleep until 30s, then go back to 10s
+      unlucky++;
+      if (unlucky > 30) unlucky /= 3;
+      if (close(sock) < 0)
+	perror("close(tcp_client_connect)");
+      continue;
+    }
+    else
+      unlucky = 0;
+  }
+  // log stuff about the connection
+  if (tls_debug) {
+    char ip[INET6_ADDRSTRLEN];
+    if (inet_ntop(sin->sa_family,
+		  (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
+		  ip, sizeof(ip)) == NULL)
+      strerror_r(errno, ip, sizeof(ip));
+    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
+  }
+  return sock;  
+}
+
+// TLS level things.
+
+// TLS client connector thread.
+// Take struct tls_dest *td
+// Create a client context, connect to server, make TLS connection, fill in td, (add route?)
+// and wait for others to ask for reconnection.
+// Iterate.
+void *tls_connector(void *arg)
+{
+  struct tls_dest *td = (struct tls_dest *)arg;
+
+  SSL *ssl;
+  SSL_CTX *ctx = tls_create_client_context();
+  tls_configure_context(ctx);
+
+  while (1) {
+    // @@@@ re-parse tlsdest?
+    if (tls_debug) {
+      char ip[INET6_ADDRSTRLEN];
+      if (inet_ntop(td->tls_sa.tls_saddr.sa_family,
+		    (td->tls_sa.tls_saddr.sa_family == AF_INET ?
+		     (void *)&(td->tls_sa.tls_sin.sin_addr) : (void *)&(td->tls_sa.tls_sin6.sin6_addr)),
+		    ip, sizeof(ip)) == NULL)
+	strerror_r(errno, ip, sizeof(ip));
+      fprintf(stderr,"TLS client: connecting to %s port %d\n", ip, ntohs(td->tls_sa.tls_sin.sin_port));
+    }
+    // connect to server
+    int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
+
+    if (tls_debug)
+      fprintf(stderr,"TLS client: connected\n");
+
+    if ((ssl = SSL_new(ctx)) == NULL) {
+      fprintf(stderr,"tls_connector: SSL_new failed");
+      ERR_print_errors_fp(stderr);
+      close(tsock);
+      continue; // try again
+    }
+    SSL_set_fd(ssl, tsock);
+    int v = 0;
+    if ((v = SSL_connect(ssl)) <= 0) {
+      fprintf(stderr,"%%%% Fatal error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
+      int err = SSL_get_error(ssl, v);
+      ERR_print_errors_fp(stderr);
+      close(tsock);
+      SSL_free(ssl);
+      // or just let this thread die?
+      pthread_exit(&(int){ 1 });
+      exit(1);
+      // don't just keep trying!
+      // continue;
+    }
+
+    X509 *ssl_server_cert = SSL_get_peer_certificate(ssl);
+
+    if(ssl_server_cert) {
+	long verifyresult;
+
+	verifyresult = SSL_get_verify_result(ssl);
+	if(verifyresult != X509_V_OK) {
+	  X509_free(ssl_server_cert);				
+	  SSL_free(ssl);
+	  close(tsock);
+	  continue;
+	}
+	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
+	// create tlsdest, fill in stuff
+	update_client_tlsdest(td, server_cn, tsock, ssl);
+
+	// tell others about it
+	tls_inform_tcp_is_open(td);
+
+	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
+	// SNS is supposed to be only for existing connections, but we
+	// can abuse it since the recipient is a cbridge - we handle it.
+	send_empty_sns(td);
+
+	// wait for someone to ask us to reconnect
+	tls_wait_for_reconnect_signal(td);
+	// close the old, go back and open new
+	close_tlsdest(td);
+    } else {
+      fprintf(stderr,"%%%% Fatal error: TLS client: no server cert (%s), closing\n", td->tls_name);
+      SSL_free(ssl);
+      close(tsock);
+      pthread_exit(&(int){ 1 });
+      exit(1);
+      // continue;
+    }
+  }
+}
+
+// signalling stuff
+
+void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
+// called by tls_write_record, tls_read_record on failure
+{
+  u_short chaddr = td->tls_addr;
+
+  // Count this as a lost/aborted pkt.
+  // Lost (on input):
+  //  "The number of incoming packets from this subnet lost because the
+  //  host had not yet read a previous packet out of the interface and
+  //  consequently the interface could not capture the packet"
+  // Aborted (on output):
+  //  "The number of transmissions to this subnet aborted by
+  //  collisions or because the receiver was busy."
+  PTLOCK(linktab_lock);
+  if (inputp)
+    linktab[chaddr>>8].pkt_lost++;
+  else
+    linktab[chaddr>>8].pkt_aborted++;
+  PTUNLOCK(linktab_lock);
+
+  if (td->tls_serverp) {
+    // no signalling to do, just close/free stuff
+    close_tlsdest(td);    
+    PTLOCK(rttbl_lock);
+    // also disable routing entry
+    struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
+    if (rt != NULL) {
+      if (rt->rt_type != RT_NOPATH)
+	rt->rt_cost_updated = time(NULL); // cost isn't updated, but keep track of state change
+      rt->rt_type = RT_NOPATH;
+    }
+    else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
+    // need to also disable network routes this is a bridge for
+    int i;
+    for (i = 0; i < 0xff; i++) {
+      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
+	rttbl_net[i].rt_type = RT_NOPATH;
+    }
+    PTUNLOCK(rttbl_lock);
+  } else {
+    // let connector thread do the closing/freeing
+    if (tls_debug)
+      fprintf(stderr,"TLS_please_reopen_tcp (%s)\n",td->tls_name);
+    // signal the connection thread - don't care if nobody's waiting (already working on it, probably)
+    if (pthread_mutex_lock(&td->tcp_reconnect_mutex) < 0)
+      perror("pthread_mutex_lock(reconnect)");
+    if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
+      perror("tls_please_reopen_tcp(cond)\n");
+      exit(1);
+    } 
+    if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
+      perror("pthread_mutex_unlock(reconnect)");
+  }
+}
+void tls_wait_for_reconnect_signal(struct tls_dest *td)
+// called by tls_connector, tls_listener
+{
+  /* wait for someone to ask for reconnection, typically after an error in read/write */
+  if (tls_debug)
+    fprintf(stderr,"TLS wait_for_reconnect_signal (%s)...\n", td->tls_name);
+
+  pthread_mutex_lock(&td->tcp_reconnect_mutex);
+  if (pthread_cond_wait(&td->tcp_reconnect_cond, &td->tcp_reconnect_mutex) < 0) {
+    perror("tls_wait_for_reconnect_signal(cond)");
+    exit(1);
+  }
+  if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)  {
+    perror("tls_wait_for_reconnect_signal(unlock)");
+    exit(1);
+  }
+  if (tls_debug)
+    fprintf(stderr,"wait_for_reconnect_signal done\n");
+}
+
+void tls_inform_tcp_is_open(struct tls_dest *td)
+{
+  if (tls_debug)
+    fprintf(stderr,"tls_inform_tcp_is_open (%s)\n", td->tls_name);
+  if (pthread_mutex_lock(&td->tcp_is_open_mutex) < 0)
+    perror("pthread_mutex_lock(tcp_is_open)");
+  /* wake everyone waiting on this */
+  if (pthread_cond_broadcast(&td->tcp_is_open_cond) < 0) {
+    perror("tls_inform_tcp_is_open(cond)");
+    exit(1);
+  }
+  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)
+    perror("pthread_mutex_unlock(tcp_is_open)");
+}
+void tls_wait_for_tcp_open(struct tls_dest *td)
+{
+  /* wait for tcp_is_open, and get a mutex lock */
+
+  if (tls_debug)
+    fprintf(stderr,"wait_for_tcp_open (%s)...\n", td->tls_name);
+
+  pthread_mutex_lock(&td->tcp_is_open_mutex);
+  if (tls_debug)
+    fprintf(stderr,"wait_for_tcp_open got lock, waiting...\n");
+  if (pthread_cond_wait(&td->tcp_is_open_cond, &td->tcp_is_open_mutex) < 0) {
+    perror("wait_for_tcp_open(wait)");
+    exit(1);
+  }
+  if (tls_debug)
+    fprintf(stderr,"wait_for_tcp_open got signal\n");
+
+  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)  {
+    perror("wait_for_tcp_open(unlock)");
+    exit(1);
+  }
+  if (tls_debug)
+    fprintf(stderr,"wait_for_tcp_open done\n");
+}
+
+
+// write a record length (two bytes MSB first) and that many bytes
+int tls_write_record(struct tls_dest *td, u_char *buf, int len)
+{
+  int wrote;
+  SSL *ssl;
+
+  if (len > 0xffff) {
+    fprintf(stderr,"tls_write_record: too long: %#x  > 0xffff\n", len);
+    exit(1);
+  }
+  if (len > CBRIDGE_TCP_MAXLEN) {
+    fprintf(stderr,"tcp_write_record: too long: %#x > %#x\n", len, (u_int)CBRIDGE_TCP_MAXLEN);
+    exit(1);
+  }
+
+  u_char obuf[CBRIDGE_TCP_MAXLEN+2];
+
+  obuf[0] = (len >> 8) & 0xff;
+  obuf[1] = len & 0xff;
+  memcpy(obuf+2, buf, len);
+
+  PTLOCK(tlsdest_lock);
+  if ((ssl = td->tls_ssl) == NULL) {
+    PTUNLOCK(tlsdest_lock);
+    if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
+    tls_please_reopen_tcp(td, 0);
+    return -1;
+  }
+  if ((wrote = SSL_write(ssl, obuf, 2+len)) <= 0) {
+    int err = SSL_get_error(ssl, wrote);
+    // punt;
+    fprintf(stderr,"SSL_write error %d\n", err);
+    if (tls_debug)
+      ERR_print_errors_fp(stderr);
+    PTUNLOCK(tlsdest_lock);
+    // close/free etc
+    tls_please_reopen_tcp(td, 0);
+    return wrote;
+  }
+  else if (wrote != len+2)
+    fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
+  else if (tls_debug)
+    fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
+  PTUNLOCK(tlsdest_lock);
+
+  return wrote;
+}
+
+// read a record length (two bytes MSB first) and that many bytes
+int 
+tls_read_record(struct tls_dest *td, u_char *buf, int blen)
+{
+  int cnt, rlen, actual;
+  u_char reclen[2];
+
+  // don't go SSL_free in some other thread please
+  PTLOCK(tlsdest_lock);
+  SSL *ssl = td->tls_ssl;
+
+  if (ssl == NULL) {
+    PTUNLOCK(tlsdest_lock);
+    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
+    tls_please_reopen_tcp(td, 1);
+    return 0;
+  }
+
+  // read record length
+  cnt = SSL_read(ssl, reclen, 2);
+  PTUNLOCK(tlsdest_lock);
+
+  if (cnt < 0) {
+    if (tls_debug) perror("read record length");
+    tls_please_reopen_tcp(td, 1);
+    return -1;
+  }
+  if (cnt == 0) {
+    // EOF
+    if (tls_debug)
+      fprintf(stderr,"TLS read record: record len: 0 bytes read - please reopen\n");
+    tls_please_reopen_tcp(td, 1);
+    return 0;
+  } else if (cnt != 2) {
+    if (tls_debug)
+      fprintf(stderr,"TLS read record: record len not 2: %d\n", cnt);
+    return 0;
+  }
+  rlen = reclen[0] << 8 | reclen[1]; //ntohs(reclen[0] << 8 || reclen[1]);
+  if (rlen == 0) {
+    if (tls_debug)
+      fprintf(stderr,"TLS read record: MARK read (no data)\n");
+    return 0;
+  }
+  if (tls_debug)
+    fprintf(stderr,"TLS read record: record len %d\n", rlen);
+  if (rlen > blen) {
+    fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
+    tls_please_reopen_tcp(td, 1);
+    return -1;
+  }
+
+  PTLOCK(tlsdest_lock);
+  if ((ssl = td->tls_ssl) == NULL) {
+    PTUNLOCK(tlsdest_lock);
+    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
+    tls_please_reopen_tcp(td, 1);
+    return 0;
+  }
+  actual = SSL_read(ssl, buf, rlen);
+  PTUNLOCK(tlsdest_lock);
+
+  if (actual < 0) {
+    perror("read record");
+    tls_please_reopen_tcp(td, 1);
+    return -1;
+  }
+  if (actual < rlen) {
+    if (tls_debug)
+      fprintf(stderr,"TLS read record: read less than record: %d < %d\n", actual, rlen);
+    // read the remaining data
+    int p = actual;
+    while (rlen - p > 0) {
+      PTLOCK(tlsdest_lock);
+      if ((ssl = td->tls_ssl) == NULL) {
+	PTUNLOCK(tlsdest_lock);
+	if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
+	tls_please_reopen_tcp(td, 1);
+	return 0;
+      }
+      actual = SSL_read(ssl, &buf[p], rlen-p);
+      PTUNLOCK(tlsdest_lock);
+      if (actual < 0) {
+	perror("re-read record");
+	tls_please_reopen_tcp(td, 1);
+	return -1;
+      }
+      if (tls_debug)
+	fprintf(stderr,"TLS read record: read %d more bytes\n", actual);
+      if (actual == 0) {
+	tls_please_reopen_tcp(td, 1);
+	return -1;
+      }
+      p += actual;
+    }
+    actual = p;
+  }
+  if (tls_debug)
+    fprintf(stderr,"TLS read record: read %d bytes total\n", actual);
+
+  return actual;
+}
+
+// TLS server thread.
+// Bind a socket, listen, and loop accepting valid TLS connections.
+void * 
+tls_server(void *v)
+{
+  // listen to the specified server port
+  tls_tcp_ursock = tcp_bind_socket(SOCK_STREAM, tls_server_port);
+  if (listen(tls_tcp_ursock, 42) < 0) {
+    perror("listen (TLS server)");
+    exit(1);
+  }
+
+  // make sure other threads are waiting
+  sleep(1);
+
+  SSL *ssl;
+  SSL_CTX *ctx = tls_create_server_context();
+  tls_configure_context(ctx);
+
+  while (1) {
+    struct sockaddr caddr;
+    u_int clen = sizeof(struct sockaddr);
+    int tsock;
+
+    if ((tsock = tcp_server_accept(tls_tcp_ursock, &caddr, &clen)) < 0) {
+      perror("accept (TLS server)");
+      // @@@@ what could go wrong here?
+      exit(1);
+    }
+    if ((ssl = SSL_new(ctx)) == NULL) {
+      fprintf(stderr,"SSL_new failed: ");
+      ERR_print_errors_fp(stderr);
+      close(tsock);
+      continue;
+    }
+    SSL_set_fd(ssl, tsock);
+    int v = 0;
+    if ((v = SSL_accept(ssl)) <= 0) {
+      // this already catches verification - client end gets "SSL alert number 48"?
+      int err = SSL_get_error(ssl, v);
+      if (err != SSL_ERROR_SSL) {
+	if (tls_debug) ERR_print_errors_fp(stderr);
+      }
+      close(tsock);
+      SSL_free(ssl);
+      continue;
+    }      
+
+    X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
+
+    if(ssl_client_cert) {
+	long verifyresult;
+
+	verifyresult = SSL_get_verify_result(ssl);
+	if (verifyresult != X509_V_OK) {
+	  X509_free(ssl_client_cert);				
+	  SSL_free(ssl);
+	  close(tsock);
+	  continue;
+	}
+	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
+	// create tlsdest, fill in stuff
+	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen);
+    } else {
+      // no cert
+      if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");
+      SSL_free(ssl);
+      close(tsock);
+      continue;
+    }
+  }
+}
+
+// TLS input thread.
+// Reads from open (accepted) TLS sockets, passes input on to where it should go.
+// Adds routing table entries if the source chaos address was new.
+void * tls_input(void *v)
+{
+  /* TLS -> others thread */
+  fd_set rfd;
+  int len, sval, maxfd, i, j, tindex;
+  u_char data[CH_PK_MAXLEN];
+  struct timeval timeout;
+  struct chaos_header *cha = (struct chaos_header *)&data;
+
+  // @@@@ random number - parameter, or remove?
+  sleep(2); // wait for things to settle, connection to open
+
+  while (1) {
+    FD_ZERO(&rfd);
+    PTLOCK(tlsdest_lock);
+    // collect all tls_sock:ets
+    maxfd = -1;
+    for (i = 0; i < *tlsdest_len; i++) {
+      if (tlsdest[i].tls_sock > 0) {
+	FD_SET(tlsdest[i].tls_sock, &rfd);
+	maxfd = (maxfd > tlsdest[i].tls_sock ? maxfd : tlsdest[i].tls_sock);
+      }
+    }
+    PTUNLOCK(tlsdest_lock);
+    maxfd++;			/* plus 1 */
+
+    if (maxfd == 0) {
+      // if (tls_debug) fprintf(stderr,"TLS input: nothing to see, sleep+retry\n");
+      sleep(TLS_INPUT_RETRY_TIMEOUT);
+      continue;
+    }
+
+    // if (tls_debug) fprintf(stderr,"TLS input: select maxfd %d\n", maxfd);
+
+    // Must have timeout, in order to find new connections to select on
+    timeout.tv_sec = TLS_INPUT_RETRY_TIMEOUT;
+    timeout.tv_usec = 0;
+    if ((sval = select(maxfd, &rfd, NULL, NULL, &timeout)) == EINTR) {
+      if (tls_debug) fprintf(stderr,"TLS input timeout, retrying\n");
+      continue;
+    } else if (sval < 0)
+      perror("select(tls)");
+    else if (sval > 0) {
+      for (j = 0; j < maxfd; j++) {
+	if (FD_ISSET(j, &rfd)) {
+	  tindex = -1;		/* don't know tlsdest index */
+	  // find tlsdest index
+	  PTLOCK(tlsdest_lock);
+	  for (i = 0; i < *tlsdest_len; i++) {
+	    if (tlsdest[i].tls_sock == j) {
+	      tindex = i;
+	      break;
+	    }
+	  }
+	  PTUNLOCK(tlsdest_lock);
+	  if (tls_debug) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
+	  if (tindex >= 0) {
+	    int serverp = tlsdest[tindex].tls_serverp;
+	    bzero(data,sizeof(data));  /* clear data */
+	    if ((len = tls_read_record(&tlsdest[tindex], data, sizeof(data))) < 0) {
+	      // error handled by tls_read_record
+	      if (tls_debug) perror("tls_read_record");
+	      continue; // to next fd
+	    } else if (len == 0) {
+	      // just a mark
+	      if (tls_debug) fprintf(stderr,"TLS input: read MARK\n");
+	      continue; // to next fd
+	    }
+	    // got data!
+	    ntohs_buf((u_short *)cha, (u_short *)cha, len);
+	    if (debug) ch_dumpkt((u_char *)&data, len);
+	    // check where it's coming from
+	    // pkt should include trailer
+	    u_short srcaddr;
+	    if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
+	      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
+	      srcaddr = ntohs(tr->ch_hw_srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from trailer: %#o\n", srcaddr);
+	    } else {
+	      srcaddr = ch_srcaddr(cha);
+	      if (verbose || tls_debug || debug)
+		fprintf(stderr,"%%%% TLS input: no trailer in pkt from %#o\n", srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from header: %#o\n", srcaddr);
+	    }
+	    // find the route to where from
+	    struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
+
+	    if (srcrt == NULL) {
+	      // add route
+	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
+	      if (!serverp)
+		fprintf(stderr,"TLS: No source route found for incoming data, but we are a client?? (source %#o, tlsdest %d)\n",
+			srcaddr, tindex);
+	      srcrt = add_tls_route(tindex, srcaddr);
+	    } else
+	      if (tls_debug) fprintf(stderr,"TLS: Route found to source %#o for tlsdest %d: dest %#o\n",
+				     srcaddr, tindex, srcrt->rt_dest);
+
+	    // forward to destination
+	    forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+			      srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
+			      srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
+			      (u_char *)&data, len, LINK_TLS);  /* forward to appropriate links */
+	  } else {
+	    // could happen under race conditions (closed while selecting?)
+	    if (tls_debug) fprintf(stderr,"%%%% tls_input: received pkt from unknown socket %d\n", j);
+	  }
+	}
+      }
+    }
+  }
+}
+#endif // CHAOS_TLS
 
 #if CHAOS_ETHERP
 void print_arp_table()
@@ -3068,7 +4243,7 @@ void handle_arp_input(u_char *data, int dlen)
       send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
     } else {
       if (debug) printf("ARP: Looking up %#o...\n",dchad);
-      struct chroute *found = find_in_routing_table(dchad, 0);
+      struct chroute *found = find_in_routing_table(dchad, 0, 0);
       if (found != NULL && found->rt_dest == dchad
 	  && found->rt_link != LINK_ETHER && found->rt_type == RT_DIRECT) {
 	/* Only proxy for non-ether links, and not for indirect (bridge) routes */
@@ -3199,7 +4374,7 @@ void * ether_input(void *v)
 	    fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
 		    tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
 	}
-#endif // COLLECT_STAS
+#endif // COLLECT_STATS
 #endif // 0
 	// check where it's coming from
 	u_short srcaddr;
@@ -3210,7 +4385,7 @@ void * ether_input(void *v)
 	} else
 #endif
 	  srcaddr = ch_srcaddr(cha);
-	struct chroute *srcrt = find_in_routing_table(srcaddr, 0);
+	struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
 	forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
 			  srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 			  srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
@@ -3404,6 +4579,51 @@ int parse_link_config()
 	      gai_strerror(res), res);
       return -1;
     }
+#if CHAOS_TLS
+  } else if (strcasecmp(tok, "tls") == 0) {
+    // similar to chudp case, should generalize code
+    int res;
+
+    rt->rt_link = LINK_TLS;
+    rt->rt_type = RT_FIXED;
+    rt->rt_cost = RTCOST_ASYNCH;
+    rt->rt_cost_updated = time(NULL);
+
+    tok = strtok(NULL," \t\r\n");
+    u_short port;
+    char *sep = index(tok, ':');
+    if (sep == NULL)
+      port = CHAOS_TLS_PORT;
+    else
+      port = atoi((char *)sep+1);
+    if (sep) *sep = '\0';
+    // @@@@ look at do_tls_ipv6 to select hints family?
+    if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
+      tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_family = he->ai_family;
+      tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_port = htons(port);
+      if (he->ai_family == AF_INET) {
+	do_tls = 1;
+	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	memcpy(&tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
+      } else if (he->ai_family == AF_INET6) {
+	do_tls = 1;
+	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	memcpy(&tlsdest[*tlsdest_len].tls_sa.tls_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
+      } else {
+	fprintf(stderr,"error parsing tls host %s: unknown address family %d\n",
+		tok, he->ai_family);
+	return -1;
+      }
+      memcpy(&tlsdest[*tlsdest_len].tls_name, tok, TLSDEST_NAME_LEN);
+      (*tlsdest_len)++;
+      if (sep) *sep = ':';
+    } else {
+      if (sep) *sep = ':';
+      fprintf(stderr,"bad tls arg %s: %s (%d)\n", tok,
+	      gai_strerror(res), res);
+      return -1;
+    }
+#endif
   }
   // host|subnet y type t cost c
   tok = strtok(NULL," \t\r\n");
@@ -3445,6 +4665,25 @@ int parse_link_config()
       return -1;
     }
   }
+#if CHAOS_TLS
+  if (rt->rt_link == LINK_TLS) {
+    tlsdest[*tlsdest_len - 1].tls_addr = addr;
+    if (subnetp) {
+      fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
+	      "Change\n"
+	      " link tls %s:%d subnet %o\n"
+	      "to\n"
+	      " link tls %s:%d host NN\n"
+	      " route subnet %o bridge NN\n"
+	      "where NN is the actual tls host\n",
+	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      addr,
+	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      addr);
+      return -1;
+    }
+  }
+#endif // CHAOS_TLS
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
@@ -3457,7 +4696,7 @@ int parse_link_config()
       if (nchaddr < NCHADDR)
 	mychaddr[nchaddr++] = sval;
       else
-	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
+	fprintf(stderr,"out of local chaos addresses, please increase NCHADDR from %d\n",
 		NCHADDR);
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
@@ -3522,6 +4761,9 @@ int parse_config_line(char *line)
 	mychaddr[--nchaddr] = 0;
 	fprintf(stderr,"chaddr: bad octal argument %s\n",tok);
 	return -1;
+      } else if (((mychaddr[nchaddr-1]>>8) == 0) || ((mychaddr[nchaddr-1]>>8) > 0xfe) || ((mychaddr[nchaddr-1]&0xff) == 0)) {
+	fprintf(stderr,"chaddr: bad address %#o (both net and host part must be non-zero)\n", mychaddr[nchaddr-1]);
+	return -1;
       } else if (verbose)
 	printf("Using default Chaos address %#o\n", mychaddr[nchaddr-1]);
     }
@@ -3561,6 +4803,47 @@ int parse_config_line(char *line)
 			(do_udp6 ? ", listening to IPv6" : ""));
     return 0;
   }
+#if CHAOS_TLS
+  // tls key keyfile cert certfile ca-chain ca-chain-cert-file [myaddr %o] [ server [ portnr ]]
+  else if (strcasecmp(tok, "tls") == 0) {
+    while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
+      if (strncmp(tok,"key",sizeof("key")) == 0) {
+	tok = strtok(NULL, " \t\r\n");
+	if (tok == NULL) { fprintf(stderr,"tls: no key file specified\n"); return -1; }
+	strncpy(tls_key_file, tok, PATH_MAX);
+      } else if (strncmp(tok,"cert",sizeof("cert")) == 0) {
+	tok = strtok(NULL, " \t\r\n");
+	if (tok == NULL) { fprintf(stderr,"tls: no cert file specified\n"); return -1; }
+	strncpy(tls_cert_file, tok, PATH_MAX);
+      } else if (strncmp(tok,"ca-chain",sizeof("ca-chain")) == 0) {
+	tok = strtok(NULL, " \t\r\n");
+	if (tok == NULL) { fprintf(stderr,"tls: no ca-chain file specified\n"); return -1; }
+	strncpy(tls_ca_file, tok, PATH_MAX);
+      } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
+	tok = strtok(NULL, " \t\r\n");
+	if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
+	tls_myaddr = atoi(tok);
+      }
+      else if (strncmp(tok,"server",sizeof("server")) == 0) {
+	tok = strtok(NULL, " \t\r\n");
+	if (tok != NULL)
+	  tls_server_port = atoi(tok);
+	do_tls_server = 1;
+      } else if (strncmp(tok,"ipv6",sizeof("ipv6")) == 0) {
+	do_tls_ipv6 = 1;
+      } else {
+	fprintf(stderr,"bad tls keyword %s\n", tok);
+	return -1;
+      }
+    }
+    if (verbose) {
+      printf("Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+      if (do_tls_server)
+	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6+IPv4" : "IPv4");
+    }
+    return 0;
+  }
+#endif // CHAOS_TLS
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
     strncpy(ifname,tok,sizeof(ifname));
@@ -3615,25 +4898,34 @@ print_stats(int sig)
   int i;
   if (sig != 0) {
     // fprintf(stderr,"Signal %d received\n", sig);
-    fprintf(stderr,"My Chaosnet host name %s, main address %#o\n",
+    printf("My Chaosnet host name %s, main address %#o\n",
 	    myname, mychaddr[0]);
     if (nchaddr > 1) {
-      fprintf(stderr," additional addresses ");
+      printf(" additional addresses ");
       for (i = 1; i < nchaddr && i < NCHADDR; i++)
-	fprintf(stderr,"%#o ", mychaddr[i]);
-      fprintf(stderr,"\n");
+	printf("%#o ", mychaddr[i]);
+      printf("\n");
     }
-    if (do_unix) fprintf(stderr," Unix socket enabled and %s\n",
-			 (unixsock > 0 ? "open" : "NOT open"));
-    if (do_udp || do_udp6)  fprintf(stderr," CHUDP enabled on port %d (%s)\n",
-			 udpport, chudp_dynamic ? "dynamic" : "static");
-    if (do_ether)  fprintf(stderr," Ethernet enabled on interface %s,"
-			   " address %02X:%02X:%02X:%02X:%02X:%02X\n",
-			   ifname, myea[0], myea[1], myea[2], myea[3], myea[4], myea[5]);
+    if (do_unix)
+      printf(" Unix socket enabled and %s\n", (unixsock > 0 ? "open" : "NOT open"));
+    if (do_udp || do_udp6)
+      printf(" CHUDP enabled on port %d (%s)\n", udpport, chudp_dynamic ? "dynamic" : "static");
+    if (do_ether)
+      printf(" Ethernet enabled on interface %s,"
+	     " address %02X:%02X:%02X:%02X:%02X:%02X\n",
+	     ifname, myea[0], myea[1], myea[2], myea[3], myea[4], myea[5]);
+    if (do_tls || do_tls_server) {
+      printf(" Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
+      if (do_tls_server)
+	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
+    }
   }
   print_arp_table();
   print_routing_table();
   print_chudp_config();
+#if CHAOS_TLS
+  print_tlsdest_config();
+#endif
   print_link_stats();
   print_host_stats();
 }
@@ -3641,7 +4933,7 @@ print_stats(int sig)
 void
 usage(char *pname)
 {
-  fprintf(stderr,"Usage: %s [-c configfile | -d | -v | -s ]\n Default configfile 'cbridge.conf'\n", pname);
+  fprintf(stderr,"Usage: %s [-c configfile | -d | -v | -s | -t ]\n Default configfile 'cbridge.conf'\n", pname);
   exit(1);
 }
 
@@ -3655,6 +4947,9 @@ main(int argc, char *argv[])
   // Init shared mem data structures
   init_rttbl();
   init_chudpdest();
+#if CHAOS_TLS
+  init_tlsdest();
+#endif
 #if CHAOS_ETHERP
   init_arp_table();
 #endif // CHAOS_ETHERP
@@ -3673,7 +4968,7 @@ main(int argc, char *argv[])
   }
 
   // parse args
-  while ((c = getopt(argc, argv, "c:vds")) != -1) {
+  while ((c = getopt(argc, argv, "c:vdst")) != -1) {
     switch (c) {
     case 'd':
       fprintf(stderr,"Debug on\n");
@@ -3691,6 +4986,12 @@ main(int argc, char *argv[])
       if (verbose) fprintf(stderr,"Config file %s\n", optarg);
       strncpy(cfile, optarg, sizeof(cfile));
       break;
+#if CHAOS_TLS
+    case 't':
+      fprintf(stderr,"TLS debug on\n");
+      tls_debug++;
+      break;
+#endif
     default:
       usage(argv[0]);
     }
@@ -3718,6 +5019,23 @@ main(int argc, char *argv[])
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
     exit(1);
   }
+
+#if CHAOS_TLS
+  // Just a little user-friendly config validation
+  if (do_tls || do_tls_server) {
+    char *files[] = {tls_ca_file, tls_key_file, tls_cert_file };
+    char err[PATH_MAX + sizeof("cannot access ")+3];
+    int i;
+    for (i = 0; i < 3; i++) {
+      if (access(files[i], R_OK) != 0) {
+	sprintf(err,"cannot access \"%s\"",files[i]);
+	perror(err);
+	printf(" Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+	exit(1);
+      }
+    }
+  }
+#endif
 
   // Open links that have been configured
   if (do_unix) {
@@ -3754,7 +5072,7 @@ main(int argc, char *argv[])
   boottime = time(NULL);
 
   // Now start the different threads
-  pthread_t threads[5];
+  pthread_t threads[256];	/* random medium constant */
   int ti = 0;
 
   // Block SIGINFO/SIGUSR1 in all threads, enable it in main thread below
@@ -3798,6 +5116,38 @@ main(int argc, char *argv[])
   }
 #endif // CHAOS_ETHERP
 
+#if CHAOS_TLS
+  if (do_tls_server || do_tls) {
+    if (verbose) fprintf(stderr,"Initializing openssl library\n");
+    init_openssl();
+  }
+
+  if (do_tls_server) {
+    if (verbose) fprintf(stderr,"Starting thread for TLS server\n");
+    if (pthread_create(&threads[ti++], NULL, &tls_server, NULL) < 0) {
+      perror("pthread_create(tls_server)");
+      exit(1);
+    }
+  }
+  if (do_tls || do_tls_server) {
+    if (verbose) fprintf(stderr,"Starting thread for TLS input\n");
+    if (pthread_create(&threads[ti++], NULL, &tls_input, NULL) < 0) {
+      perror("pthread_create(tls_input)");
+      exit(1);
+    }
+    int i;
+    for (i = 0; i < *tlsdest_len; i++) {
+      if (!tlsdest[i].tls_serverp) {
+	if (verbose) fprintf(stderr,"Starting thread for TLS client connector %d\n", i);
+	if (pthread_create(&threads[ti++], NULL, &tls_connector, &tlsdest[i]) < 0) {
+	  perror("pthread_create(tls_connector)");
+	  exit(1);
+	}
+      }
+    }    
+  }
+#endif
+
   if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
   if (pthread_create(&threads[ti++], NULL, &rut_sender, NULL) < 0) {
     perror("pthread_create(rut_sender)");
@@ -3812,7 +5162,7 @@ main(int argc, char *argv[])
   if (do_udp || do_udp6) {
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
     if (pthread_create(&threads[ti++], NULL, &reparse_chudp_names_thread, NULL) < 0) {
-      perror("pthread_create(route_cost_updater)");
+      perror("pthread_create(reparse_chudp_names_thread)");
       exit(1);
     }
   }
