@@ -23,8 +23,7 @@
 /* **** Chaos-over-Unix-Sockets functions **** */
 // Based on code by Brad Parker (brad@heeltoe.com), see http://www.unlambda.com/cadr/
 
-int fd;
-extern int unixsock;
+int unixsock;
 
 /*
  * connect to server using specificed socket type
@@ -32,7 +31,7 @@ extern int unixsock;
 int
 u_connect_to_server(void)
 {
-    int len;
+    int len, fd;
     struct sockaddr_un unix_addr;
     struct sockaddr_un unixs_addr;
 
@@ -270,4 +269,21 @@ forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chao
     if (debug) fprintf(stderr,"Forward: Sending on unix from %#o to %#o\n", schad, dchad);
     u_send_chaos(unixsock, data, dlen);
   }
+}
+
+void
+print_config_usockets()
+{
+  if (unixsock > 0)
+    printf(" Unix socket enabled and open\n");
+  else
+    printf(" Unix socket not open\n");
+}
+
+// module initialization
+void init_chaos_usockets()
+{
+  if ((unixsock = u_connect_to_server()) < 0)
+    //exit(1);
+    fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
 }

@@ -20,12 +20,21 @@ extern char ifname[128];
 
 /* **** Chaos-over-Ethernet functions **** */
 
+int chfd = 0, arpfd = 0;
+
+u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
 u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
+
+pthread_mutex_t charp_lock;
 
 #if !ETHER_BPF
 static int ifix;		/* ethernet interface index */
 #endif
 
+
+// Chaos ARP table
+struct charp_ent *charp_list;	/* shared mem alloc */
+int *charp_len;			/* cf CHARP_MAX */
 
 // Find the ethernet address of the configured interface (ifname)
 void get_my_ea() {
@@ -703,6 +712,25 @@ void init_arp_table()
   *charp_len = 0;
 }
 
+void print_arp_table()
+{
+  int i;
+  if (*charp_len > 0) {
+    printf("Chaos ARP table:\n"
+	   "Chaos\tEther\t\t\tAge (s)\n");
+    for (i = 0; i < *charp_len; i++)
+      printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu\n",
+	     charp_list[i].charp_chaddr,
+	     charp_list[i].charp_eaddr[0],
+	     charp_list[i].charp_eaddr[1],
+	     charp_list[i].charp_eaddr[2],
+	     charp_list[i].charp_eaddr[3],
+	     charp_list[i].charp_eaddr[4],
+	     charp_list[i].charp_eaddr[5],
+	     (time(NULL) - charp_list[i].charp_age));
+  }
+}
+
 u_char *find_arp_entry(u_short daddr)
 {
   int i;
@@ -1010,4 +1038,24 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
       // Chaos sender will retransmit, surely.
     }
   }
+}
+
+void
+print_config_ether() 
+{
+  int i;
+  printf("Using Ethernet interface %s, ether address ", ifname);
+  for (i = 0; i < ETHER_ADDR_LEN-1; i++)
+    printf("%02X:",myea[i]);
+  printf("%02X\n",myea[i]);
+}
+
+// module initialization
+void init_chaos_ether() 
+{
+  get_my_ea();
+  if ((arpfd = get_packet_socket(ETHERTYPE_ARP, ifname)) < 0)
+    exit(1);
+  if ((chfd = get_packet_socket(ETHERTYPE_CHAOS, ifname)) < 0)
+    exit(1);
 }

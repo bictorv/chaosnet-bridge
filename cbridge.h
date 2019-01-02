@@ -45,6 +45,7 @@
 #include <sys/uio.h>
 #include <fcntl.h>
 
+#include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -68,7 +69,7 @@
 #endif
 #include <pthread.h>
 
-
+// Chaos packet defs, opcodes, etc
 #include "cbridge-chaos.h"
 
 #define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"FAILED TO LOCK\n")
@@ -118,14 +119,8 @@ struct chroute {
   time_t rt_cost_updated;	/* cost last updated */
 };
 
-// keep track of when we last saw a host, and from where (and how many pkts we've seen from it)
-struct hostat {
-  u_int32_t hst_in;		/* pkts received */
-  u_int16_t hst_last_hop;	/* last hop router */
-  time_t hst_last_seen;		/* time last seen */
-};
-
-// Info on this host's direct connection to a subnet. See STATUS protocol in AIM 628.
+// STATUS protocol, MIT AIM 628.
+// Info on this host's direct connection to a subnet. 
 struct linkstat {
   u_int32_t pkt_in;		/* pkts received */
   u_int32_t pkt_out;		/* pkts transmitted */
@@ -135,6 +130,14 @@ struct linkstat {
   u_int32_t pkt_crcerr_post;	/* no CRC err on rcpt, but CRC errors after reading from buffer */
   u_int32_t pkt_badlen;		/* rejected due to incorrect length */
   u_int32_t pkt_rejected;	/* rejected for other reasons (e.g. forwarded too many times) */
+};
+
+// LASTCN protocol, invented by BV
+// keep track of when we last saw a host, and from where (and how many pkts we've seen from it)
+struct hostat {
+  u_int32_t hst_in;		/* pkts received */
+  u_int16_t hst_last_hop;	/* last hop router */
+  time_t hst_last_seen;		/* time last seen */
 };
 
 // ================ CHUDP ================
@@ -206,10 +209,13 @@ struct charp_ent {
   time_t charp_age;
 };
 
-// ================ data decls ================
+// ================ data declarations ================
+
+// @@@@ replace by better logging system, levels, facilities...
 extern int verbose, debug, stats;
 
-extern pthread_mutex_t charp_lock, rttbl_lock, chudp_lock, linktab_lock;
+// locks for datastructures
+extern pthread_mutex_t rttbl_lock, linktab_lock;
 
 // Route table, indexed by subnet
 extern struct chroute *rttbl_net;
@@ -217,31 +223,30 @@ extern struct chroute *rttbl_net;
 extern struct chroute *rttbl_host;
 extern int *rttbl_host_len;
 
+// CHUDP link configurations
 extern struct chudest *chudpdest;	/* shared mem allocation */
-extern int *chudpdest_len;
+extern int *chudpdest_len;	/* cf CHUDPDEST_MAX */
 
-// array indexed first by net, then by host. Second level dynamically allocated.
+// for LASTCN: array indexed first by net, then by host. Second level dynamically allocated.
 extern struct hostat **hosttab;
 extern pthread_mutex_t hosttab_lock;
 
-// simple array indexed by subnet, updated for send/receives on routes with direct link
+// for STATUS: simple array indexed by subnet, updated for send/receives on routes with direct link
 extern struct linkstat *linktab;
 
-extern struct charp_ent *charp_list;	/* shared mem alloc */
-extern int *charp_len;
-
 #if CHAOS_TLS
+// TLS link configuration
 extern pthread_mutex_t tlsdest_lock;	/* for locking tlsdest */
 extern struct tls_dest *tlsdest;	/* table of tls_dest entries */
-extern int *tlsdest_len;
+extern int *tlsdest_len;	/* cf TLSDEST_MAX */
 #endif
 
+// array of my chaosnet addresses, first element is the default
+// @@@@ replace by function
 extern u_short mychaddr[];
 
-extern u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
-
+// @@@@ move to respective module
 extern int udpsock, udp6sock;
-extern int chfd, arpfd;
 
 // ================ function declarations ================
 
@@ -259,6 +264,7 @@ unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
 void ch_11_puts(unsigned char *out, unsigned char *in);
 char *ch_opcode_name(int op);
 
+// @@@@ move to respective module
 void print_routing_table(void);
 void print_tlsdest_config(void);
 void print_chudp_config(void);

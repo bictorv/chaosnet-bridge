@@ -73,7 +73,6 @@
 #include <ctype.h>
 
 #include <sys/stat.h>
-#include <netdb.h>
 #include <sys/time.h>
 #include <sys/poll.h>
 #include <sys/uio.h>
@@ -104,8 +103,9 @@ pthread_mutex_t hosttab_lock;
 // simple array indexed by subnet, updated for send/receives on routes with direct link
 struct linkstat *linktab;
 
-pthread_mutex_t charp_lock, rttbl_lock, chudp_lock, linktab_lock;
+pthread_mutex_t rttbl_lock, linktab_lock;
 
+// @@@@ move configuration of this, and then move declaration
 struct chudest *chudpdest;	/* shared mem allocation */
 int *chudpdest_len;
 
@@ -128,24 +128,19 @@ int *tlsdest_len;
 #endif // CHAOS_TLS
 
 
-struct charp_ent *charp_list;	/* shared mem alloc */
-int *charp_len;
-
-u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
-
-int unixsock = 0, udpsock = 0, udp6sock = 0, chfd = 0, arpfd = 0;
+int udpsock = 0, udp6sock = 0;
 
 time_t boottime;
 
-// Config stuff
+// Config stuff @@@@ some to be moved to respective module
 char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STATUS prot */
 #define NCHADDR 8
 static int nchaddr = 0;
 u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
-int udpport = 42042;		// default UDP port
+int chudp_port = 42042;		// default UDP port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
-int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
+int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
 
 // for each implementation
@@ -154,26 +149,31 @@ void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct
 void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 
+// shared memory datastructures and locks
+void init_chudpdest(void);
+void init_arp_table(void);
+
+
 // contacts
 void handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
 int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
 
-// ==== clean up 
+// chudp
+void init_chaos_udp(int v6, int v4);
+void reparse_chudp_names(void);
+
 // chether
-void get_my_ea(void);
-void init_arp_table(void);
+void init_chaos_ether(void);
+void print_config_ether(void);
+
+// chtls
+void init_chaos_tls();
 
 // usockets
-int u_connect_to_server(void);
-// chudp
-int chudp_connect(u_short port, sa_family_t family);
-// chether
-int get_packet_socket(u_short ethtype, char *ifname);
-// chtls
-void init_openssl();
-// ==== end clean up
+int init_chaos_usockets(void);
+void print_config_usockets(void);
 
-// threads
+// threads @@@@ document args?
 void *unix_input(void *v);
 void *chudp_input(void *v);
 void *ether_input(void *v);
@@ -292,18 +292,6 @@ void init_tlsdest()
 
 #endif
 
-void init_chudpdest()
-{
-  if (pthread_mutex_init(&chudp_lock, NULL) != 0)
-    perror("pthread_mutex_init(chudp_lock)");
-  if ((chudpdest = malloc(sizeof(struct chudest)*CHUDPDEST_MAX)) == NULL)
-    perror("malloc(chudpdest)");
-  if ((chudpdest_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(chudpdest_len)");
-  memset((char *)chudpdest, 0, sizeof(struct chudest)*CHUDPDEST_MAX);
-  *chudpdest_len = 0;
-}
-
 char *rt_linkname(u_char linktype)
 {
   switch (linktype) {
@@ -354,119 +342,6 @@ print_routing_table() {
 	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
-#if CHAOS_TLS
-void print_tlsdest_config()
-{
-  int i;
-  char ip[INET6_ADDRSTRLEN];
-  PTLOCK(tlsdest_lock);
-  printf("TLS destination config: %d links\n", *tlsdest_len);
-  for (i = 0; i < *tlsdest_len; i++) {
-    if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
-      if (inet_ntop(tlsdest[i].tls_sa.tls_saddr.sa_family,
-		    (tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
-		     ? (void *)&tlsdest[i].tls_sa.tls_sin.sin_addr
-		     : (void *)&tlsdest[i].tls_sa.tls_sin6.sin6_addr), ip, sizeof(ip))
-	  == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-    } else
-      strcpy(ip, "[none]");
-    printf(" dest %#o, name %s, ",
-	   tlsdest[i].tls_addr, 
-	   tlsdest[i].tls_name);
-    if (tlsdest[i].tls_serverp) printf("(server) ");
-    printf("host %s port %d\n",
-	   ip, ntohs(tlsdest[i].tls_sa.tls_sin.sin_port));
-  }
-  PTUNLOCK(tlsdest_lock);
-}
-
-#endif // CHAOS_TLS
-
-#if CHAOS_ETHERP
-void print_arp_table()
-{
-  int i;
-  if (*charp_len > 0) {
-    printf("Chaos ARP table:\n"
-	   "Chaos\tEther\t\t\tAge (s)\n");
-    for (i = 0; i < *charp_len; i++)
-      printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu\n",
-	     charp_list[i].charp_chaddr,
-	     charp_list[i].charp_eaddr[0],
-	     charp_list[i].charp_eaddr[1],
-	     charp_list[i].charp_eaddr[2],
-	     charp_list[i].charp_eaddr[3],
-	     charp_list[i].charp_eaddr[4],
-	     charp_list[i].charp_eaddr[5],
-	     (time(NULL) - charp_list[i].charp_age));
-  }
-}
-#endif // CHAOS_ETHERP
-
-void print_chudp_config()
-{
-  int i;
-  char ip[INET6_ADDRSTRLEN];
-  printf("CHUDP config: %d routes\n", *chudpdest_len);
-  for (i = 0; i < *chudpdest_len; i++) {
-    if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
-		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
-		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
-		   : (void *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr), ip, sizeof(ip))
-	== NULL)
-      strerror_r(errno, ip, sizeof(ip));
-    //    char *ip = inet_ntoa(chudpdest[i].chu_sa.chu_sin.sin_addr);
-    printf(" dest %#o, host %s (%s) port %d\n",
-	   chudpdest[i].chu_addr, ip,
-	   chudpdest[i].chu_name,
-	   ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
-  }
-}
-
-void reparse_chudp_names()
-{
-  int i, res;
-  struct in_addr in;
-  struct in6_addr in6;
-  struct addrinfo *he;
-  struct addrinfo hi;
-
-  memset(&hi, 0, sizeof(hi));
-  hi.ai_family = PF_UNSPEC;
-  hi.ai_flags = AI_ADDRCONFIG;
-
-  // @@@@ also reparse TLS hosts?
-  PTLOCK(chudp_lock);
-  for (i = 0; i < *chudpdest_len; i++) {
-    if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
-	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
-	&& (inet_pton(AF_INET6, chudpdest[i].chu_name, &in6) == 0))  /* and not an explicit ipv6 addr */
-      {
-	// if (verbose) fprintf(stderr,"Re-parsing chudp host name %s\n", chudpdest[i].chu_name);
-	
-	if ((res = getaddrinfo(chudpdest[i].chu_name, NULL, &hi, &he)) == 0) {
-	  if (he->ai_family == AF_INET) {
-	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	    memcpy(&chudpdest[i].chu_sa.chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
-	  } else if (he->ai_family == AF_INET6) {
-	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-	    memcpy(&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
-	  } else
-	    fprintf(stderr,"Error re-parsing chudp host name %s: unsupported address family %d\n",
-		    chudpdest[i].chu_name, he->ai_family);
-	  // if (verbose) fprintf(stderr," success: %s\n", inet_ntoa(s->sin_addr));
-	  freeaddrinfo(he);
-	} else if (stats || verbose) {
-	  fprintf(stderr,"Error re-parsing chudp host name %s: %s (%d)\n",
-		  chudpdest[i].chu_name,
-		  gai_strerror(res), res);
-	}
-      }
-  }
-  // if (verbose) print_chudp_config();
-  PTUNLOCK(chudp_lock);
-}
 
 void *
 reparse_chudp_names_thread(void *v)
@@ -1386,7 +1261,7 @@ int parse_config_line(char *line)
   }
   else if (strcasecmp(tok, "chudp") == 0) {
     tok = strtok(NULL, " \t\r\n");
-    udpport = atoi(tok);
+    chudp_port = atoi(tok);
     do_udp = 1;
     // check for "dynamic" arg, for dynamic updates from new sources
     ;
@@ -1402,7 +1277,7 @@ int parse_config_line(char *line)
 	return -1;
       }
     }
-    if (verbose) printf("Using CHUDP port %d (%s)%s\n",udpport, chudp_dynamic ? "dynamic" : "static",
+    if (verbose) printf("Using CHUDP port %d (%s)%s\n",chudp_port, chudp_dynamic ? "dynamic" : "static",
 			(do_udp6 ? ", listening to IPv6" : ""));
     return 0;
   }
@@ -1450,14 +1325,9 @@ int parse_config_line(char *line)
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
     strncpy(ifname,tok,sizeof(ifname));
-    get_my_ea();
     do_ether = 1;
     if (verbose) {
-      int i;
-      printf("Using Ethernet interface %s, ether address ", ifname);
-      for (i = 0; i < ETHER_ADDR_LEN-1; i++)
-	printf("%02X:",myea[i]);
-      printf("%02X\n",myea[i]);
+      print_config_ether();
     }
     return 0;
   }
@@ -1510,13 +1380,11 @@ print_stats(int sig)
       printf("\n");
     }
     if (do_unix)
-      printf(" Unix socket enabled and %s\n", (unixsock > 0 ? "open" : "NOT open"));
+      print_config_usockets();
     if (do_udp || do_udp6)
-      printf(" CHUDP enabled on port %d (%s)\n", udpport, chudp_dynamic ? "dynamic" : "static");
+      printf(" CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
     if (do_ether)
-      printf(" Ethernet enabled on interface %s,"
-	     " address %02X:%02X:%02X:%02X:%02X:%02X\n",
-	     ifname, myea[0], myea[1], myea[2], myea[3], myea[4], myea[5]);
+      print_config_ether();
     if (do_tls || do_tls_server) {
       printf(" Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
       if (do_tls_server)
@@ -1553,9 +1421,6 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   init_tlsdest();
 #endif
-#if CHAOS_ETHERP
-  init_arp_table();
-#endif // CHAOS_ETHERP
   init_linktab();
   init_hosttab();
 
@@ -1641,24 +1506,14 @@ main(int argc, char *argv[])
 
   // Open links that have been configured
   if (do_unix) {
-    if ((unixsock = u_connect_to_server()) < 0)
-      //exit(1);
-      fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+    init_chaos_usockets();
   }
-  if (do_udp6) {
-    if ((udp6sock = chudp_connect(udpport, AF_INET6)) < 0)
-      exit(1);
-  }
-  if (do_udp) {
-    if ((udpsock = chudp_connect(udpport, AF_INET)) < 0)
-      exit(1);
+  if (do_udp6 || do_udp) {
+    init_chaos_udp(do_udp, do_udp6);
   }
   if (do_ether) {
 #if CHAOS_ETHERP
-    if ((arpfd = get_packet_socket(ETHERTYPE_ARP, ifname)) < 0)
-      exit(1);
-    if ((chfd = get_packet_socket(ETHERTYPE_CHAOS, ifname)) < 0)
-      exit(1);
+    init_chaos_ether();
 #else
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
@@ -1687,7 +1542,7 @@ main(int argc, char *argv[])
   if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
     perror("pthread_sigmask(SIG_BLOCK)");
 
-  if (do_unix || unixsock > 0) {
+  if (do_unix) {
     if (verbose) fprintf(stderr, "Starting thread for UNIX socket\n");
     if (pthread_create(&threads[ti++], NULL, &unix_input, NULL) < 0) {
       perror("pthread_create(unix_input)");
@@ -1709,7 +1564,7 @@ main(int argc, char *argv[])
     }
   }
 #if CHAOS_ETHERP
-  if ((chfd > 0) || (arpfd > 0)) {
+  if (do_ether) {
     if (verbose) fprintf(stderr,"Starting thread for Ethernet\n");
     if (pthread_create(&threads[ti++], NULL, &ether_input, NULL) < 0) {
       perror("pthread_create(ether_input)");
@@ -1721,7 +1576,7 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   if (do_tls_server || do_tls) {
     if (verbose) fprintf(stderr,"Initializing openssl library\n");
-    init_openssl();
+    init_chaos_tls();
   }
 
   if (do_tls_server) {

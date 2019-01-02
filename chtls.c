@@ -204,6 +204,32 @@ void tls_configure_context(SSL_CTX *ctx)
 
 // Routes, tlsdest etc
 
+void print_tlsdest_config()
+{
+  int i;
+  char ip[INET6_ADDRSTRLEN];
+  PTLOCK(tlsdest_lock);
+  printf("TLS destination config: %d links\n", *tlsdest_len);
+  for (i = 0; i < *tlsdest_len; i++) {
+    if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
+      if (inet_ntop(tlsdest[i].tls_sa.tls_saddr.sa_family,
+		    (tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
+		     ? (void *)&tlsdest[i].tls_sa.tls_sin.sin_addr
+		     : (void *)&tlsdest[i].tls_sa.tls_sin6.sin6_addr), ip, sizeof(ip))
+	  == NULL)
+	strerror_r(errno, ip, sizeof(ip));
+    } else
+      strcpy(ip, "[none]");
+    printf(" dest %#o, name %s, ",
+	   tlsdest[i].tls_addr, 
+	   tlsdest[i].tls_name);
+    if (tlsdest[i].tls_serverp) printf("(server) ");
+    printf("host %s port %d\n",
+	   ip, ntohs(tlsdest[i].tls_sa.tls_sin.sin_port));
+  }
+  PTUNLOCK(tlsdest_lock);
+}
+
 // Should only be called by server (clients have their routes set up by config)
 struct chroute *
 add_tls_route(int tindex, u_short srcaddr)
@@ -1075,4 +1101,10 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
   if (td == NULL && (verbose || debug))
     fprintf(stderr, "Can't find TLS link to %#o via %#o/%#o\n",
 	    dchad, rt->rt_dest, rt->rt_braddr);
+}
+
+// module initialization
+void init_chaos_tls()
+{
+  init_openssl();
 }

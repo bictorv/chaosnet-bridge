@@ -18,9 +18,87 @@
 #include "chudp.h"
 #include "cbridge.h"
 
-extern int chudp_dynamic;
+extern int chudp_dynamic, chudp_port;
+
+pthread_mutex_t chudp_lock;
 
 /* **** CHUDP protocol functions **** */
+
+void init_chudpdest()
+{
+  if (pthread_mutex_init(&chudp_lock, NULL) != 0)
+    perror("pthread_mutex_init(chudp_lock)");
+  if ((chudpdest = malloc(sizeof(struct chudest)*CHUDPDEST_MAX)) == NULL)
+    perror("malloc(chudpdest)");
+  if ((chudpdest_len = malloc(sizeof(int))) == NULL)
+    perror("malloc(chudpdest_len)");
+  memset((char *)chudpdest, 0, sizeof(struct chudest)*CHUDPDEST_MAX);
+  *chudpdest_len = 0;
+}
+
+void print_chudp_config()
+{
+  int i;
+  char ip[INET6_ADDRSTRLEN];
+  printf("CHUDP config: %d routes\n", *chudpdest_len);
+  for (i = 0; i < *chudpdest_len; i++) {
+    if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
+		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
+		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
+		   : (void *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr), ip, sizeof(ip))
+	== NULL)
+      strerror_r(errno, ip, sizeof(ip));
+    //    char *ip = inet_ntoa(chudpdest[i].chu_sa.chu_sin.sin_addr);
+    printf(" dest %#o, host %s (%s) port %d\n",
+	   chudpdest[i].chu_addr, ip,
+	   chudpdest[i].chu_name,
+	   ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
+  }
+}
+
+void reparse_chudp_names()
+{
+  int i, res;
+  struct in_addr in;
+  struct in6_addr in6;
+  struct addrinfo *he;
+  struct addrinfo hi;
+
+  memset(&hi, 0, sizeof(hi));
+  hi.ai_family = PF_UNSPEC;
+  hi.ai_flags = AI_ADDRCONFIG;
+
+  // @@@@ also reparse TLS hosts?
+  PTLOCK(chudp_lock);
+  for (i = 0; i < *chudpdest_len; i++) {
+    if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
+	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
+	&& (inet_pton(AF_INET6, chudpdest[i].chu_name, &in6) == 0))  /* and not an explicit ipv6 addr */
+      {
+	// if (verbose) fprintf(stderr,"Re-parsing chudp host name %s\n", chudpdest[i].chu_name);
+	
+	if ((res = getaddrinfo(chudpdest[i].chu_name, NULL, &hi, &he)) == 0) {
+	  if (he->ai_family == AF_INET) {
+	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	    memcpy(&chudpdest[i].chu_sa.chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
+	  } else if (he->ai_family == AF_INET6) {
+	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	    memcpy(&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
+	  } else
+	    fprintf(stderr,"Error re-parsing chudp host name %s: unsupported address family %d\n",
+		    chudpdest[i].chu_name, he->ai_family);
+	  // if (verbose) fprintf(stderr," success: %s\n", inet_ntoa(s->sin_addr));
+	  freeaddrinfo(he);
+	} else if (stats || verbose) {
+	  fprintf(stderr,"Error re-parsing chudp host name %s: %s (%d)\n",
+		  chudpdest[i].chu_name,
+		  gai_strerror(res), res);
+	}
+      }
+  }
+  // if (verbose) print_chudp_config();
+  PTUNLOCK(chudp_lock);
+}
 
 void
 chudp_dumppkt(unsigned char *ucp, int cnt)
@@ -372,4 +450,17 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   if (!found && (verbose || debug))
     fprintf(stderr, "Can't find CHUDP link to %#o via %#o/%#o\n",
 	    dchad, rt->rt_dest, rt->rt_braddr);
+}
+
+// initialize module
+void init_chaos_udp(int ipv4, int ipv6)
+{
+  if (ipv6) {
+    if ((udp6sock = chudp_connect(chudp_port, AF_INET6)) < 0)
+      exit(1);
+  }
+  if (ipv4) {
+    if ((udpsock = chudp_connect(chudp_port, AF_INET)) < 0)
+      exit(1);
+  }
 }
