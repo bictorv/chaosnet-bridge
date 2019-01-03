@@ -1466,21 +1466,6 @@ main(int argc, char *argv[])
 
   parse_config(cfile);
 
-#if 0
-  // Print config
-  if (verbose) {
-    printf("Using Chaos host name %s\n", myname);
-
-    print_routing_table();
-    if (*chudpdest_len > 0)
-      print_chudp_config();
-
-#if CHAOS_ETHERP
-    print_arp_table();
-#endif // CHAOS_ETHERP
-  }
-#endif // 0
-
   // Check config, validate settings
   if (mychaddr[0] == 0) {
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
@@ -1497,7 +1482,7 @@ main(int argc, char *argv[])
       if (access(files[i], R_OK) != 0) {
 	sprintf(err,"cannot access \"%s\"",files[i]);
 	perror(err);
-	printf(" Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+	printf(" configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
 	exit(1);
       }
     }
