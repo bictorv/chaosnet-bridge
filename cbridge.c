@@ -1421,6 +1421,9 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   init_tlsdest();
 #endif
+#if CHAOS_ETHERP
+  init_arp_table();
+#endif
   init_linktab();
   init_hosttab();
 
