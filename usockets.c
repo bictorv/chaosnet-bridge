@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017, 2018 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2019 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
