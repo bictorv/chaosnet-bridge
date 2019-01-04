@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017, 2018 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2019 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +36,13 @@
 
 // TODO
 
+// DNS contact handler (simple RFC-ANS protocol),
+// forwarding requests using resolver library, in a separate thread
+
+// logging:
+// - lock to avoid mixed output from different threads
+// - improve granularity, e.g. to only log "major" events
+
 // rewrite using pcap (replace BPF) - then implement multiple interfaces?
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
@@ -59,199 +66,50 @@
 // - or separate header from data; swap header like now, but keep data intact
 // notify if more routes are known than fit in a RUT pkt (but it's 122, come on...)
 
-#ifndef CHAOS_ETHERP
-// enable the Chaos-over-Ether code
-#define CHAOS_ETHERP 1
-#endif
-
-#ifndef CHAOS_TLS
-// enable the Chaos-over-TLS code
-#define CHAOS_TLS 1
-#endif
-
-#ifndef ETHER_BPF
-// use BPF rather than sockaddr_ll, e.g. for MacOS
-#if __APPLE__
-#define ETHER_BPF 1
-#else
-#define ETHER_BPF 0
-#endif
-#endif
-
-#ifndef COLLECT_STATS
-// Collect statistics about packets in/out/CRC errors etc, and respond to STATUS protocol
-#define COLLECT_STATS 1
-#endif
-
-#ifndef PEEK_ARP
-// Peek at sender's MAC address to update ARP table, to avoid ARP traffic.
-// This is a quite inefficient way of finding addresses, I think.
-#define PEEK_ARP 0
-#endif
-#if PEEK_ARP
-# warn PEEK_ARP is inefficent and not well tested.
-#endif
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
-#include <fcntl.h>
 #include <ctype.h>
 
-#include <sys/select.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#if CHAOS_ETHERP
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/ethernet.h>
-#include <ifaddrs.h>
-#if ETHER_BPF
-#include <net/bpf.h>
-#include <net/if_dl.h>
-#else
-#include <netpacket/packet.h>
-#endif // ETHER_BPF
-#endif // CHAOS_ETHERP
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/stat.h>
-#include <sys/un.h>
-#include <netdb.h>
 #include <sys/time.h>
 #include <sys/poll.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 
-#include <pthread.h>
 
-#if CHAOS_TLS
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <openssl/asn1.h>
-#include <openssl/x509.h>
-#endif
 
-#include "cbridge-chaos.h"	/* chaos pkt format etc */
+#include "cbridge.h"
 #include "chudp.h"		/* chudp pkt format etc */
-#include "chaosd.h"		/* chaos-over-unix-sockets */
 
-int verbose, debug, stats;
-int fd;
-
-void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
-void htons_buf(u_short *ibuf, u_short *obuf, int len);
-
-void send_chaos_pkt(u_char *pkt, int len);
-
-void ch_dumpkt(u_char *ucp, int cnt);
+int verbose, debug, stats, tls_debug = 0;
 
 #if CHAOS_ETHERP
 void print_arp_table();
 #endif
 
-// Connection types, cf AIM 628 p14
-enum { RT_NOPATH=0,		/* @@@@ where is this from? */
-       RT_DIRECT,		/* Directly connected (cable etc) */
-       RT_FIXED,		/* Fixed (unvarying) bridge */
-       RT_BRIDGE,		/* Bridge (perhaps known via RUT packet) */
-};
-// Link implementation types
-enum { LINK_NOLINK=0,
-       LINK_ETHER,		/* Chaos-over-Ethernet */
-       LINK_UNIXSOCK,		/* Chaos-over-Unix sockets ("chaosd") */
-       LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
-#if CHAOS_TLS
-       LINK_TLS,		/* Chaos-over-TLS */
-#endif
-       LINK_INDIRECT,		/* look up the bridge address */
-};
-
-// Routing costs, cf AIM 628 p15
-#define RTCOST_DIRECT 10
-#define RTCOST_ETHER 11
-#define RTCOST_ASYNCH 20
-// AIM 628 says 'when the cost reaches a "high" value, it sticks there,
-// preventing problems with arithmetic overflow' without specifying that high value.
-// ITS uses 512 as max (cf SYSTEM;CHAOS, label CHA5C5),
-// CADR system 99 also uses 512 (cf LMIO;CHSNCP, function CHAOS:BACKGROUND)
-// LMI release 5 also uses 512 (cf SYS:NETWORK.CHAOS;CHSNCP, function CHAOS:BACKGROUND)
-// while Symbolics uses 1024 (SYS:NETWORK;CHAOS-DEFS, constant CHAOS:MAXIMUM-ROUTING-COST)
-// (The arithmetic overflow seems silly, having 16 bits to store it?)
-#define RTCOST_HIGH 512
-
-// Route configuration entry
-struct chroute {
-  u_short rt_dest;		/* destination addr (subnet<<8 or host) - redundant for subnets */
-  u_short rt_braddr;		/* bridge address */
-  u_short rt_myaddr;		/* my specific address (on that subnet), or use mychaddr */
-  u_char rt_type;		/* connection type */
-  u_char rt_link;		/* link implementation */
-  u_short rt_cost;		/* cost */
-  time_t rt_cost_updated;	/* cost last updated */
-};
 
 // Route table, indexed by subnet
 struct chroute *rttbl_net;
 // and for individual hosts, simple array, where rt_braddr is the dest
 struct chroute *rttbl_host;
 int *rttbl_host_len;
-#define RTTBL_HOST_MAX 64
 
-// keep track of when we last saw a host, and from where (and how many pkts we've seen from it)
-struct hostat {
-  u_int32_t hst_in;		/* pkts received */
-  u_int16_t hst_last_hop;	/* last hop router */
-  time_t hst_last_seen;		/* time last seen */
-};
 // array indexed first by net, then by host. Second level dynamically allocated.
 struct hostat **hosttab;
 pthread_mutex_t hosttab_lock;
 
-// Info on this host's direct connection to a subnet. See STATUS protocol in AIM 628.
-struct linkstat {
-  u_int32_t pkt_in;		/* pkts received */
-  u_int32_t pkt_out;		/* pkts transmitted */
-  u_int32_t pkt_aborted;	/* pkts aborted by collisions or busy receiver */
-  u_int32_t pkt_lost;		/* lost, couldn't be read from buffer */
-  u_int32_t pkt_crcerr;		/* CRC errors on rcpt */
-  u_int32_t pkt_crcerr_post;	/* no CRC err on rcpt, but CRC errors after reading from buffer */
-  u_int32_t pkt_badlen;		/* rejected due to incorrect length */
-  u_int32_t pkt_rejected;	/* rejected for other reasons (e.g. forwarded too many times) */
-};
 // simple array indexed by subnet, updated for send/receives on routes with direct link
 struct linkstat *linktab;
 
-pthread_mutex_t charp_lock, rttbl_lock, chudp_lock, linktab_lock;
-#define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"FAILED TO LOCK\n")
-#define PTUNLOCK(x) if (pthread_mutex_unlock(&x) != 0) fprintf(stderr,"FAILED TO UNLOCK\n")
+pthread_mutex_t rttbl_lock, linktab_lock;
 
-// CHUDP table
-#define CHUDPDEST_NAME_LEN 128
-struct chudest {
-  union {
-    struct sockaddr chu_saddr;	/* generic sockaddr */
-    struct sockaddr_in chu_sin;	/* IP addr */
-    struct sockaddr_in6 chu_sin6;  /* IPv6 addr */
-  } chu_sa;
-  u_short chu_addr;		/* chaos address (or subnet) */
-  char chu_name[CHUDPDEST_NAME_LEN]; /* name given in config, to reparse perhaps */
-};
+// @@@@ move configuration of this, and then move declaration
 struct chudest *chudpdest;	/* shared mem allocation */
 int *chudpdest_len;
-#define CHUDPDEST_MAX 64
 
 #if CHAOS_TLS
-// TLS stuff
-#define CHAOS_TLS_PORT 42042
-#define CBRIDGE_TCP_MAXLEN (CH_PK_MAXLEN+2+12)
-// timeout in select (and if no open connections)
-#define TLS_INPUT_RETRY_TIMEOUT 1
 
 char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
 char tls_key_file[PATH_MAX];	/* private key */
@@ -259,117 +117,69 @@ char tls_cert_file[PATH_MAX];	/* certificate */
 // @@@@ should allow for different addrs on different ports/links. Punt for now.
 u_short tls_myaddr = 0;		/* my chaos address on TLS links */
 int tls_server_port = 42042;
-int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
-int tls_debug = 0;
 int do_tls = 0, do_tls_server = 0;
 int do_tls_ipv6 = 0;
 
-// max length of a CN
-#define TLSDEST_NAME_LEN 128
-// here is a TLS destination
-struct tls_dest {
-  u_short tls_addr;		/* remote chaos address */
-  char tls_name[TLSDEST_NAME_LEN]; /* name given in (client) config or from CN (in servers) */
-  int tls_serverp; /* 1 if server end - don't bother with mutex/cond stuff */
-  union {			/* The IP of the other end */
-    struct sockaddr tls_saddr;	/* generic sockaddr */
-    struct sockaddr_in tls_sin;	/* IP addr */
-    struct sockaddr_in6 tls_sin6;  /* IPv6 addr */
-  } tls_sa;
-  pthread_mutex_t tcp_is_open_mutex;  /* is TCP open? */
-  pthread_cond_t tcp_is_open_cond;
-  pthread_mutex_t tcp_reconnect_mutex;  /* would you please reconnect me? */
-  pthread_cond_t tcp_reconnect_cond;
-  int tls_sock;			/* TCP socket */
-  SSL *tls_ssl;			/* SSL conn */
-};
 pthread_mutex_t tlsdest_lock;	/* for locking tlsdest */
 struct tls_dest *tlsdest;	/* table of tls_dest entries */
 int *tlsdest_len;
-#define TLSDEST_MAX 32
 
-int tls_write_record(struct tls_dest *td, u_char *buf, int len);
-void tls_inform_tcp_is_open(struct tls_dest *td);
-void tls_wait_for_reconnect_signal(struct tls_dest *td);
 #endif // CHAOS_TLS
 
-#if CHAOS_ETHERP
-// ARP stuff
-#ifndef ETHERTYPE_CHAOS
-# define ETHERTYPE_CHAOS 0x0804
-#endif
-#ifndef ARPHRD_CHAOS		/* this is the original Chaosnet hardware, not the ethernet protocol type */
-#define ARPHRD_CHAOS 5
-#endif
-// old names for new, new names for old?
-#ifndef ARPOP_RREQUEST
-#define ARPOP_RREQUEST ARPOP_REVREQUEST // 3	/* request protocol address given hardware */
-#endif
-#ifndef ARPOP_RREPLY
-#define ARPOP_RREPLY ARPOP_REVREPLY // 4	/* response giving protocol address */
-#endif
 
-
-static u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
-/* Chaos ARP list */
-#define CHARP_MAX 16
-#define CHARP_MAX_AGE (60*5)	// ARP cache limit
-struct charp_ent {
-  u_char charp_eaddr[ETHER_ADDR_LEN];
-  u_short charp_chaddr;
-  time_t charp_age;
-};
-
-struct charp_ent *charp_list;	/* shared mem alloc */
-int *charp_len;
-#endif // CHAOS_ETHERP
-
-static u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
-#if !ETHER_BPF
-static int ifix;		/* ethernet interface index */
-#endif
-
-int unixsock = 0, udpsock = 0, udp6sock = 0, chfd = 0, arpfd = 0;
+int udpsock = 0, udp6sock = 0;
 
 time_t boottime;
 
-// Config stuff
+// Config stuff @@@@ some to be moved to respective module
 char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STATUS prot */
 #define NCHADDR 8
 static int nchaddr = 0;
-static u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
-int udpport = 42042;		// default UDP port
+u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
+int chudp_port = 42042;		// default UDP port
 u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
-int do_unix = 0, do_udp = 0, do_udp6, do_ether = 0;
+int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
-// Whether to peek at non-RUT pkts to discover routes
-u_char peek_routing_info = 0;	// not implemented
 
-// RFC handler struct (the contacts this process handles)
-struct rfc_handler {
-  char *contact;
-  void (*handler)(u_char *, int);
-};
+// for each implementation
+void forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+void forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 
-// declare some handlers
-void status_responder(u_char *, int);
-void lastcn_responder(u_char *, int);
-void dump_routing_table_responder(u_char *, int);
-void uptime_responder(u_char *, int);
-void time_responder(u_char *, int);
+// shared memory datastructures and locks
+void init_chudpdest(void);
+void init_arp_table(void);
 
-// the contacts and their handler function
-struct rfc_handler mycontacts[] = {
-  { "STATUS", &status_responder },
-  { "LASTCN", &lastcn_responder },
-  { "DUMP-ROUTING-TABLE", &dump_routing_table_responder },
-  { "UPTIME", &uptime_responder },
-  { "TIME", &time_responder }
-};
-// KEEP THIS IN SYNC
-#define MAX_CONTACT 5
+
+// contacts
+void handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
+int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
+
+// chudp
+void init_chaos_udp(int v6, int v4);
+void reparse_chudp_names(void);
+
+// chether
+void init_chaos_ether(void);
+void print_config_ether(void);
+
+// chtls
+void init_chaos_tls();
+
+// usockets
+int init_chaos_usockets(void);
+void print_config_usockets(void);
+
+// threads @@@@ document args?
+void *unix_input(void *v);
+void *chudp_input(void *v);
+void *ether_input(void *v);
+void *tls_server(void *v);
+void *tls_input(void *v);
+void *tls_connector(void *arg);
 
 int is_mychaddr(u_short addr) 
 {
@@ -482,18 +292,6 @@ void init_tlsdest()
 
 #endif
 
-void init_chudpdest()
-{
-  if (pthread_mutex_init(&chudp_lock, NULL) != 0)
-    perror("pthread_mutex_init(chudp_lock)");
-  if ((chudpdest = malloc(sizeof(struct chudest)*CHUDPDEST_MAX)) == NULL)
-    perror("malloc(chudpdest)");
-  if ((chudpdest_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(chudpdest_len)");
-  memset((char *)chudpdest, 0, sizeof(struct chudest)*CHUDPDEST_MAX);
-  *chudpdest_len = 0;
-}
-
 char *rt_linkname(u_char linktype)
 {
   switch (linktype) {
@@ -544,144 +342,6 @@ print_routing_table() {
 	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
-#if CHAOS_TLS
-void print_tlsdest_config()
-{
-  int i;
-  char ip[INET6_ADDRSTRLEN];
-  PTLOCK(tlsdest_lock);
-  printf("TLS destination config: %d links\n", *tlsdest_len);
-  for (i = 0; i < *tlsdest_len; i++) {
-    if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
-      if (inet_ntop(tlsdest[i].tls_sa.tls_saddr.sa_family,
-		    (tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
-		     ? (void *)&tlsdest[i].tls_sa.tls_sin.sin_addr
-		     : (void *)&tlsdest[i].tls_sa.tls_sin6.sin6_addr), ip, sizeof(ip))
-	  == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-    } else
-      strcpy(ip, "[none]");
-    printf(" dest %#o, name %s, ",
-	   tlsdest[i].tls_addr, 
-	   tlsdest[i].tls_name);
-    if (tlsdest[i].tls_serverp) printf("(server) ");
-    printf("host %s port %d\n",
-	   ip, ntohs(tlsdest[i].tls_sa.tls_sin.sin_port));
-  }
-  PTUNLOCK(tlsdest_lock);
-}
-
-#endif // CHAOS_TLS
-
-void print_chudp_config()
-{
-  int i;
-  char ip[INET6_ADDRSTRLEN];
-  printf("CHUDP config: %d routes\n", *chudpdest_len);
-  for (i = 0; i < *chudpdest_len; i++) {
-    if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
-		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
-		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
-		   : (void *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr), ip, sizeof(ip))
-	== NULL)
-      strerror_r(errno, ip, sizeof(ip));
-    //    char *ip = inet_ntoa(chudpdest[i].chu_sa.chu_sin.sin_addr);
-    printf(" dest %#o, host %s (%s) port %d\n",
-	   chudpdest[i].chu_addr, ip,
-	   chudpdest[i].chu_name,
-	   ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
-  }
-}
-
-void add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
-{
-  if (*chudpdest_len < CHUDPDEST_MAX) {
-    if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
-    PTLOCK(chudp_lock);
-    /* clear any non-specified fields */
-    memset(&chudpdest[*chudpdest_len], 0, sizeof(struct chudest));
-    chudpdest[*chudpdest_len].chu_addr = srcaddr;
-    memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
-    (*chudpdest_len)++;
-    if (verbose) print_chudp_config();
-    PTUNLOCK(chudp_lock);
-
-    // see if there is a host route for this, otherwise add it
-    if (*rttbl_host_len < RTTBL_HOST_MAX) {
-      int i, found = 0;
-      for (i = 0; i < *rttbl_host_len; i++) {
-	if (rttbl_host[i].rt_dest == srcaddr) {
-	  found = 1;
-	  break;
-	}
-      }
-      if (!found) {
-	PTLOCK(rttbl_lock);
-	if (*rttbl_host_len < RTTBL_HOST_MAX) { // double check
-	  // Add a host route (as if "link chudp [host] host [srcaddr]" was given)	    
-	  rttbl_host[(*rttbl_host_len)].rt_dest = srcaddr;
-	  rttbl_host[(*rttbl_host_len)].rt_type = RT_FIXED;
-	  rttbl_host[(*rttbl_host_len)].rt_cost = RTCOST_ASYNCH;
-	  rttbl_host[(*rttbl_host_len)].rt_link = LINK_CHUDP;
-	  (*rttbl_host_len)++;
-	  if (verbose) print_routing_table();
-	}
-	PTUNLOCK(rttbl_lock);
-      }
-    } else {
-      if (stats || verbose) fprintf(stderr,"%%%% Host routing table full, not adding new route.\n");
-      // and the chudp dest is useless, really.
-      return;
-    }
-  } else {
-    if (stats || verbose) fprintf(stderr,"%%%% CHUDP table full, not adding new destination.\n");
-    return;
-  }
-}
-
-void reparse_chudp_names()
-{
-  int i, res;
-  struct in_addr in;
-  struct in6_addr in6;
-  struct addrinfo *he;
-  struct addrinfo hi;
-
-  memset(&hi, 0, sizeof(hi));
-  hi.ai_family = PF_UNSPEC;
-  hi.ai_flags = AI_ADDRCONFIG;
-
-  // @@@@ also reparse TLS hosts?
-  PTLOCK(chudp_lock);
-  for (i = 0; i < *chudpdest_len; i++) {
-    if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
-	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
-	&& (inet_pton(AF_INET6, chudpdest[i].chu_name, &in6) == 0))  /* and not an explicit ipv6 addr */
-      {
-	// if (verbose) fprintf(stderr,"Re-parsing chudp host name %s\n", chudpdest[i].chu_name);
-	
-	if ((res = getaddrinfo(chudpdest[i].chu_name, NULL, &hi, &he)) == 0) {
-	  if (he->ai_family == AF_INET) {
-	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	    memcpy(&chudpdest[i].chu_sa.chu_sin.sin_addr.s_addr, (u_char *)&s->sin_addr, 4);
-	  } else if (he->ai_family == AF_INET6) {
-	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-	    memcpy(&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
-	  } else
-	    fprintf(stderr,"Error re-parsing chudp host name %s: unsupported address family %d\n",
-		    chudpdest[i].chu_name, he->ai_family);
-	  // if (verbose) fprintf(stderr," success: %s\n", inet_ntoa(s->sin_addr));
-	  freeaddrinfo(he);
-	} else if (stats || verbose) {
-	  fprintf(stderr,"Error re-parsing chudp host name %s: %s (%d)\n",
-		  chudpdest[i].chu_name,
-		  gai_strerror(res), res);
-	}
-      }
-  }
-  // if (verbose) print_chudp_config();
-  PTUNLOCK(chudp_lock);
-}
 
 void *
 reparse_chudp_names_thread(void *v)
@@ -768,11 +428,6 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
     }
     if (verbose && rttbl_updated) print_routing_table();
   } 
-#if 0 // not finished
-  else if (peek_routing_info) {
-    /* Not a RUT pkt, note subnet presence?  */
-  }
-#endif
 }
 
 void 
@@ -801,96 +456,6 @@ update_route_costs()
   PTUNLOCK(rttbl_lock);
 }
 
-// Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.
-int
-make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
-{
-  struct chaos_header *cha = (struct chaos_header *)pkt;
-  u_char *data = &pkt[CHAOS_HEADERSIZE];
-  int i, cost, nroutes = 0;
-  int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
-  if (maxroutes > 122)
-    maxroutes = 122;
-
-  memset(pkt, 0, pklen);
-  set_ch_opcode(cha, CHOP_RUT);
-
-  PTLOCK(rttbl_lock);
-  for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
-    if ((rttbl_net[i].rt_type != RT_NOPATH) 
-	// don't send a subnet route to the subnet itself (but to individual hosts)
-	&& (! (((dest & 0xff) == 0) && (i == (dest>>8))))
-	// and not to the bridge itself
-	&& (rttbl_net[i].rt_braddr != dest)) {
-      data[nroutes*4+1] = i;
-      cost = rttbl_net[i].rt_cost;
-      data[nroutes*4+2] = (cost >> 8);
-      data[nroutes*4+3] = (cost & 0xff);
-      if (debug) fprintf(stderr," including net %#o cost %d\n", i, cost);
-      nroutes++;
-    } else if (debug && (rttbl_net[i].rt_type != RT_NOPATH)) {
-      if (i == (dest >> 8))
-	fprintf(stderr, " not including net %#o for dest %#o\n", i, dest);
-      else if (rttbl_net[i].rt_braddr == dest) 
-	fprintf(stderr, " not including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
-    }
-  }
-  PTUNLOCK(rttbl_lock);
-  set_ch_destaddr(cha, ((dest & 0xff) == 0) ? 0 : dest );  /* well... */
-  set_ch_nbytes(cha,nroutes*4);
-  if (ch_nbytes(cha) > 0)
-    return ch_nbytes(cha)+CHAOS_HEADERSIZE;
-  else
-    return 0;
-}
-
-// Implement DUMP-ROUTING-TABLE for bridge, 
-// so CHAOS:SHOW-ROUTING-PATH (LMI) and CHAOS:PRINT-ROUTING-TABLE (Symbolics) could work.
-// See SYS:NETWORK.CHAOS;CHSNCP LISP
-// ;;; Routing table format: for N subnets, N*4 bytes of data, holding N*2 words
-// ;;; For subnet n, pkt[2n] has the method; if this is less than 400 (octal), it's
-// ;;; an interface number; otherwise, it's a host which will forward packets to that
-// ;;; subnet.  pkt[2n+1] has the host's idea of the cost.
-// (Stupid format, can only handle subnets up to decimal #122 - RUT
-// handles 122 subnets regardless of their actual subnet number.)
-
-int
-make_dump_routing_table_pkt(u_char *pkt, int pklen)
-{
-  struct chaos_header *cha = (struct chaos_header *)pkt;
-  u_short *data = (u_short *)&pkt[CHAOS_HEADERSIZE];
-  int sub, cost, nroutes = 0;
-  int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
-  if (maxroutes > 122)
-    maxroutes = 122;
-
-  memset(data, 0, pklen-CHAOS_HEADERSIZE);
-
-  PTLOCK(rttbl_lock);
-  for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
-    if (rttbl_net[sub].rt_type != RT_NOPATH) {
-      // Method: if < 0400: interface number; otherwise next hop address
-      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (is_mychaddr(rttbl_net[sub].rt_braddr))) {
-	// interface nr - use link type
-	if (rttbl_net[sub].rt_link == LINK_INDIRECT)
-	  data[sub*2] = htons(LINK_CHUDP);  /* assume this */
-	else
-	  data[sub*2] = htons(rttbl_net[sub].rt_link);
-      } else {
-	data[sub*2] = htons(rttbl_net[sub].rt_braddr);
-      }
-      cost = rttbl_net[sub].rt_cost;
-      data[sub*2+1] = htons(cost);
-      if (debug) fprintf(stderr," Adding routing for subnet %#o (meth %#o, cost %d)\n",
-			 sub, data[sub*2], cost);
-      nroutes = sub;
-    }
-  }
-  PTUNLOCK(rttbl_lock);
-
-  if (debug) fprintf(stderr," Max net in pkt %#o, i.e. %d bytes data\n", nroutes, (nroutes+1)*4);
-  return (nroutes+1)*4;
-}
 
 struct chroute *
 find_in_routing_table(u_short dchad, int only_host, int also_nopath)
@@ -968,7 +533,7 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
   return NULL;
 }
 
-static unsigned int
+unsigned int
 ch_checksum(const unsigned char *addr, int count)
 {
   /* RFC1071 */
@@ -995,430 +560,6 @@ ch_checksum(const unsigned char *addr, int count)
   return (~sum) & 0xffff;
 }
 
-// **** Debug stuff
-static char *
-ch_opcode_name(int op)
-  {
-    if (op < 017 && op > 0)
-      return ch_opc[op];
-    else if (op == 0200)
-      return "DAT";
-    else if (op == 0300)
-      return "DWD";
-    else
-      return "bogus";
-  }
-
-void
-dumppkt_raw(unsigned char *ucp, int cnt)
-{
-    int i;
-
-    while (cnt > 0) {
-	for (i = 8; --i >= 0 && cnt > 0;) {
-	    if (--cnt >= 0)
-		fprintf(stderr, "  %02x", *ucp++);
-	    if (--cnt >= 0)
-		fprintf(stderr, "%02x", *ucp++);
-	}
-	fprintf(stderr, "\r\n");
-    }
-}
-char *
-ch_char(unsigned char x, char *buf) {
-  if (x < 32)
-    sprintf(buf,"^%c", x+64);
-  else if (x == 127)
-    sprintf(buf,"^?");
-  else if (x < 127)
-    sprintf(buf,"%2c",x);
-  else
-    sprintf(buf,"%2x",x);
-  return buf;
-}
-
-void
-ch_11_puts(unsigned char *out, unsigned char *in) 
-{
-  int i, x = ((strlen((char *)in)+1)/2)*2;
-  for (i = 0; i < x; i++) {
-    if (i % 2 == 1)
-      out[i-1] = in[i];
-    else
-      out[i+1] = in[i];
-  }
-}
-
-unsigned char *
-ch_11_gets(unsigned char *in, unsigned char *out, int maxlen)
-{
-  int i, l = ((strlen((char *)in)+1)/2)*2;
-  if (l > maxlen)
-    l = maxlen;
-  for (i = 0; i < l /* && ((in[i] & 0200) == 0) */; i++) { /* Where did I get 0200 bit from? */
-    if (i % 2 == 1)
-      out[i] = in[i-1];
-    else
-      out[i] = in[i+1];
-  }
-  out[i] = '\0';
-  return out;
-}
-
-void print_its_string(unsigned char *s)
-{
-  unsigned char c;
-  while (*s) {
-    c = *s++;
-    switch(c) {
-    case 0211:
-      c = '\t'; break;
-    case 0212:
-      c = '\n'; break;
-    case 0214:
-      c = '\f'; break;
-    case 0215:
-      putchar('\r');
-      c = '\n'; break;
-    }
-    putchar(c);
-  }
-}  
-
-void
-ch_dumpkt(unsigned char *ucp, int cnt)
-{
-  int i, row, len;
-  char b1[3],b2[3];
-  struct chaos_header *ch = (struct chaos_header *)ucp;
-  struct chaos_hw_trailer *tr;
-  unsigned char *data = malloc(ch_nbytes(ch)+1);
-
-  fprintf(stderr,"Opcode: %o (%s), unused: %o\r\nFC: %o, Nbytes %d.\r\n",
-	  ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-	  ch->ch_opcode_u.ch_opcode_s.ch_unused,
-	  ch_fc(ch), ch_nbytes(ch));
-  fprintf(stderr,"Dest host: %o, index %o\r\nSource host: %o, index %o\r\n",
-	  ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
-  fprintf(stderr,"Packet #%o\r\nAck #%o\r\n",
-	  ch_packetno(ch), ch_ackno(ch));
-
-  fprintf(stderr,"Data:\r\n");
-
-  len = ch_nbytes(ch);
-  tr = (struct chaos_hw_trailer *)&ucp[cnt-6];
-
-  /* Skip headers */
-  ucp += CHAOS_HEADERSIZE;
-
-  switch (ch_opcode(ch)) {
-  case CHOP_RFC:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
-    fprintf(stderr,"[Contact: \"%s\"]\n", data);
-    break;
-
-  case CHOP_OPN:
-  case CHOP_STS:
-    {
-      unsigned short rcpt, winsz;
-      rcpt = WORD16(ucp);
-      winsz = WORD16(ucp+2);
-      fprintf(stderr,"[Received up to and including %#o, window size %#o]\n",
-	     rcpt, winsz);
-      break;
-    }
-  case CHOP_CLS:
-  case CHOP_LOS:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
-    fprintf(stderr,"[Reason: \"%s\"]\n", data);
-    break;
-
-  case CHOP_FWD:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
-    fprintf(stderr,"[New contact name: \"%s\" (host: see Ack field)]\n", data);
-    break;
-
-  case CHOP_RUT:
-    {
-      int nent = ch_nbytes(ch)/4;
-      fprintf(stderr,"[%d. routing entries:\n", nent);
-      for (i = 0; i < nent; i++) 
-	fprintf(stderr," Subnet: %#o, cost %d.\n", WORD16(&ucp[i*4]), WORD16(&ucp[i*4+2]));
-      fprintf(stderr,"]\n");
-      break;
-    }
-
-  case CHOP_MNT:
-  case CHOP_EOF:
-  case CHOP_UNC:
-  case CHOP_ANS:
-    break;
-
-  default:
-    if (ch_opcode(ch) >= 0300)
-      fprintf(stderr,"[16-bit controlled data]\n");
-    else if (ch_opcode(ch) >= 0200)
-      fprintf(stderr,"[8-bit controlled data]\n");
-  }
-
-  int showlen = (len > cnt ? cnt : len);
-  for (row = 0; row*8 < showlen; row++) {
-    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
-      fprintf(stderr, "  %02x", ucp[i+row*8]);
-      fprintf(stderr, "%02x", ucp[(++i)+row*8]);
-    }
-    fprintf(stderr, " (hex)\r\n");
-#if 1
-    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
-      fprintf(stderr, "  %2s", ch_char(ucp[i+row*8],(char *)&b1));
-      fprintf(stderr, "%2s", ch_char(ucp[(++i)+row*8],(char *)&b2));
-    }
-    fprintf(stderr, " (chars)\r\n");
-    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
-      fprintf(stderr, "  %2s", ch_char(ucp[i+1+row*8],(char *)&b1));
-      fprintf(stderr, "%2s", ch_char(ucp[(i++)+row*8],(char *)&b2));
-    }
-    fprintf(stderr, " (11-chars)\r\n");
-#endif
-  }
-  if (cnt < len)
-    fprintf(stderr,"... (header length field > buf len)\n");
-
-  /* Now show trailer */
-  if (len % 2)
-    len++;			/* Align */
-  if (cnt < len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE)
-    fprintf(stderr,"[Incomplete trailer: pkt size %d < (header + len + trailer size) = %lu]\n",
-	    cnt, len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE);
-  else {
-    u_int cks = ch_checksum((u_char *)ch, len);
-    fprintf(stderr,"HW trailer:\r\n  Dest: %o\r\n  Source: %o\r\n  Checksum: %#x (%#x)\r\n",
-	    ntohs(tr->ch_hw_destaddr), ntohs(tr->ch_hw_srcaddr), ntohs(tr->ch_hw_checksum),
-	    cks);
-  }
-}
-
-void
-dumppkt(unsigned char *ucp, int cnt)
-{
-    fprintf(stderr,"CHUDP version %d, function %d\n", ucp[0], ucp[1]);
-    ch_dumpkt(ucp+CHUDP_HEADERSIZE, cnt-CHUDP_HEADERSIZE);
-}
-
-/* **** CHUDP protocol functions **** */
-
-int chudp_connect(u_short port, sa_family_t family) 
-{
-  int sock;
-
-  if ((family != AF_INET) && (family != AF_INET6)) {
-    fprintf(stderr,"Unsupported address family %d - should be AF_INET or AF_INET6\n", family);
-    return -1;
-  }
-
-  if ((sock = socket(family, SOCK_DGRAM, 0)) < 0) {
-    perror("socket failed");
-    exit(1);
-  }
-  if (family == AF_INET6) {
-    struct sockaddr_in6 sin6;
-    int one = 1;
-    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0)
-      perror("setsockopt(IPV6_V6ONLY)");
-    sin6.sin6_family = family;
-    sin6.sin6_port = htons(port);
-    memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
-    if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
-      perror("bind(v6) failed");
-      exit(1);
-    }
-  } else {
-    struct sockaddr_in sin;
-    sin.sin_family = family;
-    sin.sin_port = htons(port);
-    sin.sin_addr.s_addr = INADDR_ANY;
-    if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
-      perror("bind failed");
-      exit(1);
-    }
-  }
-  return sock;
-}
-
-void
-chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
-  unsigned short cks;
-  int i;
-  char ip[INET6_ADDRSTRLEN];
-
-  i = CHUDP_HEADERSIZE+CHAOS_HEADERSIZE+ch_nbytes(ch)+CHAOS_HW_TRAILERSIZE;
-  if ((i % 2) == 1)
-    i++;			/* Align */
-  if (i != (len + CHUDP_HEADERSIZE)) {
-    if (debug)
-      fprintf(stderr,"==== chudp_send: calculated length %lu differs from actual %d\n",
-	      i - CHUDP_HEADERSIZE, len);
-#if 0 // Don't trust caller!!
-    i = (len + CHUDP_HEADERSIZE)/2*2;	/* trust caller, round up */
-#endif
-  }
-
-#if 1
-  //  ip = inet_ntoa(sout->sin_addr);
-  if (inet_ntop(sout->sa_family,
-		(sout->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sout)->sin_addr : (void *)&((struct sockaddr_in6 *)sout)->sin6_addr),
-		ip, sizeof(ip))
-
-      == NULL)
-    strerror_r(errno, ip, sizeof(ip));
-  if (verbose || debug) {
-    fprintf(stderr,"CHUDP: Sending %s: %lu + %lu + %d + %lu = %d bytes to %s:%d\n",
-	    ch_opcode_name(ch_opcode(ch)),
-	    CHUDP_HEADERSIZE, CHAOS_HEADERSIZE, ch_nbytes(ch), CHAOS_HW_TRAILERSIZE, i,
-	    ip, ntohs(((struct sockaddr_in *)sout)->sin_port));
-    if (debug)
-      dumppkt(buf, i);
-  }
-#endif
-  if (sendto(sock, buf, i, 0, sout,
-	     (sout->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
-    if (verbose || debug)
-      perror("sendto failed");
-#if 0 // don't die here, some link may be down. Ideally don't retry until "later"
-    exit(1);
-#endif
-  }
-}
-
-int
-chudp_receive(int sock, unsigned char *buf, int buflen)
-{
-  struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
-  struct chudp_header *cuh = (struct chudp_header *)buf;
-  struct sockaddr_in6 sin;	// #### sockaddr_in6 is larger than sockaddr_in and sockaddr
-  char ip[INET6_ADDRSTRLEN];
-  int i, cnt, cks;
-  u_int sinlen;
-
-  memset(&sin,0,sizeof(sin));
-  sinlen = sizeof(sin);
-  cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *) &sin, &sinlen);
-  if (cnt < 0) {
-    perror("recvfrom");
-    exit(1);
-  }
-  if (inet_ntop(sin.sin6_family,
-		(sin.sin6_family == AF_INET ? (void *)&((struct sockaddr_in *)&sin)->sin_addr
-		 : (void *)&((struct sockaddr_in6 *)&sin)->sin6_addr),
-		ip, sizeof(ip))
-	== NULL)
-      strerror_r(errno, ip, sizeof(ip));
-  if ((cnt < CHUDP_HEADERSIZE) ||
-      (cuh->chudp_version != CHUDP_VERSION) ||
-      (cuh->chudp_function != CHUDP_PKT)) {
-    if (verbose) fprintf(stderr,"Bad CHUDP header (size %d) from %s:%d\n",cnt,
-			 ip, ntohs(sin.sin6_port));
-    // #### look up the source in chudpdest, count rejected pkt
-    return 0;
-  }
-  int found = 0;
-
-#if 1
-  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
-  u_short srctrailer = 0, srcaddr = ch_srcaddr(ch);
-  if (cnt >= CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
-    // Prefer HW sender (i.e. the chudp host rather than origin host)
-    srctrailer = ntohs(tr->ch_hw_srcaddr);
-#endif
-
-  PTLOCK(chudp_lock);
-  if (debug) fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, *chudpdest_len);
-  for (i = 0; i < *chudpdest_len; i++) {
-    if ((chudpdest[i].chu_sa.chu_saddr.sa_family == sin.sin6_family)
-	&& (((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET) &&
-	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin.sin_addr, (u_char *)&((struct sockaddr_in *)&sin)->sin_addr, sizeof(struct in_addr)) == 0))
-	    ||
-	    ((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET6) &&
-	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin6.sin6_addr, (u_char *)&((struct sockaddr_in6 *)&sin)->sin6_addr, sizeof(struct in6_addr)) == 0))))
-	  {
-      found = 1;
-#if 0 // needs more testing
-      {
-	/* Check for pkts with a header source which exists on another link wrt link source */
-	/* It's OK to receive a pkt from an addr which is not the link's, since there may be a whole net behind it,
-	   but not OK if it's from a another link's address - that's misconfigured, here or there. */
-	if (chudpdest[i].chu_addr != srcaddr) {	 // not from the link address
-	  struct chroute *rt = find_in_routing_table(srcaddr, 0, 0); // find its link
-	  if ((rt != NULL) && (rt->rt_dest == srcaddr)) { // it's on another link!
-	    if (verbose) fprintf(stderr,"CHUDP host %#o is on another link than where it came from (%#o), rejecting/dropping\n",
-				 srcaddr, chudpdest[i].chu_addr);
-#if COLLECT_STATS
-	    PTLOCK(linktab_lock);
-	    linktab[(chudpdest[i].chu_addr)>>8].pkt_rejected++;
-	    PTUNLOCK(linktab_lock);
-#endif
-	    PTUNLOCK(chudp_lock);
-	    return 0;
-	  }
-	}
-      }
-#endif
-      if (chudpdest[i].chu_sa.chu_sin.sin_port != sin.sin6_port) {
-	if (verbose) fprintf(stderr,"CHUDP from %s port different from configured: %d # %d (dropping)\n",
-			     ip, ntohs(sin.sin6_port),
-			     ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
-	// #### if configured to use dynamic updates/additions also for this case?
-	PTUNLOCK(chudp_lock);
-	return 0;
-      }
-      break;
-    }
-  }
-  PTUNLOCK(chudp_lock);
-
-#if 0
-  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
-  u_short srcaddr = ch_srcaddr(ch);
-#else
-  if (cnt >= CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
-    // Prefer HW sender (i.e. the chudp host rather than origin host)
-    srcaddr = ntohs(tr->ch_hw_srcaddr);
-#endif
-
-  if (!found) {
-    if (verbose) fprintf(stderr,"CHUDP from unknown source %s:%d\n",
-			 ip, ntohs(sin.sin6_port));
-    // if configured to use dynamic updates/additions, do it
-    if (chudp_dynamic) {
-      add_chudp_dest(srcaddr, (struct sockaddr *)&sin);
-    } else
-      return 0;
-  }
-#if 1
-  if (verbose || debug) {
-    fprintf(stderr,"CHUDP: Received %d bytes (%s) from %s:%d (%#o)\n",
-	    cnt, ch_opcode_name(ch_opcode(ch)),
-	    ip, ntohs(sin.sin6_port), srcaddr);
-    if (debug)
-      dumppkt(buf, cnt);
-  }
-#endif
-  if ((cks = ch_checksum(&buf[CHUDP_HEADERSIZE],cnt-CHUDP_HEADERSIZE)) != 0) {
-    if (verbose) fprintf(stderr,"[Bad checksum %#x (CHUDP)]\n",cks);
-#if COLLECT_STATS
-      PTLOCK(linktab_lock);
-      linktab[srcaddr>>8].pkt_crcerr++;
-      PTUNLOCK(linktab_lock);
-#endif
-    return 0;
-  }
-
-  return cnt;
-}
-
-
 void
 htons_buf(u_short *ibuf, u_short *obuf, int len)
 {
@@ -1434,1233 +575,13 @@ ntohs_buf(u_short *ibuf, u_short *obuf, int len)
     *obuf++ = ntohs(*ibuf++);
 }
 
-/* **** Chaos-over-Unix-Sockets functions **** */
-// Based on code by Brad Parker (brad@heeltoe.com), see http://www.unlambda.com/cadr/
-
-/*
- * connect to server using specificed socket type
- */
-int
-u_connect_to_server(void)
-{
-    int len;
-    struct sockaddr_un unix_addr;
-    struct sockaddr_un unixs_addr;
-
-
-    //printf("connect_to_server()\n");
-
-    if ((fd = socket(PF_UNIX, CHAOSD_SOCK_TYPE, 0)) < 0) {
-      perror("socket(AF_UNIX)");
-      return -1;
-    }
-
-    memset(&unix_addr, 0, sizeof(unix_addr));
-
-    sprintf(unix_addr.sun_path, "%s%s%05u",
-	    UNIX_SOCKET_PATH, UNIX_SOCKET_CLIENT_NAME, getpid());
-
-    unix_addr.sun_family = AF_UNIX;
-    len = SUN_LEN(&unix_addr);
-
-    unlink(unix_addr.sun_path);
-
-    if (debug) fprintf(stderr,"My unix socket %s\n", unix_addr.sun_path);
-
-    if ((bind(fd, (struct sockaddr *)&unix_addr, len) < 0)) {
-      perror("bind(AF_UNIX)");
-      close(fd);
-      return -1;
-    }
-
-    if (chmod(unix_addr.sun_path, UNIX_SOCKET_PERM) < 0) {
-      perror("chmod(AF_UNIX)");
-      system("/bin/ls -l /var/tmp/");
-      close(fd);
-      return -1;
-    }
-
-//    sleep(1);
-        
-    memset(&unixs_addr, 0, sizeof(unixs_addr));
-    sprintf(unixs_addr.sun_path, "%s%s",
-	    UNIX_SOCKET_PATH, UNIX_SOCKET_SERVER_NAME);
-    unixs_addr.sun_family = AF_UNIX;
-    len = SUN_LEN(&unixs_addr);
-
-    if (debug) fprintf(stderr,"Connecting to server socket %s\n", unixs_addr.sun_path);
-
-    if (connect(fd, (struct sockaddr *)&unixs_addr, len) < 0) {
-      if (debug) {
-	fprintf(stderr,"cannot connect to socket %s\n",unixs_addr.sun_path);
-	perror("connect(AF_UNIX)");
-      }
-      close(fd);
-      return -1;
-    }
-
-    if (verbose > 1) printf("fd %d\n", fd);
-        
-    return fd;
-}
-
-int
-u_read_chaos(int fd, u_char *buf, int buflen)
-{
-    int ret, len;
-    u_char lenbytes[4];
-
-    ret = read(fd, lenbytes, 4);
-    if (ret == 0) {
-      perror("read nothing from unix socket");
-      return -1;
-    }
-    if (ret < 0) {
-      perror("u_read_chaos");
-      return ret;
-    }
-
-    len = (lenbytes[0] << 8) | lenbytes[1];
-
-    ret = read(fd, buf, len > buflen ? buflen : len);
-    if (ret == 0) {
-      perror("read nothing from unix socket");
-      return -1;
-    }
-    if (ret < 0)
-      return ret;
-
-    if (debug || (ret != len)) {
-      fprintf(stderr,"Read %d of %d bytes from Unix socket\n",ret,len);
-      htons_buf((u_short *)buf,(u_short *)buf,len);
-      ch_dumpkt(buf,len);
-      ntohs_buf((u_short *)buf,(u_short *)buf,len);
-    }
-
-    return ret;
-}
-
-void
-u_send_chaos(int fd, u_char *buf, int buflen)
-{
-  u_char lenbytes[4];
-  struct iovec iov[2];
-  int ret;
-
-  struct chaos_header *ch = (struct chaos_header *)buf;
-
-  if (debug) {
-    fprintf(stderr,"Sending to Unix socket:\n");
-    htons_buf((u_short *)buf,(u_short *)buf,buflen);
-    ch_dumpkt(buf,buflen);
-    ntohs_buf((u_short *)buf,(u_short *)buf,buflen);
-  } else if (verbose) {
-    fprintf(stderr,"Unix: Sending %s: %d bytes\n",
-	    ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff), buflen);
-  }
-
-  lenbytes[0] = (buflen >> 8) & 0xff;
-  lenbytes[1] = buflen & 0xff;
-  lenbytes[2] = 1;
-  lenbytes[3] = 0;
-
-  iov[0].iov_base = lenbytes;
-  iov[0].iov_len = 4;
-
-  iov[1].iov_base = buf;
-  iov[1].iov_len = buflen;
-
-  ret = writev(fd, iov, 2);
-  if (ret <  0) {
-    perror("u_send_chaos");
-    // return(-1);
-  }
-}
-
-/* **** Chaos-over-Ethernet functions **** */
-#if CHAOS_ETHERP
-
-// Find the ethernet address of the configured interface (ifname)
-void get_my_ea() {
-  struct ifaddrs *ifx, *ifs = NULL;
-  if (getifaddrs(&ifs) < 0) {
-    perror("getifaddrs");
-    return;
-  }
-#if ETHER_BPF // really "if on a mac"?
-  struct sockaddr_dl *sdl = NULL;
-#else
-  struct sockaddr_ll *sll = NULL;
-#endif
-  for (ifx = ifs; ifx != NULL; ifx = ifx->ifa_next) {
-    if (strcmp(ifx->ifa_name, ifname) == 0) {
-      if (ifx->ifa_addr != NULL) {
-#if ETHER_BPF
-	sdl = (struct sockaddr_dl *)ifx->ifa_addr;
-	memcpy(&myea, LLADDR(sdl), sdl->sdl_alen);
-#else
-	sll = (struct sockaddr_ll *)ifx->ifa_addr;
-	memcpy(&myea, sll->sll_addr, sll->sll_halen);
-#endif
-      }
-      break;
-    }
-  }
-  freeifaddrs(ifs);
-}
-
-#if ETHER_BPF
-#define BPF_MTU CH_PK_MAXLEN // (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
-
-// from dpimp.c in klh10 by Ken Harrenstein
-/* Packet byte offsets for interesting fields (in network order) */
-#define PKBOFF_EDEST 0		/* 1st shortword of Ethernet destination */
-#define PKBOFF_ETYPE 12		/* Shortwd offset to Ethernet packet type */
-#define PKBOFF_ARP_PTYPE (sizeof(struct ether_header)+sizeof(u_short))  /* ARP protocol type */
-
-/* BPF simple Loads */
-#define BPFI_LD(a)  bpf_stmt(BPF_LD+BPF_W+BPF_ABS,(a))	/* Load word  P[a:4] */
-#define BPFI_LDH(a) bpf_stmt(BPF_LD+BPF_H+BPF_ABS,(a))	/* Load short P[a:2] */
-#define BPFI_LDB(a) bpf_stmt(BPF_LD+BPF_B+BPF_ABS,(a))	/* Load byte  P[a:1] */
-
-/* BPF Jumps and skips */
-#define BPFI_J(op,k,t,f) bpf_jump(BPF_JMP+(op)+BPF_K,(k),(t),(f))
-#define BPFI_JEQ(k,n) BPFI_J(BPF_JEQ,(k),(n),0)		/* Jump if A == K */
-#define BPFI_JNE(k,n) BPFI_J(BPF_JEQ,(k),0,(n))		/* Jump if A != K */
-#define BPFI_JGT(k,n) BPFI_J(BPF_JGT,(k),(n),0)		/* Jump if A >  K */
-#define BPFI_JLE(k,n) BPFI_J(BPF_JGT,(k),0,(n))		/* Jump if A <= K */
-#define BPFI_JGE(k,n) BPFI_J(BPF_JGE,(k),(n),0)		/* Jump if A >= K */
-#define BPFI_JLT(k,n) BPFI_J(BPF_JGE,(k),0,(n))		/* Jump if A <  K */
-#define BPFI_JDO(k,n) BPFI_J(BPF_JSET,(k),(n),0)	/* Jump if   A & K */
-#define BPFI_JDZ(k,n) BPFI_J(BPF_JSET,(k),0,(n))	/* Jump if !(A & K) */
-
-#define BPFI_CAME(k) BPFI_JEQ((k),1)		/* Skip if A == K */
-#define BPFI_CAMN(k) BPFI_JNE((k),1)		/* Skip if A != K */
-#define BPFI_CAMG(k) BPFI_JGT((k),1)		/* Skip if A >  K */
-#define BPFI_CAMLE(k) BPFI_JLE((k),1)		/* Skip if A <= K */
-#define BPFI_CAMGE(k) BPFI_JGE((k),1)		/* Skip if A >= K */
-#define BPFI_CAML(k) BPFI_JLT((k),1)		/* Skip if A <  K */
-#define BPFI_TDNN(k) BPFI_JDO((k),1)		/* Skip if   A & K */
-#define BPFI_TDNE(k) BPFI_JDZ((k),1)		/* Skip if !(A & K) */
-
-/* BPF Returns */
-#define BPFI_RET(n) bpf_stmt(BPF_RET+BPF_K, (n))	/* Return N bytes */
-#define BPFI_RETFAIL() BPFI_RET(0)			/* Failure return */
-#define BPFI_RETWIN()  BPFI_RET((u_int)-1)		/* Success return */
-
-// My addition
-#define BPFI_SKIP(n) BPFI_J(BPF_JA,0,(n),(n))  /* skip n instructions */
-
-struct bpf_insn bpf_stmt(unsigned short code, bpf_u_int32 k)
-{
-    struct bpf_insn ret;
-    ret.code = code;
-    ret.jt = 0;
-    ret.jf = 0;
-    ret.k = k;
-    return ret;
-}
-struct bpf_insn bpf_jump(unsigned short code, bpf_u_int32 k,
-			 unsigned char jt, unsigned char jf)
-{
-    struct bpf_insn ret;
-    ret.code = code;
-    ret.jt = jt;
-    ret.jf = jf;
-    ret.k = k;
-    return ret;
-}
-#endif // ETHER_BPF
-
-/* Get a PACKET/DGRAM socket for the specified ethernet type, on the specified interface */
-int
-get_packet_socket(u_short ethtype, char *ifname)
-{
-  int fd;
-#if ETHER_BPF
-  struct ifreq ifr;
-  char bpfname[64];
-  int x;
-
-  for (x = 0; x < 16; x++) {
-    sprintf(bpfname, "/dev/bpf%d", x);
-    if ((fd = open(bpfname, O_RDWR)) < 0) {
-      if (errno == EBUSY) {
-/* 	if (debug) perror(bpfname); */
-	continue;
-      } else {
-	perror(bpfname);
-	return -1;
-      } 
-    } else
-      break;
-  }
-  if (fd < 0) {
-    perror("Failed to open BPF device");
-    fprintf(stderr,"Last tried %s\n", bpfname);
-    return -1;
-  } else
-    if (debug) fprintf(stderr,"Opened BPF device %s successfully, fd %d\n",
-		       bpfname, fd);
-
-  // set max packet length (shorter for Chaos?). Must be set before interface is attached!
-  x = BPF_MTU;
-  if (ioctl(fd, BIOCSBLEN, (void *)&x) < 0) {
-    perror("ioctl(BIOCSBLEN)");
-    close(fd);
-    return -1;
-  }
-
-  // Become nonblocking
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0)
-    flags = 0;
-  if (fcntl(fd, F_SETFL, flags|O_NONBLOCK) < 0) {
-    perror("fcntl(F_SETFL)");
-    close(fd);
-    return -1;
-  }
-#if 1
-  // unset header-complete mode (we read and write complete pkts)
-  // but we still need to create the header
-  x = 0;
-  if (ioctl(fd, BIOCSHDRCMPLT, (void *)&x) < 0) {
-    perror("ioctl(BIOCSHDRCMPLT)");
-    close(fd);
-    return -1;
-  }
-#endif
-  // Don't echo my sent pkts back to me, please
-  x = 0;
-  if (ioctl(fd, BIOCSSEESENT, (void *)&x) < 0) {
-    perror("ioctl(BIOCSSEESENT)");
-    close(fd);
-    return -1;
-  }
-  // Operate in Immediate Mode: process pkts as they arrive rather than wait for timeout or buffer full
-  x = 1;
-  if (ioctl(fd, BIOCIMMEDIATE, (void *)&x) < 0) {
-    perror("ioctl(BIOCIMMEDIATE)");
-    close(fd);
-    return -1;
-  }
-#if 0
-  // let Promiscuous mode be, we filter for it
-  x = 0;
-  if (ioctl(fd, BIOCPROMISC, (void *)&x) < 0) {
-    perror("ioctl(BIOCPROMISC)");
-    close(fd);
-    return -1;
-  }
-#endif
-
-  // Now build the filter
-  struct bpf_version bv;
-  if (ioctl(fd, BIOCVERSION, (char *)&bv) < 0) {
-    perror("ioctl(BIOCVERSION)");
-    close(fd);
-    return -1;
-  } else if (bv.bv_major != BPF_MAJOR_VERSION ||
-	     bv.bv_minor < BPF_MINOR_VERSION) {
-    fprintf(stderr, "requires BPF language %d.%d or higher; kernel is %d.%d",
-	    BPF_MAJOR_VERSION, BPF_MINOR_VERSION, bv.bv_major, bv.bv_minor);
-    close(fd);
-    return -1;
-  }
-
-  // Here is the BPF program, simple
-#define BPF_PFMAX 50
-  struct bpf_insn pftab[BPF_PFMAX], *p;
-  struct bpf_program pfilter = {0, pftab}, *pfp;
-
-  // must also check for address since if may be promisc although we didn't ask for it
-  // tcpdump -i en0 -d 'ether proto 0x0804 && (ether dst 3c:07:54:14:c9:24 || ether dst ff:ff:ff:ff:ff:ff)'
-  // (000) ldh      [12]
-  // (001) jeq      #0x804           jt 2	jf 10
-  // (002) ld       [2]
-  // (003) jeq      #0x5414c924      jt 4	jf 6
-  // (004) ldh      [0]
-  // (005) jeq      #0x3c07          jt 9	jf 10
-  // (006) jeq      #0xffffffff      jt 7	jf 10
-  // (007) ldh      [0]
-  // (008) jeq      #0xffff          jt 9	jf 10
-  // (009) ret      #262144
-  // (010) ret      #0
-
-  pfp = &pfilter;
-  p = pfp->bf_insns;		/* 1st instruction of BPF program */
-  // Check the ethernet type field
-  *p++ = BPFI_LDH(PKBOFF_ETYPE); /* Load ethernet type field */
-  *p++ = BPFI_CAME(ethtype);	/* Skip if right type */
-  *p++ = BPFI_RETFAIL();	/* nope, fail */
-  if (ethtype == ETHERTYPE_ARP) {
-    // For ARP, check the protocol type
-    *p++ = BPFI_LDH(PKBOFF_ARP_PTYPE); /* Check the ARP type */
-    *p++ = BPFI_CAME(ETHERTYPE_CHAOS);
-    *p++ = BPFI_RETFAIL();	/* Not Chaos, ignore */
-    // Never mind about destination here, if we get other ARP info that's nice?
-  }
-  else {
-    // For Ethernet pkts, also filter for our own address or broadcast,
-    // in case someone else makes the interface promiscuous
-    u_short ea1 = (myea[0]<<8)|myea[1];
-    u_long ea2 = (((myea[2]<<8)|myea[3])<<8|myea[4])<<8 | myea[5];
-    *p++ = BPFI_LD(PKBOFF_EDEST+2);	/* last word of Ether dest */
-    *p++ = BPFI_CAME(ea2);
-    *p++ = BPFI_SKIP(3); /* no match, skip forward and check for broadcast */
-    *p++ = BPFI_LDH(PKBOFF_EDEST);  /* get first part of dest addr */
-    *p++ = BPFI_CAMN(ea1);
-    *p++ = BPFI_RETWIN();		/* match both, win! */
-    *p++ = BPFI_LD(PKBOFF_EDEST+2);	/* 1st word of Ether dest again */
-    *p++ = BPFI_CAME(0xffffffff);	/* last hword is broadcast? */
-    *p++ = BPFI_RETFAIL();
-    *p++ = BPFI_LDH(PKBOFF_EDEST);  /* get first part of dest addr */
-    *p++ = BPFI_CAME(0xffff);
-    *p++ = BPFI_RETFAIL();	/* nope */
-  }
-  *p++ = BPFI_RETWIN();		/* win */
-
-  pfp->bf_len = p - pfp->bf_insns; /* length of program */
-
-  if (ioctl(fd, BIOCSETF, (char *)pfp) < 0) {
-    perror("ioctl(BIOCSETF)");
-    close(fd);
-    return -1;
-#if 0 // debug
-  } else if (debug) {
-    fprintf(stderr,"BPF filter len %d:\n", pfp->bf_len);
-    for (x = 0; x < pfp->bf_len; x++)
-      fprintf(stderr," %d: 0x%04X %2d %2d 0x%0X\n",
-	      x,
-	      pfp->bf_insns[x].code,
-	      pfp->bf_insns[x].jt,
-	      pfp->bf_insns[x].jf,
-	      pfp->bf_insns[x].k);
-#endif // 0
-  }
-
-  // Attach to interface
-  memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-  if (ioctl(fd, BIOCSETIF, (void *)&ifr) < 0) {
-    perror("ioctl(BIOCSETIF)");
-    close(fd);
-    return -1;
-  }
-
-  if (myea[0] == 0 && myea[1] == 0) {
-    // Find it if needed
-    get_my_ea();
-  }
-  if (myea[0] == 0 && myea[1] == 0) {
-    fprintf(stderr,"Cannot find MAC addr of interface %s\n", ifname);
-    close(fd);
-    return -1;
-  }    
-
-#if 0
-  // I don't get a signal? But I don't want one anyway.
-  if (verbose) {
-    if (ioctl(fd, BIOCGRSIG, (void *)&x) >= 0)
-      fprintf(stderr,"Signal on BPF reception: %d\n", x);
-  }
-#endif
-  
-#else // not BPF, but direct sockaddr_ll
-  struct ifreq ifr;
-  struct sockaddr_ll sll;
-
-  if ((fd = socket(PF_PACKET, SOCK_DGRAM, htons(ethtype))) < 0) {
-    perror("socket(PF_PACKET, SOCK_DGRAM)");
-    return -1;
-  }
-  memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, strlen(ifname));
-  if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
-    perror("ioctl(SIOCGIFINDEX)");
-    return -1;
-  }
-  ifix = ifr.ifr_ifindex;
-
-  if (0 && debug)
-    printf("ifindex %d\n", ifix);
-
-  memset(&sll, 0, sizeof(sll));
-  sll.sll_family = AF_PACKET;
-  sll.sll_protocol = htons(ethtype);
-  sll.sll_ifindex = ifix;
-  if (bind(fd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
-    perror("bind");
-    return -1;
-  }
-  memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, strlen(ifname));
-  if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0 ) {
-    perror("ioctl(SIOCGIFHWADDR)");
-    return -1;
-  }
-
-  if (ifr.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
-    fprintf(stderr,"wrong ARPHDR %d ", ifr.ifr_hwaddr.sa_family);
-    perror("ioctl");
-    return -1;
-  }
-  if (myea[0] == 0 && myea[1] == 0)
-    memcpy(&myea, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
-
-  if (0 && debug) {
-    memset(&ifr, 0, sizeof(ifr));
-    ifr.ifr_ifindex = ifix;
-    if (ioctl(fd, SIOCGIFNAME, &ifr) < 0) {
-      perror("ioctl(SIOCGIFNAME)");
-      return -1;
-    }
-    printf("ifname %s\n", ifr.ifr_name);
-  }
-#endif // ETHER_BPF
-  return fd;
-}
-
-/* Send a packet of the specified type to the specified address  */
-void
-send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *packet, int packetlen)
-{
-  int cc;
-#if !ETHER_BPF
-  static struct sockaddr_ll sa;
-
-  memset (&sa, 0, sizeof sa);
-  sa.sll_family = AF_PACKET;
-  sa.sll_protocol = htons(ethtype);
-  sa.sll_ifindex = ifix;
-  sa.sll_hatype = ARPHRD_ETHER;
-  sa.sll_pkttype = PACKET_HOST;
-  sa.sll_halen = addrlen;
-  memcpy(&sa.sll_addr, addr, addrlen);
-#endif // !ETHER_BPF
-
-  if (verbose) {
-    struct chaos_header *ch = (struct chaos_header *)packet;
-    printf("Ether: Sending %s: %d bytes with protocol 0x%04x (%s) to address ",
-	   (ethtype == ETHERTYPE_CHAOS ? ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff) :
-	    (ethtype == ETHERTYPE_ARP ? "ARP" : "?")),
-	   packetlen, ethtype,
-	   (ethtype == ETHERTYPE_ARP ? "ARP" :
-	    (ethtype == ETHERTYPE_CHAOS ? "Chaos" : "?")));
-    for (cc = 0; cc < addrlen-1; cc++)
-      printf("%02X:",addr[cc]);
-    printf("%02X\n",addr[cc]);
-    if (debug && (ethtype == ETHERTYPE_CHAOS)) {
-      u_char pk[CH_PK_MAXLEN];
-      ntohs_buf((u_short *)packet, (u_short *)pk, packetlen);
-      ch_dumpkt(pk, packetlen);
-    }
-  }
-#if ETHER_BPF
-  // construct the header separately to avoid copying
-  struct iovec iov[2];
-  struct ether_header eh;
-
-  memcpy(&eh.ether_shost, &myea, ETHER_ADDR_LEN);
-  memcpy(&eh.ether_dhost, addr, ETHER_ADDR_LEN);
-  eh.ether_type = htons(ethtype);
-
-  iov[0].iov_base = (char *) &eh;
-  iov[0].iov_len = ETHER_HDR_LEN;
-  iov[1].iov_base = packet;
-  iov[1].iov_len = packetlen;;
-
-  if (packetlen+sizeof(struct ether_header) > BPF_MTU) {
-    fprintf(stderr,"send_packet: buf len %lu vs MTU %lu\n",
-	    packetlen+sizeof(struct ether_header), BPF_MTU);
-  }
-  cc = writev(if_fd, iov, sizeof(iov)/sizeof(*iov));
-  packetlen += sizeof(struct ether_header);  /* avoid complaints below */
-
-#else // not BPF
-  cc = sendto(if_fd, packet, packetlen, 0, (struct sockaddr *)&sa, sizeof(sa));
-#endif // ETHER_BPF
-
-  if (cc == packetlen)
-    return;
-  else if (cc >= 0) {
-    if (debug) fprintf(stderr,"send_packet sent only %d bytes\n", cc);
-  } else
-    {
-      perror("send_packet");
-      fprintf(stderr, "\n");
-      exit(1);
-    }
-}
-
-/* Read a packet from the socket. */
-#if ETHER_BPF
-unsigned int bpf_buf_offset = 0;
-unsigned int bpf_buf_length = 0;
-uint8_t ether_bpf_buf[BPF_MTU];
-#endif // ETHER_BPF
-
-int
-get_packet (int if_fd, u_char *buf, int buflen)
-{
-  int i, rlen;
-  u_short protocol;
-  u_int64_t src_mac = 0;		// let's hope a 48-bit mac fits
-
-#if ETHER_BPF
-  // Based on 3com.c in LambdaDelta by Daniel Seagraves & Barry Silverman
-  // see https://github.com/dseagrav/ld
-  int res;
-  struct bpf_hdr *bpf_header;
-
-  // #### gross hack, don't want to mess with the actual headers
-  if (if_fd == arpfd)
-    protocol = ntohs(ETHERTYPE_ARP);
-  else if (if_fd == chfd)
-    protocol = ntohs(ETHERTYPE_CHAOS);
-  else
-    protocol = -1;
-
-#if 0 //debug
-  if (debug) {
-    int avail;
-    if (ioctl(if_fd, FIONREAD, (void *)&avail) < 0) {
-      perror("ioctl(FIONREAD)");
-      return 0;
-    } else
-      fprintf(stderr,"about to read from fd %d: available %d bytes\n", if_fd, avail);
-  }
-#endif
-
-  if (bpf_buf_offset == 0) {
-    // BPF _requires_ you use the same buffer length you configured the filter for
-    if ((res = read(if_fd, ether_bpf_buf, sizeof(ether_bpf_buf))) < 0) {
-      if (errno != EAGAIN && errno != EWOULDBLOCK) {
-	perror("read BPF ether");
-#if 0 //debug
-	if (debug) {
-	  fprintf(stderr,"failed reading fd %d (chfd %d, arpfd %d) buf %p buflen %d\n", if_fd, chfd, arpfd,
-		  buf, buflen);
-	  fprintf(stderr,"tried using buflen %d, configured for %lu\n",
-		  buflen, BPF_MTU);
-	}
-#endif
-	exit(1);
-      }
-      else
-	if (debug) perror("read BPF ether");
-      return 0;
-    }
-    bpf_buf_length = res;
-  }
-  bpf_header = (struct bpf_hdr *)(ether_bpf_buf + bpf_buf_offset);
-
-#if 0 //debug
-  if (debug) fprintf(stderr,"BPF: read %d bytes from fd (MTU %lu), timeval sec %d\n buflen %d, hdrlen %d, caplen %d, datalen %d, offset %d\n",
-		     bpf_buf_length, BPF_MTU,
-		     bpf_header->bh_tstamp.tv_sec,
-		     buflen, bpf_header->bh_hdrlen, bpf_header->bh_caplen, bpf_header->bh_datalen,
-		     bpf_buf_offset);
-#endif
-
-  memcpy(buf, (uint8_t *)(ether_bpf_buf + bpf_buf_offset + bpf_header->bh_hdrlen)
-	 +sizeof(struct ether_header),  /* skip ether header! */
-	 bpf_header->bh_caplen < buflen ? bpf_header->bh_caplen : buflen);
-  if (bpf_buf_offset + bpf_header->bh_hdrlen + bpf_header->bh_caplen < bpf_buf_length)
-    bpf_buf_offset += BPF_WORDALIGN(bpf_header->bh_hdrlen + bpf_header->bh_caplen);
-  else
-    bpf_buf_offset = 0;
-  if (bpf_header->bh_caplen != bpf_header->bh_datalen) {
-    if (debug) fprintf(stderr,"BPF: LENGTH MISMATCH: Captured %d of %d\n",
-		       bpf_header->bh_caplen, bpf_header->bh_datalen);
-    return 0;			/* throw away packet */
-  } else {
-    rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
-    // if (debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
-  }
-
-  struct ether_header *eh = (struct ether_header *)(ether_bpf_buf + bpf_buf_offset + bpf_header->bh_hdrlen);
-
-  for (i = 0; i < ETHER_ADDR_LEN-1; i++) {
-    src_mac |= eh->ether_shost[i];
-    src_mac = src_mac<<8;
-  }
-  src_mac |= eh->ether_shost[i];
-
-#else // not BPF
-  struct sockaddr_ll sll;
-  socklen_t sllen = sizeof(sll);
-
-  rlen = recvfrom(if_fd, buf, buflen, 0, (struct sockaddr *) &sll, &sllen);
-  protocol = sll.sll_protocol;
-  for (i = 0; i < sll.sll_halen-1; i++) {
-    src_mac |= sll.sll_addr[i];
-    src_mac = src_mac<<8;
-  }
-  src_mac |= sll.sll_addr[i];
-
-#endif // ETHER_BPF
-  if (rlen < 0)
-    {
-      if (errno != EAGAIN) {
-	perror ("get_packet: Read error");
-	exit(1);
-      }
-      return 0;
-    }
-  if (rlen == 0)
-    return 0;
-
-  if (verbose) {
-#if 0
-    if (debug) {
-      printf("Received:\n");
-      printf(" Family %d\n",sll.sll_family);
-      printf(" Protocol %#x (%s)\n",ntohs(sll.sll_protocol),
-	     (sll.sll_protocol == htons(ETHERTYPE_ARP) ? "ARP" :
-	      (sll.sll_protocol == htons(ETHERTYPE_CHAOS) ? "Chaos" : "?")));
-      printf(" Index %d\n",sll.sll_ifindex);
-      printf(" Header type %d (%s)\n",sll.sll_hatype,
-	     (sll.sll_hatype == ARPHRD_ETHER ? "Ether" :
-	      (sll.sll_hatype == ARPHRD_CHAOS ? "Chaos" : "?")));
-      printf(" Pkt type %d (%s)\n",sll.sll_pkttype,
-	     (sll.sll_pkttype == PACKET_HOST ? "Host" :
-	      (sll.sll_pkttype == PACKET_BROADCAST ? "Broadcast" :
-	       (sll.sll_pkttype == PACKET_MULTICAST ? "Multicast" :
-		(sll.sll_pkttype == PACKET_OTHERHOST ? "Other host" :
-		 (sll.sll_pkttype == PACKET_OUTGOING ? "Outgoing" : "?"))))));
-      printf(" Addr len %d\n Addr ", sll.sll_halen);
-    } else
-      printf("Received %d bytes, protocol %#x, from ",
-	     rlen, ntohs(sll.sll_protocol));
-    for (i = 0; i < sll.sll_halen; i++)
-      printf("%02X ", sll.sll_addr[i]);
-    printf("\n");
-#endif
-
-#if 0
-    if (debug && protocol == htons(ETHERTYPE_ARP)) {
-      struct arphdr *arp = (struct arphdr *)buf;
-      fprintf(stderr,"ARP message received, protocol 0x%04x (%s)\n",
-	      ntohs(arp->ar_pro), (arp->ar_hrd == htons(ARPHRD_ETHER) ? "Ether" :
-			    (arp->ar_hrd == htons(ARPHRD_CHAOS) ? "Chaos" : "?")));
-    }
-#endif
-
-    if (protocol == htons(ETHERTYPE_ARP) 
-#if 1
-	&& (((struct arphdr *)buf)->ar_pro == htons(ETHERTYPE_CHAOS))
-#endif
-	) {
-      struct arphdr *arp = (struct arphdr *)buf;
-      if (debug) {
-	printf("ARP message:\n");
-	printf(" HW format %d (%s)\n",ntohs(arp->ar_hrd),
-	       (arp->ar_hrd == htons(ARPHRD_ETHER) ? "Ether" :
-		(arp->ar_hrd == htons(ARPHRD_CHAOS) ? "Chaos" : "?")));
-	printf(" Protocol format 0x%04x (%s)\n",ntohs(arp->ar_pro),
-	       (arp->ar_pro == htons(ETHERTYPE_ARP) ? "ARP" :
-		(arp->ar_pro == htons(ETHERTYPE_CHAOS) ? "Chaos" :
-		 (arp->ar_pro == htons(ETHERTYPE_IP) ? "IP" : "?"))));
-	printf(" HW addr len %d\n Proto addr len %d\n ARP command %d (%s)\n",
-	       arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op),
-	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
-	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
-		(arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
-		 (arp->ar_op == htons(ARPOP_RREPLY) ? "Reverse reply" : "?"))));
-	printf(" Src HW addr: ");
-	for (i = 0; i < arp->ar_hln; i++)
-	  printf("%02X ", buf[sizeof(struct arphdr)+i]);
-	printf("\n Src Protocol addr: ");
-	for (i = 0; i < arp->ar_pln; i++)
-	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+i]);
-	printf("\n Dst HW addr: ");
-	for (i = 0; i < arp->ar_hln; i++)
-	  printf("%02X ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_pln+i]);
-	printf("\n Dst Protocol addr: ");
-	for (i = 0; i < arp->ar_pln; i++)
-	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
-	printf("\n");
-      } else if (stats || verbose) {
-	printf("ARP %s for protocol %#x",
-	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
-	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
-		(arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
-		 (arp->ar_op == htons(ARPOP_RREPLY) ? "Reverse reply" : "?"))),
-	       ntohs(arp->ar_pro));
-	printf(", dest addr ");
-	if (arp->ar_pln == 2)
-	  printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 |
-			       buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
-	else
-	  for (i = 0; i < arp->ar_pln; i++)
-	    printf("%#x ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
-	printf("from src ");
-	for (i = 0; i < arp->ar_hln; i++)
-	  printf("%02X ", buf[sizeof(struct arphdr)+i]);
-	printf("\n");
-      }
-    }
-    else if (protocol == htons(ETHERTYPE_CHAOS)) {
-#if PEEK_ARP
-      struct chaos_header *ch = (struct chaos_header *)buf;
-      u_short schad = ntohs(ch_srcaddr(ch));
-#if 0
-      int i;
-      fprintf(stderr,"Chaos pkt received from %#o with MAC %#llx ", schad, src_mac);
-      for (i = 0; i < ETHER_ADDR_LEN-1; i++)
-	fprintf(stderr,"%02X:", (u_char)(src_mac>>((ETHER_ADDR_LEN-1-i)*8)) & 0xff);
-      fprintf(stderr,"%02X\n", (u_char)src_mac & 0xff);
-#endif
-
-  /* Now see if we should add this to our Chaos ARP list */
-      PTLOCK(charp_lock);
-      int found = 0;
-      for (i = 0; i < *charp_len; i++)
-	if (charp_list[i].charp_chaddr == schad) {
-	  found = 1;
-#if 0 // actually, skip this for a tiny bit of efficiency
-	  charp_list[i].charp_age = time(NULL);  // update
-	  int j;
-	  for (j = 0; j < ETHER_ADDR_LEN; j++)
-	    charp_list[i].charp_eaddr[j] = (u_char)(src_mac>>(ETHER_ADDR_LEN-1-j)*8) & 0xff;
-	  if (verbose) {
-	    fprintf(stderr,"Updated PEEKED MAC addr for %#o\n", schad);
-	    print_arp_table();
-	  }
-#endif // efficiency
-	  break;
-	}
-      /* It's not in the list already, is there room? */
-      if (!found && *charp_len < CHARP_MAX) {
-	if (verbose) printf("Adding PEEKED Chaos ARP for %#o\n", schad);
-	charp_list[*charp_len].charp_chaddr = schad;
-	charp_list[*charp_len].charp_age = time(NULL);
-	for (i = 0; i < ETHER_ADDR_LEN; i++)
-	  charp_list[*charp_len].charp_eaddr[i] = (u_char)(src_mac>>(ETHER_ADDR_LEN-1-i)*8) & 0xff;
-	(*charp_len)++;
-	if (verbose) print_arp_table();
-      }
-      PTUNLOCK(charp_lock);
-#endif // PEEK_ARP
-
-      if (debug) {
-	printf("Ethernet Chaos message:\n");
-	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-	ch_dumpkt(buf, rlen);
-	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-      }
-      else if (verbose) {
-	struct chaos_header *ch = (struct chaos_header *)buf;
-	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-#if 1
-	printf("Ethernet Chaos message received: %s from %#o to %#o\n",
-	       ch_opcode_name(ch_opcode(ch)), ch_srcaddr(ch), ch_destaddr(ch));
-#else
-	printf(" Opcode: %o (%s), unused: %o\n FC: %o, Nbytes %d.\n",
-		ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-		ch->ch_unused,
-		ch_fc(ch), ch_nbytes(ch));
-	printf(" Dest host: %o, index %o\n Source host: %o, index %o\n",
-		ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
-	printf(" Packet #%o\n Ack #%o\n",
-		ch_packetno(ch), ch_ackno(ch));
-#endif
-	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-      }
-#if 0
-    if (debug) {
-      printf("Received %d bytes:", rlen);
-      for (i = 0; i < rlen; i++) {
-	if (i % 16 == 0)
-	  printf("\n");
-	printf("%02x ", buf[i]);
-      }
-      printf("\n");
-    }
-#endif
-    }
-  }
-
-  return rlen;
-}
-
-/* **** Chaosnet ARP functions **** */
-void init_arp_table()
-{
-  if (pthread_mutex_init(&charp_lock, NULL) != 0)
-    perror("pthread_mutex_init(charp_lock)");
-  if ((charp_list = malloc(sizeof(struct charp_ent)*CHARP_MAX)) == NULL)
-    perror("malloc(charp_list)");
-  if ((charp_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(charp_len)");
-  memset((char *)charp_list, 0, sizeof(struct charp_ent)*CHARP_MAX);
-  *charp_len = 0;
-}
-
-u_char *find_arp_entry(u_short daddr)
-{
-  int i;
-  if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, *charp_len);
-  if (is_mychaddr(daddr)) {	// #### maybe also look for rt_myaddr matches...
-    fprintf(stderr,"#### Looking up ARP for my own address, BUG!\n");
-    return NULL;
-  }
-  
-  PTLOCK(charp_lock);
-  for (i = 0; i < *charp_len; i++)
-    if (charp_list[i].charp_chaddr == daddr) {
-      if ((charp_list[i].charp_age != 0)
-	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
-	if (verbose) fprintf(stderr,"Found ARP entry for %#o but it is too old (%lu s)\n",
-			     daddr, (time(NULL) - charp_list[i].charp_age));
-	PTUNLOCK(charp_lock);
-	return NULL;
-      }
-      if (debug) fprintf(stderr,"Found ARP entry for %#o\n", daddr);
-      PTUNLOCK(charp_lock);
-      return charp_list[i].charp_eaddr;
-    }
-  PTUNLOCK(charp_lock);
-  return NULL;
-}
-
-// Find my chaos address on the ether link #### check config that there are no conflicting addrs?
-u_short find_ether_chaos_address() {
-  int i;
-  u_short ech = 0;
-  PTLOCK(rttbl_lock);
-  for (i = 0; i < *rttbl_host_len; i++) {
-    if (rttbl_host[i].rt_link == LINK_ETHER) {
-      ech = rttbl_host[i].rt_myaddr;
-      break;
-    }
-  }
-  if (ech == 0) {
-    for (i = 0; i < 255; i++) {
-      if (rttbl_net[i].rt_link == LINK_ETHER) {
-	ech = rttbl_net[i].rt_myaddr;
-	break;
-      }
-    }
-  }
-  PTUNLOCK(rttbl_lock);
-  return (ech == 0 ? mychaddr[0] : ech);  // hmm, are defaults good?
-}
-
-void
-send_chaos_arp_request(int fd, u_short chaddr)
-{
-  static u_short eth_chaddr = 0;
-  u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
-  struct arphdr *arp = (struct arphdr *)&req;
-
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
-
-  memset(&req, 0, sizeof(req));
-  arp->ar_hrd = htons(ARPHRD_ETHER); /* Want ethernet address */
-  arp->ar_pro = htons(ETHERTYPE_CHAOS);	/* of a Chaosnet address */
-  arp->ar_hln = ETHER_ADDR_LEN;
-  arp->ar_pln = sizeof(chaddr);
-  arp->ar_op = htons(ARPOP_REQUEST);
-  memcpy(&req[sizeof(struct arphdr)], &myea, ETHER_ADDR_LEN);	/* my ether */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &eth_chaddr, sizeof(eth_chaddr)); /* my chaos */
-  /* his chaos */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2+ETHER_ADDR_LEN], &chaddr, sizeof(chaddr));
-
-  send_packet(fd, ETHERTYPE_ARP, eth_brd, ETHER_ADDR_LEN, req, sizeof(req));
-}
-
-void
-send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
-{
-  u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
-  struct arphdr *arp = (struct arphdr *)&req;
-  memset(&req, 0, sizeof(req));
-  arp->ar_hrd = htons(ARPHRD_ETHER); /* Want ethernet address */
-  arp->ar_pro = htons(ETHERTYPE_CHAOS);	/* of a Chaosnet address */
-  arp->ar_hln = ETHER_ADDR_LEN;
-  arp->ar_pln = sizeof(u_short);
-  arp->ar_op = htons(ARPOP_REPLY);
-  memcpy(&req[sizeof(struct arphdr)], &myea, ETHER_ADDR_LEN);	/* my ether */
-  /* proxying for this */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &schaddr, sizeof(u_short));
-  /* His ether */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2], deaddr, ETHER_ADDR_LEN);
-  /* his chaos */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2+ETHER_ADDR_LEN], &dchaddr, sizeof(dchaddr));
-
-  send_packet(fd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
-}
-#endif // CHAOS_ETHERP
-
-void 
-dump_routing_table_responder(u_char *rfc, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
-  u_char ans[CH_PK_MAXLEN];
-  struct chaos_header *ap = (struct chaos_header *)&ans;
-  int i;
-
-  if (verbose || debug) {
-    fprintf(stderr,"Handling DUMP-ROUTING-TABLE from %#o to %#o\n",
-	    src, dst);
-    print_routing_table();
-  }  
-
-  memset(ans, 0, sizeof(ans));
-  set_ch_opcode(ap, CHOP_ANS);
-  set_ch_destaddr(ap, src);
-  set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
-  set_ch_srcindex(ap, ch_destindex(ch));
-
-  i = make_dump_routing_table_pkt((u_char *)ap, sizeof(ans));
-  if (verbose || debug) {
-    fprintf(stderr,"Responding to DUMP-ROUTING-TABLE with %d bytes\n", i);
-  }
-  set_ch_nbytes(ap, i);
-
-  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
-}
-
-int
-make_time_pkt(u_char *pkt, int pklen, time_t t)
-{
-  u_char *data = (u_char *)&pkt[CHAOS_HEADERSIZE];
-  // LSB first (see MIT AIM 628) and in 11 order
-  data[1] = t & 0xff;
-  data[0] = (t>>8) & 0xff;
-  data[3] = (t>>16) & 0xff;
-  data[2] = (t>>24) & 0xff;
-  if (debug)
-    fprintf(stderr,"Time pkt: %#lx => %02x %02x %02x %02x\n",
-	    t, data[0], data[1], data[2], data[3]);
-  return 4;
-}
-
-// @@@@ lots of copy-paste here, generalize
-void
-uptime_responder(u_char *rfc, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
-  u_char ans[CH_PK_MAXLEN];
-  struct chaos_header *ap = (struct chaos_header *)&ans;
-  int i;
-
-  if (verbose || debug) {
-    fprintf(stderr,"Handling UPTIME from %#o to %#o\n",
-	    src, dst);
-  }  
-
-  memset(ans, 0, sizeof(ans));
-  set_ch_opcode(ap, CHOP_ANS);
-  set_ch_destaddr(ap, src);
-  set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
-  set_ch_srcindex(ap, ch_destindex(ch));
-
-  time_t now = time(NULL);
-  i = make_time_pkt((u_char *)ap, sizeof(ans), (now-boottime)*60);
-  if (verbose || debug) {
-    fprintf(stderr,"Responding to UPTIME with %d bytes\n", i);
-  }
-  set_ch_nbytes(ap, i);
-
-  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
-}
-
-void
-time_responder(u_char *rfc, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
-  u_char ans[CH_PK_MAXLEN];
-  struct chaos_header *ap = (struct chaos_header *)&ans;
-  int i;
-
-  if (verbose || debug) {
-    fprintf(stderr,"Handling TIME from %#o to %#o\n",
-	    src, dst);
-  }  
-
-  memset(ans, 0, sizeof(ans));
-  set_ch_opcode(ap, CHOP_ANS);
-  set_ch_destaddr(ap, src);
-  set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
-  set_ch_srcindex(ap, ch_destindex(ch));
-
-  time_t now = time(NULL);
-  i = make_time_pkt((u_char *)ap, sizeof(ans), now+2208988800L);  /* see RFC 868 */
-  if (verbose || debug) {
-    fprintf(stderr,"Responding to TIME with %d bytes\n", i);
-  }
-  set_ch_nbytes(ap, i);
-
-  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
-}
-
-#if CHAOS_TLS
-// send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
-void
-send_empty_sns(struct tls_dest *td)
-{
-  u_char pkt[CH_PK_MAXLEN];
-  struct chaos_header *ch = (struct chaos_header *)pkt;
-  u_short src = (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
-  u_short dst = td->tls_addr;
-  int i;
-
-  struct chroute *rt = find_in_routing_table(dst, 1, 0);
-  if (rt == NULL) {
-    if (tls_debug) fprintf(stderr,"Can't send SNS to %#o - no route found!\n", dst);
-    return;
-  } else
-    if (rt->rt_myaddr > 0)
-      src = rt->rt_myaddr;
-
-  if (verbose || debug || tls_debug) 
-    fprintf(stderr,"Sending SNS from %#o to %#o\n", src, dst);
-
-  memset(pkt, 0, sizeof(pkt));
-  set_ch_opcode(ch, CHOP_SNS);
-  set_ch_destaddr(ch, dst);
-  set_ch_srcaddr(ch, src);
-  set_ch_nbytes(ch, 0);
-
-  send_chaos_pkt((u_char *)ch, ch_nbytes(ch)+CHAOS_HEADERSIZE);
-}
-#endif // CHAOS_TLS
-
-#if COLLECT_STATS
-void 
-status_responder(u_char *rfc, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
-  u_char ans[CH_PK_MAXLEN];
-  struct chaos_header *ap = (struct chaos_header *)&ans;
-  int i;
-
-  memset(ans, 0, sizeof(ans));
-  set_ch_opcode(ap, CHOP_ANS);
-  set_ch_destaddr(ap, src);
-  set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
-  set_ch_srcindex(ap, ch_destindex(ch));
-
-  u_short *dp = (u_short *)&ans[CHAOS_HEADERSIZE];
-
-  // First 32 bytes contain the name of the node, padded on the right with zero bytes.
-  ch_11_puts((u_char *)dp, (u_char *)myname);	/* this rounds up to 16-bit border */
-  dp += strlen((char *)myname)/2+1;
-  for (i = strlen((char *)myname)/2+1; i < 32/2; i++)
-    *dp++ = 0;
-
-  int maxentries = 12;		// max 244 words in a Chaos pkt, 16 for Node name, 18 per entry below
-  // Low-order half of 32-bit word comes first
-  for (i = 0; i < 256 && maxentries > 0; i++) {
-    if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)) {
-      maxentries--;
-      *dp++ = htons(i + 0400);		/* subnet + 0400 */
-      *dp++ = htons(16);		/* length in 16-bit words */
-      *dp++ = htons(linktab[i].pkt_in & 0xffff);
-      *dp++ = htons(linktab[i].pkt_in>>16);
-      *dp++ = htons(linktab[i].pkt_out & 0xffff);
-      *dp++ = htons(linktab[i].pkt_out>>16);
-      *dp++ = htons(linktab[i].pkt_aborted & 0xffff);
-      *dp++ = htons(linktab[i].pkt_aborted>>16);
-      *dp++ = htons(linktab[i].pkt_lost & 0xffff);
-      *dp++ = htons(linktab[i].pkt_lost>>16);
-      *dp++ = htons(linktab[i].pkt_crcerr & 0xffff);
-      *dp++ = htons(linktab[i].pkt_crcerr>>16);
-      *dp++ = htons(linktab[i].pkt_crcerr_post & 0xffff);
-      *dp++ = htons(linktab[i].pkt_crcerr_post>>16);
-      *dp++ = htons(linktab[i].pkt_badlen & 0xffff);
-      *dp++ = htons(linktab[i].pkt_badlen>>16);
-      *dp++ = htons(linktab[i].pkt_rejected & 0xffff);
-      *dp++ = htons(linktab[i].pkt_rejected>>16);
-    }
-  }
-  if (maxentries == 0)
-    fprintf(stderr,"WARNING: your linktab contains too many networks (%d),\n"
-	    " %d of them do not fit in STATUS pkt\n",
-	    12+maxentries, maxentries);
-  set_ch_nbytes(ap, (dp-(u_short *)&ans[CHAOS_HEADERSIZE])*2);
-
-  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
-}
-
-
-void 
-lastcn_responder(u_char *rfc, int len)
-{
-  struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
-  u_char ans[CH_PK_MAXLEN];
-  struct chaos_header *ap = (struct chaos_header *)&ans;
-  int i, n;
-
-  memset(ans, 0, sizeof(ans));
-  set_ch_opcode(ap, CHOP_ANS);
-  set_ch_destaddr(ap, src);
-  set_ch_destindex(ap, ch_srcindex(ch));
-  set_ch_srcaddr(ap, dst);
-  set_ch_srcindex(ap, ch_destindex(ch));
-
-  u_short *dp = (u_short *)&ans[CHAOS_HEADERSIZE];
-
-  int words_per_entry = 7;	// see below
-  int maxentries = 244/words_per_entry;
-  // Low-order half of 32-bit word comes first
-  time_t now = time(NULL);
-  for (n = 0; n < 256 && maxentries > 0; n++) {
-    struct hostat *he = hosttab[n];
-    if (he != NULL) {
-      for (i = 0; i < 256 && maxentries > 0; i++) {
-	if (he[i].hst_in != 0 || he[i].hst_last_hop != 0 || he[i].hst_last_seen != 0) {
-	  *dp++ = htons(words_per_entry); /* length in 16-bit words */
-	  *dp++ = htons((n << 8) | i);	/* host addr */
-	  *dp++ = htons(he[i].hst_in & 0xffff);	 /* input pkts from it */
-	  *dp++ = htons(he[i].hst_in>>16);
-	  *dp++ = htons(he[i].hst_last_hop);  /* last seen from this router */
-	  u_int when = he[i].hst_last_seen > 0 ? now - he[i].hst_last_seen : 0;
-	  *dp++ = htons(when & 0xffff);	 /* how many seconds ago */
-	  *dp++ = htons(when >> 16);
-	  maxentries--;
-	}
-      }
-    }
-  }
-  if (maxentries == 0)
-    fprintf(stderr,"WARNING: your hosttab contains too many addesses,\n"
-	    " %d of them do not fit in LASTCN pkt\n",
-	    maxentries);
-  set_ch_nbytes(ap, (dp-(u_short *)&ans[CHAOS_HEADERSIZE])*2);
-
-  send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
-}
-#endif // COLLECT_STATS
-
 // **** Bridging between links
 
-void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen) 
+void
+forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen) 
 {
   int i;
-  u_char chubuf[CH_PK_MAXLEN + CHUDP_HEADERSIZE];
   struct chaos_header *ch = (struct chaos_header *)data;
-  struct chudp_header *chu = (struct chudp_header *)&chubuf;
 
   u_short dchad = ch_destaddr(ch);
   u_short schad = ch_srcaddr(ch);
@@ -2688,116 +609,19 @@ void forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   switch (rt->rt_link) {
 #if CHAOS_ETHERP
   case LINK_ETHER:
-    if (debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
-    // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
-    dlen -= CHAOS_HW_TRAILERSIZE;
-    htons_buf((u_short *)ch, (u_short *)ch, dlen);
-    if (dchad == 0) {		/* broadcast */
-      if (debug) fprintf(stderr,"Forward: Broadcasting on ether from %#o\n", schad);
-      send_packet(chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
-    } else {
-      if (rt->rt_type == RT_BRIDGE)
-	// the bridge is on Ether, but the dest might not be
-	dchad = rt->rt_braddr;
-      u_char *eaddr = find_arp_entry(dchad);
-      if (eaddr != NULL) {
-	if (debug) fprintf(stderr,"Forward: Sending on ether from %#o to %#o\n", schad, dchad);
-	send_packet(chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
-      } else {
-	if (debug) fprintf(stderr,"Forward: Don't know %#o, sending ARP request\n", dchad);
-	send_chaos_arp_request(arpfd, dchad);
-	// Chaos sender will retransmit, surely.
-      }
-    }
+    forward_on_ether(rt, schad, dchad, ch, data, dlen);
     break;
 #endif // CHAOS_ETHERP
   case LINK_UNIXSOCK:
-    // There can be only one?
-    htons_buf((u_short *)ch, (u_short *)ch, dlen);
-    if (unixsock > 0) {
-      if (debug) fprintf(stderr,"Forward: Sending on unix from %#o to %#o\n", schad, dchad);
-      u_send_chaos(unixsock, data, dlen);
-    }
+    forward_on_usocket(rt, schad, dchad, ch, data, dlen);
     break;
 #if CHAOS_TLS
   case LINK_TLS:
-    // send it in network order, with trailer
-    if (debug) fprintf(stderr,"Forward: Sending on TLS from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
-
-    struct tls_dest *td = NULL;
-    PTLOCK(tlsdest_lock);
-    for (i = 0; i < *tlsdest_len; i++) {
-      if (
-	  /* direct link to destination */
-	  (tlsdest[i].tls_addr == dchad)
-	  /* route to bridge */
-	  || 
-	  (tlsdest[i].tls_addr == rt->rt_braddr)
-	  /* route to dest */
-	  || 
-	  (rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
-	  ) {
-	if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
-	td = &tlsdest[i];
-	break;
-      }
-    }
-    PTUNLOCK(tlsdest_lock);
-    if (td != NULL) {
-      htons_buf((u_short *)ch, (u_short *)ch, dlen);
-      tls_write_record(td, data, dlen);
-    }
-    if (td == NULL && (verbose || debug))
-      fprintf(stderr, "Can't find TLS link to %#o via %#o/%#o\n",
-	      dchad, rt->rt_dest, rt->rt_braddr);
+    forward_on_tls(rt, schad, dchad, ch, data, dlen);
     break;
 #endif
   case LINK_CHUDP:
-    if (debug) fprintf(stderr,"Forward: Sending on CHUDP from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
-    /* Add CHUDP header, copy message only once (in case it needs to be sent more than once) */
-    memset(&chubuf, 0, sizeof(chubuf));
-    chu->chudp_version = CHUDP_VERSION;
-    chu->chudp_function = CHUDP_PKT;
-    // Assert that dlen+CHUDP_HEADERSIZE <= sizeof(chubuf)
-    memcpy(&chubuf[CHUDP_HEADERSIZE], data, dlen);
-
-    found = 0;
-
-    if (verbose || debug) {
-      fprintf(stderr,"Looking for CHUDP dest for this route:\n");
-      fprintf(stderr,"Host\tBridge\tType\tLink\tCost\tMyAddr\n");
-      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%d\t%#o\n",
-	      rt->rt_dest, rt->rt_braddr, rt_typename(rt->rt_type), rt_linkname(rt->rt_link), rt->rt_cost, rt->rt_myaddr);
-    }
-
-    PTLOCK(chudp_lock);
-    for (i = 0; (i < *chudpdest_len) && !found; i++) {
-      if (
-#if 0
-	  dchad == 0		/* broadcast: goes on all links */
-	  || 
-#endif
-	  /* direct link to destination */
-	  (chudpdest[i].chu_addr == dchad)
-	  /* route to bridge */
-	  || 
-	  (chudpdest[i].chu_addr == rt->rt_braddr)
-	  /* route to dest */
-	  || 
-	  (rt->rt_braddr == 0 && (chudpdest[i].chu_addr == rt->rt_dest))
-	  ) {
-	if (verbose || debug) fprintf(stderr,"Forward CHUDP to dest %#o over %#o (%s)\n", dchad, chudpdest[i].chu_addr, chudpdest[i].chu_name);
-	found = 1;
-	if (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET)
-	  chudp_send_pkt(udpsock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
-	else
-	  chudp_send_pkt(udp6sock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
-      }
-    }
-    PTUNLOCK(chudp_lock);
-    if (!found && (verbose || debug))
-      fprintf(stderr, "Can't find CHUDP link to %#o via %#o/%#o\n",
-	      dchad, rt->rt_dest, rt->rt_braddr);
+    forward_on_chudp(rt, schad, dchad, ch, data, dlen);
     break;
   default:
     if (verbose) fprintf(stderr,"Can't forward pkt on bad link type %d\n", rt->rt_link);
@@ -2809,7 +633,6 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   struct chaos_header *ch = (struct chaos_header *)data;
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
 
-#if COLLECT_STATS
   u_short schad = ch_srcaddr(ch);  /* source */
   if (dlen >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
     // use hw trailer if available
@@ -2817,11 +640,9 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
       schad = htons(tr->ch_hw_srcaddr);
     }
   }
-#endif
   u_short dchad = ch_destaddr(ch);  /* destination */
   u_char fwc = ch_fc(ch);	/* forwarding count */
 
-#if COLLECT_STATS
   if (src >= 0) {
     PTLOCK(linktab_lock);
     linktab[src>>8].pkt_in++;
@@ -2835,18 +656,15 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   } else if (debug)
     fprintf(stderr,"No source given in forward from %#o to %#o\n",
 	    schad, dchad);
-#endif
 
   fwc++;
   if (fwc > CH_FORWARD_MAX) {	/* over-forwarded */
     if (verbose) fprintf(stderr,"%%%% Dropping over-forwarded pkt for %#o\n", dchad);
-#if COLLECT_STATS
     if (src >= 0) {
       PTLOCK(linktab_lock);
       linktab[src>>8].pkt_rejected++;
       PTUNLOCK(linktab_lock);
     }
-#endif
     return;
   }
   set_ch_fc(ch,fwc);		/* update */
@@ -2879,18 +697,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
     if (ch_opcode(ch) == CHOP_RFC) {
       // see what contact they look for
-      int i;
-      u_char *cname = (u_char *)calloc(ch_nbytes(ch)+1, sizeof(u_char));
-      ch_11_gets(&data[CHAOS_HEADERSIZE], cname, ch_nbytes(ch));
-      for (i = 0; i < MAX_CONTACT; i++) {
-	if ((strncmp((char *)cname, (char *)mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
-	    && (ch_nbytes(ch) == strlen(mycontacts[i].contact))) {
-	  if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);
-	  // call the handler
-	  (*mycontacts[i].handler)(data, dlen);
-	  break;
-	}
-      }
+      handle_rfc(ch, data, dlen);
     }
     else
       if (verbose) {
@@ -2935,21 +742,17 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 			 dchad, rt->rt_dest, rt->rt_braddr,
 			 rt_linkname(rt->rt_link));
 
-#if COLLECT_STATS
     PTLOCK(linktab_lock);
     linktab[rt->rt_dest >>8 ].pkt_out++;
     PTUNLOCK(linktab_lock);
-#endif
     forward_chaos_pkt_on_route(rt, data, dlen);
   } else {
     if (verbose) fprintf(stderr,"Can't find route to %#o\n", dchad);
-#if COLLECT_STATS
     if (src >= 0) {
       PTLOCK(linktab_lock);
       linktab[src>>8].pkt_rejected++;
       PTUNLOCK(linktab_lock);
     }
-#endif
   }    
 }
 
@@ -2985,14 +788,12 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
       set_ch_destaddr(cha, rt->rt_dest);
     break;
   }
-#if COLLECT_STATS
   PTLOCK(linktab_lock);
   if (ch_destaddr(cha) == 0)
     linktab[rt->rt_dest >> 8].pkt_out++;
   else
     linktab[ch_destaddr(cha) >> 8].pkt_out++;
   PTUNLOCK(linktab_lock);
-#endif
 
   forward_chaos_pkt_on_route(rt, pkt, c);
 }
@@ -3006,7 +807,8 @@ route_cost_updater(void *v)
   }
 }
 
-void * rut_sender(void *v)
+void *
+rut_sender(void *v)
 {
   int i, c;
   u_char pkt[CH_PK_MAXLEN];
@@ -3064,1334 +866,13 @@ void send_chaos_pkt(u_char *pkt, int len)
 		       rt_linkname(rt->rt_link),
 		       rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr
 		       );
-#if COLLECT_STATS
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest>>8].pkt_out++;
   PTUNLOCK(linktab_lock);
-#endif
 
-    forward_chaos_pkt_on_route(rt, pkt, len);
+  forward_chaos_pkt_on_route(rt, pkt, len);
 }
 
-
-void * unix_input(void *v)
-{
-  /* Unix -> others thread */
-  u_char data[CH_PK_MAXLEN];
-  int len, blen = sizeof(data);
-  u_char *pkt = data;
-
-#if COLLECT_STATS
-  u_char us_subnet = 0;		/* unix socket subnet */
-  int i;
-  for (i = 0; i < *rttbl_host_len; i++) {
-    if (rttbl_host[i].rt_link == LINK_UNIXSOCK) {
-      us_subnet = rttbl_host[i].rt_dest >> 8;
-      break;
-    }
-  }
-#endif
-
-  while (1) {
-    memset(pkt, 0, blen);
-    if (unixsock < 0 || (len = u_read_chaos(unixsock, pkt, blen)) < 0) {
-      if (unixsock > 0)
-	close(unixsock);
-      unixsock = -1;		// avoid using it until it's reopened
-      if (verbose) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
-      sleep(5);			/* wait a bit to let chaosd restart */
-      unixsock = u_connect_to_server();
-    } else {
-      if (debug) fprintf(stderr,"unix input %d bytes\n", len);
-
-      ntohs_buf((u_short *)pkt, (u_short *)pkt, len);
-
-#if COLLECT_STATS
-      struct chaos_header *ch = (struct chaos_header *)pkt;
-      if (len == ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
-	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	// check for bogus/ignorable trailer or checksum.
-	// Symbolics known to send trailer checksum -1
-	if ((tr->ch_hw_destaddr != 0 && tr->ch_hw_srcaddr != 0 && tr->ch_hw_checksum != 0)
-	    && tr->ch_hw_checksum != 0xffff) {
-	  u_short schad = ch_srcaddr(ch);
-	  u_int cks = ch_checksum(pkt, len);
-	  if (cks != 0) {
-	    // See if it is a weird case, usim byte swapping bug?
-	    tr->ch_hw_checksum = ntohs(tr->ch_hw_checksum);
-	    if (ch_checksum(pkt, len) != 0) {
-	      // Still bad
-	      if (verbose || debug) {
-		fprintf(stderr,"[Bad checksum %#x from %#o (Unix)]\n", cks, schad);
-		fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
-			tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-		ch_dumpkt(pkt, len);
-	      }
-	      // Use link source net, can't really trust data
-	      PTLOCK(linktab_lock);
-	      linktab[us_subnet].pkt_crcerr++;
-	      PTUNLOCK(linktab_lock);
-	      continue;
-	    } else {
-	      // weird case, usim byte swapping bug?
-	      if (debug) fprintf(stderr,"[Checksum from %#o (Unix) was fixed by swapping]\n", schad);
-	      PTLOCK(linktab_lock);
-	      // Count it, but accept it.
-	      linktab[us_subnet].pkt_crcerr_post++;
-	      PTUNLOCK(linktab_lock);
-	    }
-	  }
-	} else if (debug)
-	  fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Unix\n",
-		  tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-      } else if (debug) {
-	fprintf(stderr,"Unix: Received no HW trailer (len %d != %lu = %d+%lu+%lu)\n",
-		len, ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE,
-		ch_nbytes(ch), CHAOS_HEADERSIZE, CHAOS_HW_TRAILERSIZE);
-	ch_dumpkt(pkt, len);
-      }
-#endif
-      // check where it's coming from, prefer trailer info
-      u_short srcaddr;
-      if (len > (ch_nbytes(ch) + CHAOS_HEADERSIZE)) {
-	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	srcaddr = tr->ch_hw_srcaddr;
-      } else
-	srcaddr = ch_srcaddr(ch);
-      if (is_mychaddr(srcaddr)) {
-	// Unix socket server/chaosd echoes everything to everyone
-	// (This is checked also in forward_chaos_pkt, but optimize a little?)
-	if (debug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
-	continue;
-      }
-      struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-      forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
-			srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
-			pkt, len, LINK_UNIXSOCK);
-    }
-  }
-}
-
-
-void * chudp_input(void *v)
-{
-  /* CHUDP -> others thread */
-  int sock = (int)*(int *)v;
-  u_int len;
-  u_char data[CH_PK_MAXLEN+CHUDP_HEADERSIZE];
-  struct chaos_header *ch = (struct chaos_header *)&data[CHUDP_HEADERSIZE];
-
-  while (1) {
-    bzero(data,sizeof(data));
-    len = chudp_receive(sock, data, sizeof(data));
-    /*       len = CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE; */
-    if (len >= (CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + CHAOS_HW_TRAILERSIZE)) {
-      len -= CHUDP_HEADERSIZE;
-      if (debug) fprintf(stderr,"chudp input %d bytes\n", len);
-      // check where it's coming from
-      u_short srcaddr;
-      if (len > (ch_nbytes(ch) + CHAOS_HEADERSIZE)) {
-	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[CHUDP_HEADERSIZE+len-CHAOS_HW_TRAILERSIZE];
-	srcaddr = ntohs(tr->ch_hw_srcaddr);
-      } else
-	srcaddr = ch_srcaddr(ch);
-      struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-      forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			srcrt != NULL ? srcrt->rt_type : RT_BRIDGE,
-			srcrt != NULL ? srcrt->rt_cost : RTCOST_ASYNCH,
-			(u_char *)ch, len, LINK_CHUDP);
-    } else
-      if (len > 0 && verbose) fprintf(stderr,"chudp: Short packet %d bytes\n", len);
-  }
-}
-
-#if CHAOS_TLS
-// One server thread which listens for new connections,
-// Client links: connect and wait for writers to ask for re-connection.
-// One input thread which selects on all tls_sock fields.
-// For input thread and for writers (through forward_on_link)
-// - If error on client link, ask for re-connection
-// - If error on server link, close/disable it (and wait for client to reconnect)
-// @@@@ Probably tons of memory leaks in SSL library.
-
-// See https://wiki.openssl.org/index.php/Simple_TLS_Server,
-//     https://github.com/CloudFundoo/SSL-TLS-clientserver
-
-void init_openssl()
-{ 
-  SSL_library_init();
-  SSL_load_error_strings();	
-  OpenSSL_add_ssl_algorithms();
-}
-
-// not used
-void cleanup_openssl()
-{
-    EVP_cleanup();
-}
-
-// Find Chaosnet addr of CN through DNS:
-// this is just too much work with a poorly documented library (libresolv)
-// which also seems to think it needs to connect over chaosnet to find chaosnet data.
-// Instead, can we find the subjectAltName and let that be just an int 0x701 etc?
-// Seems too hairy (yet) to include it in cert (maybe not with openssl
-// 1.1.1, see https://security.stackexchange.com/a/183973)
-
-u_char *
-tls_get_cert_cn(X509 *cert)
-{
-  // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
-  int common_name_loc = -1, subj_alt_name_loc = -1;
-  X509_NAME_ENTRY *common_name_entry = NULL, *subj_alt_name_entry = NULL;
-  ASN1_STRING *common_name_asn1 = NULL, *subj_alt_name_asn1 = NULL;
-  char *common_name_str = NULL, *subj_alt_name_str = NULL;
-
-  // Find the position of the CN field in the Subject field of the certificate
-  common_name_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) cert), NID_commonName, -1);
-  if (common_name_loc < 0) {
-    if (tls_debug)
-      fprintf(stderr,"TLS get_cert_cn: can't find CN");
-    return NULL;
-  }
-
-  // Extract the CN field
-  common_name_entry = X509_NAME_get_entry(X509_get_subject_name((X509 *) cert), common_name_loc);
-  if (common_name_entry == NULL) {
-    if (tls_debug)
-      fprintf(stderr,"TLS get_cert_cn: can't extract CN");
-    return NULL;
-  }
-
-  // Convert the CN field to a C string
-  common_name_asn1 = X509_NAME_ENTRY_get_data(common_name_entry);
-  if (common_name_asn1 == NULL) {
-    if (tls_debug)
-      fprintf(stderr,"TLS get_cert_cn: can't convert CN to C string");
-    return NULL;
-  }			
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-  common_name_str = (char *) ASN1_STRING_data(common_name_asn1);
-#else
-  common_name_str = (char *) ASN1_STRING_get0_data(common_name_asn1);
-#endif
-  // Make sure there isn't an embedded NUL character in the CN
-  if (ASN1_STRING_length(common_name_asn1) != strlen(common_name_str)) {
-    if (tls_debug)
-      fprintf(stderr,"TLS get_cert_cn: malformed CN (NUL in CN)\n");
-    return NULL; // MalformedCertificate;
-  }
-  return (u_char *)common_name_str;
-}
-
-SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
-{
-    SSL_CTX *ctx;
-
-    ctx = SSL_CTX_new(method);
-    if (!ctx) {
-	perror("Unable to create SSL context");
-	ERR_print_errors_fp(stderr);
-	exit(EXIT_FAILURE);
-    }
-
-    return ctx;
-}
-
-SSL_CTX *tls_create_client_context()
-{
-  const SSL_METHOD *method;
-
-    method = SSLv23_client_method();
-    return tls_create_some_context(method);
-}
-
-SSL_CTX *tls_create_server_context()
-{
-   const SSL_METHOD *method;
-    method = SSLv23_server_method();
-    return tls_create_some_context(method);
-}
-
-void tls_configure_context(SSL_CTX *ctx)
-{
-  // Auto-select elliptic curve
-#ifdef SSL_CTX_set_ecdh_auto
-    SSL_CTX_set_ecdh_auto(ctx, 1);
-#endif
-
-    /* Set the key and cert */
-    if (SSL_CTX_use_certificate_file(ctx, tls_cert_file, SSL_FILETYPE_PEM) <= 0) {
-        ERR_print_errors_fp(stderr);
-	exit(EXIT_FAILURE);
-    }
-    if (SSL_CTX_use_PrivateKey_file(ctx, tls_key_file, SSL_FILETYPE_PEM) <= 0 ) {
-        ERR_print_errors_fp(stderr);
-	exit(EXIT_FAILURE);
-    }
-    // Check key and cert
-    if (SSL_CTX_check_private_key(ctx) != 1) {
-      fprintf(stderr,"Private key and certificate do not match\n");
-      ERR_print_errors_fp(stderr);
-      exit(EXIT_FAILURE);
-    }
-    // Load CA cert chain
-    if (!SSL_CTX_load_verify_locations(ctx, tls_ca_file, NULL)) {
-	ERR_print_errors_fp(stderr);
-	exit(EXIT_FAILURE);
-      }
-    // Make sure to verify the peer (both server and client)
-    // Consider adding a callback to validate CN/subjectAltName?
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-    // go up to "higher level CA"
-    SSL_CTX_set_verify_depth(ctx, 2);
-}
-
-
-// Routes, tlsdest etc
-
-// Should only be called by server (clients have their routes set up by config)
-struct chroute *
-add_tls_route(int tindex, u_short srcaddr)
-{
-  struct chroute * srcrt = NULL;
-  PTLOCK(rttbl_lock);
-  // find any old entry (only host route, also nopath)
-  srcrt = find_in_routing_table(srcaddr, 1, 1);
-  if (srcrt != NULL) {
-    // old route exists
-    if (tls_debug) fprintf(stderr,"TLS route to %#o found (type %s), updating to Fixed\n", srcaddr, rt_typename(srcrt->rt_type));
-    srcrt->rt_type = RT_FIXED;
-    srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
-  } else {
-    if (*rttbl_host_len < RTTBL_HOST_MAX) {
-      // make a routing entry for host srcaddr through tls link at tlsindex
-      // "link tls [tlsdest stuff] host [srcaddr]
-      rttbl_host[*rttbl_host_len].rt_dest = srcaddr;
-      rttbl_host[*rttbl_host_len].rt_braddr = 0;  /* direct, not through a bridge */
-      rttbl_host[*rttbl_host_len].rt_myaddr = tls_myaddr;  /* if 0, the main address is used */
-      rttbl_host[*rttbl_host_len].rt_type = RT_FIXED;
-      rttbl_host[*rttbl_host_len].rt_link = LINK_TLS;
-      rttbl_host[*rttbl_host_len].rt_cost = RTCOST_ASYNCH;
-      rttbl_host[*rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
-      srcrt = &rttbl_host[*rttbl_host_len];
-      (*rttbl_host_len)++;
-      if (verbose) print_routing_table();
-    } else
-      fprintf(stderr,"%%%% host route table full (adding TLS for %#o), increase RTTBL_HOST_MAX!\n", srcaddr);
-  }
-  PTUNLOCK(rttbl_lock);
-  PTLOCK(tlsdest_lock);
-  if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr))
-    fprintf(stderr,"%%%% TLS link %d chaos address already known (%#o) but route not found - updating to %#o\n",
-	    tindex, tlsdest[tindex].tls_addr, srcaddr);
-  if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
-  tlsdest[tindex].tls_addr = srcaddr;
-  PTUNLOCK(tlsdest_lock);
-  return srcrt;
-}
-
-void
-close_tlsdest(struct tls_dest *td)
-{
-  PTLOCK(tlsdest_lock);
-  if (td->tls_serverp) {
-    // forget remote sockaddr
-    memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
-    // forget remote chaos addr
-    td->tls_addr = 0;
-  }
-  if (td->tls_ssl != NULL) {
-    SSL_free(td->tls_ssl);
-    td->tls_ssl = NULL;
-  }
-  if (td->tls_sock != 0) {
-    close(td->tls_sock);
-    td->tls_sock = 0;
-  }
-  PTUNLOCK(tlsdest_lock);
-}
-
-void
-update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ssl)
-{
-  // defining the client link adds the tlsdest entry, but need to fill in and initialize mutex/conds
-
-  // fill in tls_name, tls_sock, tls_ssl
-  PTLOCK(tlsdest_lock);
-#if 0
-  // don't - we need the "IP name" of the server
-  if (server_cn != NULL)
-    strncpy(td->tls_name, (char *)server_cn, TLSDEST_NAME_LEN);
-#endif
-  td->tls_serverp = 0;
-  td->tls_sock = tsock;
-  td->tls_ssl = ssl;
-
-  // initiate these
-  if (pthread_mutex_init(&td->tcp_is_open_mutex, NULL) != 0)
-    perror("pthread_mutex_init(update_client_tlsdest)");
-  if (pthread_cond_init(&td->tcp_is_open_cond, NULL) != 0)
-    perror("pthread_cond_init(update_client_tlsdest)");
-  if (pthread_mutex_init(&td->tcp_reconnect_mutex, NULL) != 0)
-    perror("pthread_mutex_init(update_client_tlsdest)");
-  if (pthread_cond_init(&td->tcp_reconnect_cond, NULL) != 0)
-    perror("pthread_cond_init(update_client_tlsdest)");
-  
-  PTUNLOCK(tlsdest_lock);
-}
-
-
-void
-add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len)
-{
-  // no tlsdest exists for server end, until it is connected
-  struct tls_dest *td = NULL;
-
-  PTLOCK(tlsdest_lock);
-  // look for name in tlsdest and reuse entry if it is closed
-  int i;
-  for (i = 0; i < *tlsdest_len; i++) {
-    if ((tlsdest[i].tls_name[0] != '\0') && tlsdest[i].tls_serverp && (strncmp(tlsdest[i].tls_name, (char *)name, TLSDEST_NAME_LEN) == 0)) {
-      td = &tlsdest[i];
-      break;
-    }
-  }
-  if (td != NULL) {
-    if (tls_debug) fprintf(stderr,"Reusing tlsdest for %s\n", name);
-    // update sock and ssl
-    td->tls_sock = sock;
-    td->tls_ssl = ssl;
-    // get sockaddr
-    memcpy((void *)&td->tls_sa.tls_saddr, sa, sa_len);
-  } else {
-    // crete a new entry
-    if (*tlsdest_len >= TLSDEST_MAX) {
-      PTUNLOCK(tlsdest_lock);
-      fprintf(stderr,"%%%% tlsdest is full! Increase TLSDEST_MAX\n");
-      return;
-    }
-    if (tls_debug) {
-      char ip6[INET6_ADDRSTRLEN];
-      if (inet_ntop(sa->sa_family,
-		    (sa->sa_family == AF_INET ?
-		     (void *)&((struct sockaddr_in *)sa)->sin_addr :
-		     (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
-		    ip6, sizeof(ip6)) == NULL)
-	strerror_r(errno,ip6,sizeof(ip6));
-      fprintf(stderr,"Adding new TLS destination %s from %s port %d\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
-    }
-
-    memset(&tlsdest[*tlsdest_len], 0, sizeof(struct tls_dest));
-    // get sockaddr
-    memcpy(&tlsdest[*tlsdest_len].tls_sa, sa, sa_len);
-    if (name != NULL)
-      strncpy((char *)&tlsdest[*tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
-    tlsdest[*tlsdest_len].tls_serverp = 1;
-    tlsdest[*tlsdest_len].tls_sock = sock;
-    tlsdest[*tlsdest_len].tls_ssl = ssl;
-
-    (*tlsdest_len)++;
-  }
-  if (verbose) print_tlsdest_config();
-  PTUNLOCK(tlsdest_lock);
-
-  // add route when first pkt comes in, see tls_input
-}
-
-// TCP low-level things
-int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
-{
-  struct sockaddr caddr;
-  int fd;
-  u_int clen = sizeof(struct sockaddr);
-  u_int *slen = &clen;
-  struct sockaddr *sa = &caddr;
-
-  if ((saddr != NULL) && (*sa_len != 0)) {
-    // fill in sockaddr
-    sa = saddr;
-    slen = sa_len;
-  }
-
-
-  if ((fd = accept(sock, (struct sockaddr *)sa, slen)) < 0) {
-    perror("accept");
-    fprintf(stderr,"errno = %d\n", errno);
-    // @@@@ better error handling, back off and try again? what could go wrong here?
-    exit(1);
-  }
-  // @@@@ log stuff about the connection?
-  if (tls_debug) {
-    char ip6[INET6_ADDRSTRLEN];
-    if (inet_ntop(sa->sa_family,
-		  (sa->sa_family == AF_INET ?
-		   (void *)&((struct sockaddr_in *)sa)->sin_addr :
-		   (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
-		  ip6, sizeof(ip6)) == NULL)
-      strerror_r(errno,ip6,sizeof(ip6));
-    fprintf(stderr,"TCP accept connection from %s port %d\n", ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
-  }
-  return fd;
-}
-
-int tcp_bind_socket(int type, u_short port) 
-{
-  int sock;
-
-  if ((sock = socket(do_tls_ipv6 ? AF_INET6 : AF_INET, type, 0)) < 0) {
-    perror("socket (TCP) failed");
-    exit(1);
-  }
-  // @@@@ SO_REUSEADDR or SO_REUSEPORT
-  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
-    perror("setsockopt(SO_REUSEADDR)");
-
-  if (tls_debug)
-    fprintf(stderr,"binding socket type %d (%s), %s, to port %d\n", 
-	     type, (type == SOCK_DGRAM ? "dgram" : (type == SOCK_STREAM ? "stream" : "?")),
-	    do_tls_ipv6 ? "IPv6" : "IPv4",
-	     port);
-  if (do_tls_ipv6) {
-    struct sockaddr_in6 sin6;
-#if 0
-    // For TLS, allow both IPv4 and IPv6
-    int one = 1;
-    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0)
-      perror("setsockopt(IPV6_V6ONLY)");
-#endif
-    sin6.sin6_family = AF_INET6;
-    sin6.sin6_port = htons(port);
-    memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
-    if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
-      perror("bind(v6) failed");
-      exit(1);
-    }
-  } else {
-    struct sockaddr_in sin;
-    memset(&sin,0,sizeof(sin));
-    sin.sin_family = AF_INET;
-    sin.sin_port = htons(port);
-    sin.sin_addr.s_addr = INADDR_ANY;
-    if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
-      perror("bind() failed");
-      exit(1);
-    }
-  }
-  return sock;
-}
-
-// TCP connector, with backoff
-int tcp_client_connect(struct sockaddr *sin)
-{
-  int sock, unlucky = 1, foo;
-  
-  while (unlucky) {
-    if (tls_debug) fprintf(stderr,"TCP connect: socket family %d (%s)\n",
-			   sin->sa_family,
-			   (sin->sa_family == AF_INET ? "IPv4" :
-			    (sin->sa_family == AF_INET6 ? "IPv6" : "??")));
-    if ((sock = socket(sin->sa_family, SOCK_STREAM, 0)) < 0) {
-      perror("socket(tcp)");
-      exit(1);
-    }
-
-    if (tls_debug) {
-      char ip[INET6_ADDRSTRLEN];
-      if (inet_ntop(sin->sa_family,
-		    (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
-		    ip, sizeof(ip)) == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
-    }
-
-    if (connect(sock, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
-      if (tls_debug) {
-	perror("connect (tcp)");
-	fprintf(stderr,"connect errno %d\n", errno);
-      }
-      // back off and try again - the other end might be down
-      if (tls_debug)
-	fprintf(stderr,"TCP connect: trying again in %d s\n", unlucky);
-      if ((foo = sleep(unlucky)) != 0) {
-	fprintf(stderr,"TCP connect: sleep returned %d\n", foo);
-      }
-      // Backoff: increase sleep until 30s, then go back to 10s
-      unlucky++;
-      if (unlucky > 30) unlucky /= 3;
-      if (close(sock) < 0)
-	perror("close(tcp_client_connect)");
-      continue;
-    }
-    else
-      unlucky = 0;
-  }
-  // log stuff about the connection
-  if (tls_debug) {
-    char ip[INET6_ADDRSTRLEN];
-    if (inet_ntop(sin->sa_family,
-		  (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
-		  ip, sizeof(ip)) == NULL)
-      strerror_r(errno, ip, sizeof(ip));
-    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
-  }
-  return sock;  
-}
-
-// TLS level things.
-
-// TLS client connector thread.
-// Take struct tls_dest *td
-// Create a client context, connect to server, make TLS connection, fill in td, (add route?)
-// and wait for others to ask for reconnection.
-// Iterate.
-void *tls_connector(void *arg)
-{
-  struct tls_dest *td = (struct tls_dest *)arg;
-
-  SSL *ssl;
-  SSL_CTX *ctx = tls_create_client_context();
-  tls_configure_context(ctx);
-
-  while (1) {
-    // @@@@ re-parse tlsdest?
-    if (tls_debug) {
-      char ip[INET6_ADDRSTRLEN];
-      if (inet_ntop(td->tls_sa.tls_saddr.sa_family,
-		    (td->tls_sa.tls_saddr.sa_family == AF_INET ?
-		     (void *)&(td->tls_sa.tls_sin.sin_addr) : (void *)&(td->tls_sa.tls_sin6.sin6_addr)),
-		    ip, sizeof(ip)) == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-      fprintf(stderr,"TLS client: connecting to %s port %d\n", ip, ntohs(td->tls_sa.tls_sin.sin_port));
-    }
-    // connect to server
-    int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
-
-    if (tls_debug)
-      fprintf(stderr,"TLS client: connected\n");
-
-    if ((ssl = SSL_new(ctx)) == NULL) {
-      fprintf(stderr,"tls_connector: SSL_new failed");
-      ERR_print_errors_fp(stderr);
-      close(tsock);
-      continue; // try again
-    }
-    SSL_set_fd(ssl, tsock);
-    int v = 0;
-    if ((v = SSL_connect(ssl)) <= 0) {
-      fprintf(stderr,"%%%% Fatal error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
-      int err = SSL_get_error(ssl, v);
-      ERR_print_errors_fp(stderr);
-      close(tsock);
-      SSL_free(ssl);
-      // or just let this thread die?
-      pthread_exit(&(int){ 1 });
-      exit(1);
-      // don't just keep trying!
-      // continue;
-    }
-
-    X509 *ssl_server_cert = SSL_get_peer_certificate(ssl);
-
-    if(ssl_server_cert) {
-	long verifyresult;
-
-	verifyresult = SSL_get_verify_result(ssl);
-	if(verifyresult != X509_V_OK) {
-	  X509_free(ssl_server_cert);				
-	  SSL_free(ssl);
-	  close(tsock);
-	  continue;
-	}
-	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
-	// create tlsdest, fill in stuff
-	update_client_tlsdest(td, server_cn, tsock, ssl);
-
-	// tell others about it
-	tls_inform_tcp_is_open(td);
-
-	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
-	// SNS is supposed to be only for existing connections, but we
-	// can abuse it since the recipient is a cbridge - we handle it.
-	send_empty_sns(td);
-
-	// wait for someone to ask us to reconnect
-	tls_wait_for_reconnect_signal(td);
-	// close the old, go back and open new
-	close_tlsdest(td);
-    } else {
-      fprintf(stderr,"%%%% Fatal error: TLS client: no server cert (%s), closing\n", td->tls_name);
-      SSL_free(ssl);
-      close(tsock);
-      pthread_exit(&(int){ 1 });
-      exit(1);
-      // continue;
-    }
-  }
-}
-
-// signalling stuff
-
-void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
-// called by tls_write_record, tls_read_record on failure
-{
-  u_short chaddr = td->tls_addr;
-
-  // Count this as a lost/aborted pkt.
-  // Lost (on input):
-  //  "The number of incoming packets from this subnet lost because the
-  //  host had not yet read a previous packet out of the interface and
-  //  consequently the interface could not capture the packet"
-  // Aborted (on output):
-  //  "The number of transmissions to this subnet aborted by
-  //  collisions or because the receiver was busy."
-  PTLOCK(linktab_lock);
-  if (inputp)
-    linktab[chaddr>>8].pkt_lost++;
-  else
-    linktab[chaddr>>8].pkt_aborted++;
-  PTUNLOCK(linktab_lock);
-
-  if (td->tls_serverp) {
-    // no signalling to do, just close/free stuff
-    close_tlsdest(td);    
-    PTLOCK(rttbl_lock);
-    // also disable routing entry
-    struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
-    if (rt != NULL) {
-      if (rt->rt_type != RT_NOPATH)
-	rt->rt_cost_updated = time(NULL); // cost isn't updated, but keep track of state change
-      rt->rt_type = RT_NOPATH;
-    }
-    else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
-    // need to also disable network routes this is a bridge for
-    int i;
-    for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
-	rttbl_net[i].rt_type = RT_NOPATH;
-    }
-    PTUNLOCK(rttbl_lock);
-  } else {
-    // let connector thread do the closing/freeing
-    if (tls_debug)
-      fprintf(stderr,"TLS_please_reopen_tcp (%s)\n",td->tls_name);
-    // signal the connection thread - don't care if nobody's waiting (already working on it, probably)
-    if (pthread_mutex_lock(&td->tcp_reconnect_mutex) < 0)
-      perror("pthread_mutex_lock(reconnect)");
-    if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
-      perror("tls_please_reopen_tcp(cond)\n");
-      exit(1);
-    } 
-    if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
-      perror("pthread_mutex_unlock(reconnect)");
-  }
-}
-void tls_wait_for_reconnect_signal(struct tls_dest *td)
-// called by tls_connector, tls_listener
-{
-  /* wait for someone to ask for reconnection, typically after an error in read/write */
-  if (tls_debug)
-    fprintf(stderr,"TLS wait_for_reconnect_signal (%s)...\n", td->tls_name);
-
-  pthread_mutex_lock(&td->tcp_reconnect_mutex);
-  if (pthread_cond_wait(&td->tcp_reconnect_cond, &td->tcp_reconnect_mutex) < 0) {
-    perror("tls_wait_for_reconnect_signal(cond)");
-    exit(1);
-  }
-  if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)  {
-    perror("tls_wait_for_reconnect_signal(unlock)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_reconnect_signal done\n");
-}
-
-void tls_inform_tcp_is_open(struct tls_dest *td)
-{
-  if (tls_debug)
-    fprintf(stderr,"tls_inform_tcp_is_open (%s)\n", td->tls_name);
-  if (pthread_mutex_lock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_lock(tcp_is_open)");
-  /* wake everyone waiting on this */
-  if (pthread_cond_broadcast(&td->tcp_is_open_cond) < 0) {
-    perror("tls_inform_tcp_is_open(cond)");
-    exit(1);
-  }
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_unlock(tcp_is_open)");
-}
-void tls_wait_for_tcp_open(struct tls_dest *td)
-{
-  /* wait for tcp_is_open, and get a mutex lock */
-
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open (%s)...\n", td->tls_name);
-
-  pthread_mutex_lock(&td->tcp_is_open_mutex);
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got lock, waiting...\n");
-  if (pthread_cond_wait(&td->tcp_is_open_cond, &td->tcp_is_open_mutex) < 0) {
-    perror("wait_for_tcp_open(wait)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got signal\n");
-
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)  {
-    perror("wait_for_tcp_open(unlock)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open done\n");
-}
-
-
-// write a record length (two bytes MSB first) and that many bytes
-int tls_write_record(struct tls_dest *td, u_char *buf, int len)
-{
-  int wrote;
-  SSL *ssl;
-
-  if (len > 0xffff) {
-    fprintf(stderr,"tls_write_record: too long: %#x  > 0xffff\n", len);
-    exit(1);
-  }
-  if (len > CBRIDGE_TCP_MAXLEN) {
-    fprintf(stderr,"tcp_write_record: too long: %#x > %#x\n", len, (u_int)CBRIDGE_TCP_MAXLEN);
-    exit(1);
-  }
-
-  u_char obuf[CBRIDGE_TCP_MAXLEN+2];
-
-  obuf[0] = (len >> 8) & 0xff;
-  obuf[1] = len & 0xff;
-  memcpy(obuf+2, buf, len);
-
-  PTLOCK(tlsdest_lock);
-  if ((ssl = td->tls_ssl) == NULL) {
-    PTUNLOCK(tlsdest_lock);
-    if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td, 0);
-    return -1;
-  }
-  if ((wrote = SSL_write(ssl, obuf, 2+len)) <= 0) {
-    int err = SSL_get_error(ssl, wrote);
-    // punt;
-    fprintf(stderr,"SSL_write error %d\n", err);
-    if (tls_debug)
-      ERR_print_errors_fp(stderr);
-    PTUNLOCK(tlsdest_lock);
-    // close/free etc
-    tls_please_reopen_tcp(td, 0);
-    return wrote;
-  }
-  else if (wrote != len+2)
-    fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
-  else if (tls_debug)
-    fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
-  PTUNLOCK(tlsdest_lock);
-
-  return wrote;
-}
-
-// read a record length (two bytes MSB first) and that many bytes
-int 
-tls_read_record(struct tls_dest *td, u_char *buf, int blen)
-{
-  int cnt, rlen, actual;
-  u_char reclen[2];
-
-  // don't go SSL_free in some other thread please
-  PTLOCK(tlsdest_lock);
-  SSL *ssl = td->tls_ssl;
-
-  if (ssl == NULL) {
-    PTUNLOCK(tlsdest_lock);
-    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td, 1);
-    return 0;
-  }
-
-  // read record length
-  cnt = SSL_read(ssl, reclen, 2);
-  PTUNLOCK(tlsdest_lock);
-
-  if (cnt < 0) {
-    if (tls_debug) perror("read record length");
-    tls_please_reopen_tcp(td, 1);
-    return -1;
-  }
-  if (cnt == 0) {
-    // EOF
-    if (tls_debug)
-      fprintf(stderr,"TLS read record: record len: 0 bytes read - please reopen\n");
-    tls_please_reopen_tcp(td, 1);
-    return 0;
-  } else if (cnt != 2) {
-    if (tls_debug)
-      fprintf(stderr,"TLS read record: record len not 2: %d\n", cnt);
-    return 0;
-  }
-  rlen = reclen[0] << 8 | reclen[1]; //ntohs(reclen[0] << 8 || reclen[1]);
-  if (rlen == 0) {
-    if (tls_debug)
-      fprintf(stderr,"TLS read record: MARK read (no data)\n");
-    return 0;
-  }
-  if (tls_debug)
-    fprintf(stderr,"TLS read record: record len %d\n", rlen);
-  if (rlen > blen) {
-    fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
-    tls_please_reopen_tcp(td, 1);
-    return -1;
-  }
-
-  PTLOCK(tlsdest_lock);
-  if ((ssl = td->tls_ssl) == NULL) {
-    PTUNLOCK(tlsdest_lock);
-    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-    tls_please_reopen_tcp(td, 1);
-    return 0;
-  }
-  actual = SSL_read(ssl, buf, rlen);
-  PTUNLOCK(tlsdest_lock);
-
-  if (actual < 0) {
-    perror("read record");
-    tls_please_reopen_tcp(td, 1);
-    return -1;
-  }
-  if (actual < rlen) {
-    if (tls_debug)
-      fprintf(stderr,"TLS read record: read less than record: %d < %d\n", actual, rlen);
-    // read the remaining data
-    int p = actual;
-    while (rlen - p > 0) {
-      PTLOCK(tlsdest_lock);
-      if ((ssl = td->tls_ssl) == NULL) {
-	PTUNLOCK(tlsdest_lock);
-	if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
-	tls_please_reopen_tcp(td, 1);
-	return 0;
-      }
-      actual = SSL_read(ssl, &buf[p], rlen-p);
-      PTUNLOCK(tlsdest_lock);
-      if (actual < 0) {
-	perror("re-read record");
-	tls_please_reopen_tcp(td, 1);
-	return -1;
-      }
-      if (tls_debug)
-	fprintf(stderr,"TLS read record: read %d more bytes\n", actual);
-      if (actual == 0) {
-	tls_please_reopen_tcp(td, 1);
-	return -1;
-      }
-      p += actual;
-    }
-    actual = p;
-  }
-  if (tls_debug)
-    fprintf(stderr,"TLS read record: read %d bytes total\n", actual);
-
-  return actual;
-}
-
-// TLS server thread.
-// Bind a socket, listen, and loop accepting valid TLS connections.
-void * 
-tls_server(void *v)
-{
-  // listen to the specified server port
-  tls_tcp_ursock = tcp_bind_socket(SOCK_STREAM, tls_server_port);
-  if (listen(tls_tcp_ursock, 42) < 0) {
-    perror("listen (TLS server)");
-    exit(1);
-  }
-
-  // make sure other threads are waiting
-  sleep(1);
-
-  SSL *ssl;
-  SSL_CTX *ctx = tls_create_server_context();
-  tls_configure_context(ctx);
-
-  while (1) {
-    struct sockaddr caddr;
-    u_int clen = sizeof(struct sockaddr);
-    int tsock;
-
-    if ((tsock = tcp_server_accept(tls_tcp_ursock, &caddr, &clen)) < 0) {
-      perror("accept (TLS server)");
-      // @@@@ what could go wrong here?
-      exit(1);
-    }
-    if ((ssl = SSL_new(ctx)) == NULL) {
-      fprintf(stderr,"SSL_new failed: ");
-      ERR_print_errors_fp(stderr);
-      close(tsock);
-      continue;
-    }
-    SSL_set_fd(ssl, tsock);
-    int v = 0;
-    if ((v = SSL_accept(ssl)) <= 0) {
-      // this already catches verification - client end gets "SSL alert number 48"?
-      int err = SSL_get_error(ssl, v);
-      if (err != SSL_ERROR_SSL) {
-	if (tls_debug) ERR_print_errors_fp(stderr);
-      }
-      close(tsock);
-      SSL_free(ssl);
-      continue;
-    }      
-
-    X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
-
-    if(ssl_client_cert) {
-	long verifyresult;
-
-	verifyresult = SSL_get_verify_result(ssl);
-	if (verifyresult != X509_V_OK) {
-	  X509_free(ssl_client_cert);				
-	  SSL_free(ssl);
-	  close(tsock);
-	  continue;
-	}
-	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
-	// create tlsdest, fill in stuff
-	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen);
-    } else {
-      // no cert
-      if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");
-      SSL_free(ssl);
-      close(tsock);
-      continue;
-    }
-  }
-}
-
-// TLS input thread.
-// Reads from open (accepted) TLS sockets, passes input on to where it should go.
-// Adds routing table entries if the source chaos address was new.
-void * tls_input(void *v)
-{
-  /* TLS -> others thread */
-  fd_set rfd;
-  int len, sval, maxfd, i, j, tindex;
-  u_char data[CH_PK_MAXLEN];
-  struct timeval timeout;
-  struct chaos_header *cha = (struct chaos_header *)&data;
-
-  // @@@@ random number - parameter, or remove?
-  sleep(2); // wait for things to settle, connection to open
-
-  while (1) {
-    FD_ZERO(&rfd);
-    PTLOCK(tlsdest_lock);
-    // collect all tls_sock:ets
-    maxfd = -1;
-    for (i = 0; i < *tlsdest_len; i++) {
-      if (tlsdest[i].tls_sock > 0) {
-	FD_SET(tlsdest[i].tls_sock, &rfd);
-	maxfd = (maxfd > tlsdest[i].tls_sock ? maxfd : tlsdest[i].tls_sock);
-      }
-    }
-    PTUNLOCK(tlsdest_lock);
-    maxfd++;			/* plus 1 */
-
-    if (maxfd == 0) {
-      // if (tls_debug) fprintf(stderr,"TLS input: nothing to see, sleep+retry\n");
-      sleep(TLS_INPUT_RETRY_TIMEOUT);
-      continue;
-    }
-
-    // if (tls_debug) fprintf(stderr,"TLS input: select maxfd %d\n", maxfd);
-
-    // Must have timeout, in order to find new connections to select on
-    timeout.tv_sec = TLS_INPUT_RETRY_TIMEOUT;
-    timeout.tv_usec = 0;
-    if ((sval = select(maxfd, &rfd, NULL, NULL, &timeout)) == EINTR) {
-      if (tls_debug) fprintf(stderr,"TLS input timeout, retrying\n");
-      continue;
-    } else if (sval < 0)
-      perror("select(tls)");
-    else if (sval > 0) {
-      for (j = 0; j < maxfd; j++) {
-	if (FD_ISSET(j, &rfd)) {
-	  tindex = -1;		/* don't know tlsdest index */
-	  // find tlsdest index
-	  PTLOCK(tlsdest_lock);
-	  for (i = 0; i < *tlsdest_len; i++) {
-	    if (tlsdest[i].tls_sock == j) {
-	      tindex = i;
-	      break;
-	    }
-	  }
-	  PTUNLOCK(tlsdest_lock);
-	  if (tls_debug) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
-	  if (tindex >= 0) {
-	    int serverp = tlsdest[tindex].tls_serverp;
-	    bzero(data,sizeof(data));  /* clear data */
-	    if ((len = tls_read_record(&tlsdest[tindex], data, sizeof(data))) < 0) {
-	      // error handled by tls_read_record
-	      if (tls_debug) perror("tls_read_record");
-	      continue; // to next fd
-	    } else if (len == 0) {
-	      // just a mark
-	      if (tls_debug) fprintf(stderr,"TLS input: read MARK\n");
-	      continue; // to next fd
-	    }
-	    // got data!
-	    ntohs_buf((u_short *)cha, (u_short *)cha, len);
-	    if (debug) ch_dumpkt((u_char *)&data, len);
-	    // check where it's coming from
-	    // pkt should include trailer
-	    u_short srcaddr;
-	    if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
-	      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	      srcaddr = ntohs(tr->ch_hw_srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from trailer: %#o\n", srcaddr);
-	    } else {
-	      srcaddr = ch_srcaddr(cha);
-	      if (verbose || tls_debug || debug)
-		fprintf(stderr,"%%%% TLS input: no trailer in pkt from %#o\n", srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from header: %#o\n", srcaddr);
-	    }
-	    // find the route to where from
-	    struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-
-	    if (srcrt == NULL) {
-	      // add route
-	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
-	      if (!serverp)
-		fprintf(stderr,"TLS: No source route found for incoming data, but we are a client?? (source %#o, tlsdest %d)\n",
-			srcaddr, tindex);
-	      srcrt = add_tls_route(tindex, srcaddr);
-	    } else
-	      if (tls_debug) fprintf(stderr,"TLS: Route found to source %#o for tlsdest %d: dest %#o\n",
-				     srcaddr, tindex, srcrt->rt_dest);
-
-	    // forward to destination
-	    forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			      srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
-			      srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
-			      (u_char *)&data, len, LINK_TLS);  /* forward to appropriate links */
-	  } else {
-	    // could happen under race conditions (closed while selecting?)
-	    if (tls_debug) fprintf(stderr,"%%%% tls_input: received pkt from unknown socket %d\n", j);
-	  }
-	}
-      }
-    }
-  }
-}
-#endif // CHAOS_TLS
-
-#if CHAOS_ETHERP
-void print_arp_table()
-{
-  int i;
-  if (*charp_len > 0) {
-    printf("Chaos ARP table:\n"
-	   "Chaos\tEther\t\t\tAge (s)\n");
-    for (i = 0; i < *charp_len; i++)
-      printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu\n",
-	     charp_list[i].charp_chaddr,
-	     charp_list[i].charp_eaddr[0],
-	     charp_list[i].charp_eaddr[1],
-	     charp_list[i].charp_eaddr[2],
-	     charp_list[i].charp_eaddr[3],
-	     charp_list[i].charp_eaddr[4],
-	     charp_list[i].charp_eaddr[5],
-	     (time(NULL) - charp_list[i].charp_age));
-  }
-}
-
-void handle_arp_input(u_char *data, int dlen)
-{
-  if (debug) fprintf(stderr,"Handle ARP\n");
-  /* Chaos over Ethernet */
-  struct arphdr *arp = (struct arphdr *)data;
-  static u_short eth_chaddr = 0;
-  u_short schad = ntohs((data[sizeof(struct arphdr)+arp->ar_hln]<<8) |
-			data[sizeof(struct arphdr)+arp->ar_hln+1]);
-  u_char *sead = &data[sizeof(struct arphdr)];
-  u_short dchad =  ntohs((data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln]<<8) |
-			 data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]);
-
-  // don't create a storm
-  if (memcmp(sead, eth_brd, ETHER_ADDR_LEN) == 0)
-    return;
-
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
-
-  if (debug) printf("ARP rcv: Dchad: %o %o => %o\n",
-		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]<<8,
-		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln],
-		    dchad);
-
-  /* See if we proxy for this one */
-  if (arp->ar_op == htons(ARPOP_REQUEST)) {
-    if (dchad == eth_chaddr || is_mychaddr(dchad)) {
-      if (verbose) printf("ARP: Sending reply for %#o (me) to %#o\n", dchad, schad);
-      send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
-    } else {
-      if (debug) printf("ARP: Looking up %#o...\n",dchad);
-      struct chroute *found = find_in_routing_table(dchad, 0, 0);
-      if (found != NULL && found->rt_dest == dchad
-	  && found->rt_link != LINK_ETHER && found->rt_type == RT_DIRECT) {
-	/* Only proxy for non-ether links, and not for indirect (bridge) routes */
-	if (verbose) {
-	  fprintf(stderr,"ARP: Sending proxy ARP reply for %#o to %#o\n", dchad, schad);
-	  // fprintf(stderr," route link %s, type %s\n", rt_linkname(found->rt_link), rt_typename(found->rt_type));
-	}
-	send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
-	return;
-      }
-    }
-  }
-  /* Now see if we should add this to our Chaos ARP list */
-  PTLOCK(charp_lock);
-  int i, found = 0;
-  for (i = 0; i < *charp_len; i++)
-    if (charp_list[i].charp_chaddr == schad) {
-      found = 1;
-      charp_list[i].charp_age = time(NULL);  // update age
-      if (memcmp(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN) != 0) {
-	memcpy(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN);
-	if (verbose) {
-	  fprintf(stderr,"ARP: Changed MAC addr for %#o\n", schad);
-	  print_arp_table();
-	}
-      } else
-	if (verbose) {
-	  fprintf(stderr,"ARP: Updated age for %#o\n", schad);
-	  print_arp_table();
-	}
-      break;
-    }
-  /* It's not in the list already, is there room? */
-  if (!found && *charp_len < CHARP_MAX) {
-    if (verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
-    charp_list[*charp_len].charp_chaddr = schad;
-    charp_list[*charp_len].charp_age = time(NULL);
-    memcpy(&charp_list[(*charp_len)++].charp_eaddr, sead, ETHER_ADDR_LEN);
-    if (verbose) print_arp_table();
-  }
-  PTUNLOCK(charp_lock);
-}
-
-void arp_input(int arpfd, u_char *data, int dlen) {
-  int len;
-  struct arphdr *arp = (struct arphdr *)data;
-
-  if ((len = get_packet(arpfd, data, dlen)) < 0) {
-    if (debug) perror("Couldn't read ARP");
-    return;
-  }
-  if (arp->ar_hrd == htons(ARPHRD_ETHER) &&
-      (arp->ar_pro == htons(ETHERTYPE_CHAOS))) {
-    if (debug) fprintf(stderr,"Read ARP len %d\n", len);
-    handle_arp_input(data, len);
-  } else if (0 && debug) {		/* should not happen for BPF case, which filters this */
-    fprintf(stderr,"Read from ARP but wrong HW %d or prot %#x\n",
-	    ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
-  }
-}
-
-
-void * ether_input(void *v)
-{
-  /* Ether -> others thread */
-  fd_set rfd;
-  int len, sval, maxfd = (chfd > arpfd ? chfd : arpfd)+1;
-  u_char data[CH_PK_MAXLEN];
-  struct chaos_header *cha = (struct chaos_header *)&data;
-
-  while (1) {
-    FD_ZERO(&rfd);
-    if (chfd > 0)
-      FD_SET(chfd,&rfd);
-    if (arpfd > 0)
-      FD_SET(arpfd,&rfd);
-
-    bzero(data,sizeof(data));
-
-    if ((sval = select(maxfd, &rfd, NULL, NULL, NULL)) < 0)
-      perror("select");
-    else if (sval > 0) {
-      if (arpfd > 0 && FD_ISSET(arpfd, &rfd)) {
-	/* Read an ARP packet */
-	if (0 && verbose) fprintf(stderr,"ARP available\n");
-	arp_input(arpfd, (u_char *)&data, sizeof(data));
-      }	/* end of ARP case */
-      if (chfd > 0 && FD_ISSET(chfd, &rfd)) {
-	// Read a Chaos packet, peeking ether address for ARP optimization
-	if ((len = get_packet(chfd, (u_char *)&data, sizeof(data))) < 0)
-	  return NULL;
-	if (debug) fprintf(stderr,"ether RCV %d bytes\n", len);
-	if (len == 0)
-	  continue;
-	ntohs_buf((u_short *)cha, (u_short *)cha, len);
-	if (debug) ch_dumpkt((u_char *)&data, len);
-#if 1 // At least LMI Lambda does not include (a valid) chaosnet trailer
-      // (not even constructs one) but we read more than the packet size shd be
-	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE)
-	  len = ch_nbytes(cha)+CHAOS_HEADERSIZE;
-#else // what we would have done...
-#if COLLECT_STATS
-	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
-	  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	  // check for bogus/ignorable trailer or checksum.
-	  // Symbolics known to send trailer checksum -1
-	  if (// (tr->ch_hw_destaddr != 0 && tr->ch_hw_srcaddr != 0 && tr->ch_hw_checksum != 0)
-	      //&&
-	      (tr->ch_hw_checksum != 0xffff)) {
-	    u_short cks = ch_checksum(data, len);
-	    if (cks != 0) {
-	      u_short schad = ch_srcaddr(cha);
-	      if (verbose) {
-		fprintf(stderr,"[Bad checksum %#x from %#o (Ether)]\n", cks, schad);
-		fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
-			tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-		ch_dumpkt((u_char *)&data, len);
-	      }
-	      // #### Use link source net, can't really trust data
-#if 0
-	      PTLOCK(linktab_lock);
-	      linktab[schad>>8].pkt_crcerr++;
-	      PTUNLOCK(linktab_lock);
-#endif
-	      continue;
-	    }
-	  } else if (debug)
-	    fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
-		    tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-	}
-#endif // COLLECT_STATS
-#endif // 0
-	// check where it's coming from
-	u_short srcaddr;
-#if 0 // #### see above
-	if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
-	  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	  srcaddr = tr->ch_hw_srcaddr;
-	} else
-#endif
-	  srcaddr = ch_srcaddr(cha);
-	struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-	forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			  srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
-			  srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
-			  (u_char *)&data, len, LINK_ETHER);  /* forward to appropriate links */
-      }
-    }
-  }
-}
-#endif // CHAOS_ETHERP
 
 // **** Main program
 
@@ -4780,7 +1261,7 @@ int parse_config_line(char *line)
   }
   else if (strcasecmp(tok, "chudp") == 0) {
     tok = strtok(NULL, " \t\r\n");
-    udpport = atoi(tok);
+    chudp_port = atoi(tok);
     do_udp = 1;
     // check for "dynamic" arg, for dynamic updates from new sources
     ;
@@ -4796,7 +1277,7 @@ int parse_config_line(char *line)
 	return -1;
       }
     }
-    if (verbose) printf("Using CHUDP port %d (%s)%s\n",udpport, chudp_dynamic ? "dynamic" : "static",
+    if (verbose) printf("Using CHUDP port %d (%s)%s\n",chudp_port, chudp_dynamic ? "dynamic" : "static",
 			(do_udp6 ? ", listening to IPv6" : ""));
     return 0;
   }
@@ -4844,14 +1325,9 @@ int parse_config_line(char *line)
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
     strncpy(ifname,tok,sizeof(ifname));
-    get_my_ea();
     do_ether = 1;
     if (verbose) {
-      int i;
-      printf("Using Ethernet interface %s, ether address ", ifname);
-      for (i = 0; i < ETHER_ADDR_LEN-1; i++)
-	printf("%02X:",myea[i]);
-      printf("%02X\n",myea[i]);
+      print_config_ether();
     }
     return 0;
   }
@@ -4904,13 +1380,11 @@ print_stats(int sig)
       printf("\n");
     }
     if (do_unix)
-      printf(" Unix socket enabled and %s\n", (unixsock > 0 ? "open" : "NOT open"));
+      print_config_usockets();
     if (do_udp || do_udp6)
-      printf(" CHUDP enabled on port %d (%s)\n", udpport, chudp_dynamic ? "dynamic" : "static");
+      printf(" CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
     if (do_ether)
-      printf(" Ethernet enabled on interface %s,"
-	     " address %02X:%02X:%02X:%02X:%02X:%02X\n",
-	     ifname, myea[0], myea[1], myea[2], myea[3], myea[4], myea[5]);
+      print_config_ether();
     if (do_tls || do_tls_server) {
       printf(" Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
       if (do_tls_server)
@@ -4949,11 +1423,10 @@ main(int argc, char *argv[])
 #endif
 #if CHAOS_ETHERP
   init_arp_table();
-#endif // CHAOS_ETHERP
-#if COLLECT_STATS
+#endif
   init_linktab();
   init_hosttab();
-#endif
+
   if (gethostname(myname, sizeof(myname)) < 0) {
     perror("gethostname");
     strcpy(myname,"UNKNOWN");
@@ -4996,21 +1469,6 @@ main(int argc, char *argv[])
 
   parse_config(cfile);
 
-#if 0
-  // Print config
-  if (verbose) {
-    printf("Using Chaos host name %s\n", myname);
-
-    print_routing_table();
-    if (*chudpdest_len > 0)
-      print_chudp_config();
-
-#if CHAOS_ETHERP
-    print_arp_table();
-#endif // CHAOS_ETHERP
-  }
-#endif // 0
-
   // Check config, validate settings
   if (mychaddr[0] == 0) {
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
@@ -5027,7 +1485,7 @@ main(int argc, char *argv[])
       if (access(files[i], R_OK) != 0) {
 	sprintf(err,"cannot access \"%s\"",files[i]);
 	perror(err);
-	printf(" Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+	printf(" configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
 	exit(1);
       }
     }
@@ -5036,24 +1494,14 @@ main(int argc, char *argv[])
 
   // Open links that have been configured
   if (do_unix) {
-    if ((unixsock = u_connect_to_server()) < 0)
-      //exit(1);
-      fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+    init_chaos_usockets();
   }
-  if (do_udp6) {
-    if ((udp6sock = chudp_connect(udpport, AF_INET6)) < 0)
-      exit(1);
-  }
-  if (do_udp) {
-    if ((udpsock = chudp_connect(udpport, AF_INET)) < 0)
-      exit(1);
+  if (do_udp6 || do_udp) {
+    init_chaos_udp(do_udp, do_udp6);
   }
   if (do_ether) {
 #if CHAOS_ETHERP
-    if ((arpfd = get_packet_socket(ETHERTYPE_ARP, ifname)) < 0)
-      exit(1);
-    if ((chfd = get_packet_socket(ETHERTYPE_CHAOS, ifname)) < 0)
-      exit(1);
+    init_chaos_ether();
 #else
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
@@ -5082,7 +1530,7 @@ main(int argc, char *argv[])
   if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
     perror("pthread_sigmask(SIG_BLOCK)");
 
-  if (do_unix || unixsock > 0) {
+  if (do_unix) {
     if (verbose) fprintf(stderr, "Starting thread for UNIX socket\n");
     if (pthread_create(&threads[ti++], NULL, &unix_input, NULL) < 0) {
       perror("pthread_create(unix_input)");
@@ -5104,7 +1552,7 @@ main(int argc, char *argv[])
     }
   }
 #if CHAOS_ETHERP
-  if ((chfd > 0) || (arpfd > 0)) {
+  if (do_ether) {
     if (verbose) fprintf(stderr,"Starting thread for Ethernet\n");
     if (pthread_create(&threads[ti++], NULL, &ether_input, NULL) < 0) {
       perror("pthread_create(ether_input)");
@@ -5116,7 +1564,7 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   if (do_tls_server || do_tls) {
     if (verbose) fprintf(stderr,"Initializing openssl library\n");
-    init_openssl();
+    init_chaos_tls();
   }
 
   if (do_tls_server) {
@@ -5188,11 +1636,9 @@ main(int argc, char *argv[])
 
   while(1) {
     sleep(15);			/* ho hum. */
-#if COLLECT_STATS
     if (stats || verbose) {
       print_stats(0);
     }
-#endif
   }
   exit(0);
 }
