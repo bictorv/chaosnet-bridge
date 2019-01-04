@@ -373,8 +373,8 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 
     (*tlsdest_len)++;
   }
-  if (verbose) print_tlsdest_config();
   PTUNLOCK(tlsdest_lock);
+  if (verbose) print_tlsdest_config();
 
   // add route when first pkt comes in, see tls_input
 }
@@ -564,11 +564,16 @@ void *tls_connector(void *arg)
       ERR_print_errors_fp(stderr);
       close(tsock);
       SSL_free(ssl);
+      // just sleep and retry - maybe conn was dropped between connect and SSL_connect
+      sleep(3);
+      continue;
+#if 0
       // or just let this thread die?
       pthread_exit(&(int){ 1 });
       exit(1);
       // don't just keep trying!
       // continue;
+#endif
     }
 
     X509 *ssl_server_cert = SSL_get_peer_certificate(ssl);
