@@ -24,11 +24,11 @@ extern int do_tls_ipv6;
 extern int tls_server_port;
 extern int tls_debug;
 
-int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
+static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
-int tls_write_record(struct tls_dest *td, u_char *buf, int len);
-void tls_inform_tcp_is_open(struct tls_dest *td);
-void tls_wait_for_reconnect_signal(struct tls_dest *td);
+static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
+static void tls_inform_tcp_is_open(struct tls_dest *td);
+static void tls_wait_for_reconnect_signal(struct tls_dest *td);
 
 // send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
 void
@@ -80,7 +80,7 @@ void init_openssl()
 }
 
 // not used
-void cleanup_openssl()
+static void cleanup_openssl()
 {
     EVP_cleanup();
 }
@@ -92,7 +92,7 @@ void cleanup_openssl()
 // Seems too hairy (yet) to include it in cert (maybe not with openssl
 // 1.1.1, see https://security.stackexchange.com/a/183973)
 
-u_char *
+static u_char *
 tls_get_cert_cn(X509 *cert)
 {
   // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
@@ -138,7 +138,7 @@ tls_get_cert_cn(X509 *cert)
   return (u_char *)common_name_str;
 }
 
-SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
+static SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
 {
     SSL_CTX *ctx;
 
@@ -152,7 +152,7 @@ SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
     return ctx;
 }
 
-SSL_CTX *tls_create_client_context()
+static SSL_CTX *tls_create_client_context()
 {
   const SSL_METHOD *method;
 
@@ -160,14 +160,14 @@ SSL_CTX *tls_create_client_context()
     return tls_create_some_context(method);
 }
 
-SSL_CTX *tls_create_server_context()
+static SSL_CTX *tls_create_server_context()
 {
    const SSL_METHOD *method;
     method = SSLv23_server_method();
     return tls_create_some_context(method);
 }
 
-void tls_configure_context(SSL_CTX *ctx)
+static void tls_configure_context(SSL_CTX *ctx)
 {
   // Auto-select elliptic curve
 #ifdef SSL_CTX_set_ecdh_auto
@@ -231,7 +231,7 @@ void print_tlsdest_config()
 }
 
 // Should only be called by server (clients have their routes set up by config)
-struct chroute *
+static struct chroute *
 add_tls_route(int tindex, u_short srcaddr)
 {
   struct chroute * srcrt = NULL;
@@ -271,7 +271,7 @@ add_tls_route(int tindex, u_short srcaddr)
   return srcrt;
 }
 
-void
+static void
 close_tlsdest(struct tls_dest *td)
 {
   PTLOCK(tlsdest_lock);
@@ -292,7 +292,7 @@ close_tlsdest(struct tls_dest *td)
   PTUNLOCK(tlsdest_lock);
 }
 
-void
+static void
 update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ssl)
 {
   // defining the client link adds the tlsdest entry, but need to fill in and initialize mutex/conds
@@ -322,7 +322,7 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
 }
 
 
-void
+static void
 add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len)
 {
   // no tlsdest exists for server end, until it is connected
@@ -380,7 +380,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 }
 
 // TCP low-level things
-int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
+static int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
 {
   struct sockaddr caddr;
   int fd;
@@ -415,7 +415,7 @@ int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
   return fd;
 }
 
-int tcp_bind_socket(int type, u_short port) 
+static int tcp_bind_socket(int type, u_short port) 
 {
   int sock;
 
@@ -462,7 +462,7 @@ int tcp_bind_socket(int type, u_short port)
 }
 
 // TCP connector, with backoff
-int tcp_client_connect(struct sockaddr *sin)
+static int tcp_client_connect(struct sockaddr *sin)
 {
   int sock, unlucky = 1, foo;
   
@@ -612,7 +612,7 @@ void *tls_connector(void *arg)
 
 // signalling stuff
 
-void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
+static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 // called by tls_write_record, tls_read_record on failure
 {
   u_short chaddr = td->tls_addr;
@@ -666,7 +666,7 @@ void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       perror("pthread_mutex_unlock(reconnect)");
   }
 }
-void tls_wait_for_reconnect_signal(struct tls_dest *td)
+static void tls_wait_for_reconnect_signal(struct tls_dest *td)
 // called by tls_connector, tls_listener
 {
   /* wait for someone to ask for reconnection, typically after an error in read/write */
@@ -686,7 +686,7 @@ void tls_wait_for_reconnect_signal(struct tls_dest *td)
     fprintf(stderr,"wait_for_reconnect_signal done\n");
 }
 
-void tls_inform_tcp_is_open(struct tls_dest *td)
+static void tls_inform_tcp_is_open(struct tls_dest *td)
 {
   if (tls_debug)
     fprintf(stderr,"tls_inform_tcp_is_open (%s)\n", td->tls_name);
@@ -700,7 +700,7 @@ void tls_inform_tcp_is_open(struct tls_dest *td)
   if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)
     perror("pthread_mutex_unlock(tcp_is_open)");
 }
-void tls_wait_for_tcp_open(struct tls_dest *td)
+static void tls_wait_for_tcp_open(struct tls_dest *td)
 {
   /* wait for tcp_is_open, and get a mutex lock */
 
@@ -727,7 +727,7 @@ void tls_wait_for_tcp_open(struct tls_dest *td)
 
 
 // write a record length (two bytes MSB first) and that many bytes
-int tls_write_record(struct tls_dest *td, u_char *buf, int len)
+static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 {
   int wrote;
   SSL *ssl;
@@ -775,7 +775,7 @@ int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 }
 
 // read a record length (two bytes MSB first) and that many bytes
-int 
+static int 
 tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 {
   int cnt, rlen, actual;

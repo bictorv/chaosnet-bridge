@@ -45,7 +45,7 @@ dumppkt_raw(unsigned char *ucp, int cnt)
 	fprintf(stderr, "\r\n");
     }
 }
-char *
+static char *
 ch_char(unsigned char x, char *buf) {
   if (x < 32)
     sprintf(buf,"^%c", x+64);

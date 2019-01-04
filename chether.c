@@ -20,12 +20,12 @@ extern char ifname[128];
 
 /* **** Chaos-over-Ethernet functions **** */
 
-int chfd = 0, arpfd = 0;
+static int chfd = 0, arpfd = 0;
 
-u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
-u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
+static u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
+static u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
 
-pthread_mutex_t charp_lock;
+static pthread_mutex_t charp_lock;
 
 #if !ETHER_BPF
 static int ifix;		/* ethernet interface index */
@@ -33,11 +33,11 @@ static int ifix;		/* ethernet interface index */
 
 
 // Chaos ARP table
-struct charp_ent *charp_list;	/* shared mem alloc */
-int *charp_len;			/* cf CHARP_MAX */
+static struct charp_ent *charp_list;	/* shared mem alloc */
+static int *charp_len;			/* cf CHARP_MAX */
 
 // Find the ethernet address of the configured interface (ifname)
-void get_my_ea() {
+static void get_my_ea() {
   struct ifaddrs *ifx, *ifs = NULL;
   if (getifaddrs(&ifs) < 0) {
     perror("getifaddrs");
@@ -129,7 +129,7 @@ struct bpf_insn bpf_jump(unsigned short code, bpf_u_int32 k,
 #endif // ETHER_BPF
 
 /* Get a PACKET/DGRAM socket for the specified ethernet type, on the specified interface */
-int
+static int
 get_packet_socket(u_short ethtype, char *ifname)
 {
   int fd;
@@ -378,7 +378,7 @@ get_packet_socket(u_short ethtype, char *ifname)
 }
 
 /* Send a packet of the specified type to the specified address  */
-void
+static void
 send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *packet, int packetlen)
 {
   int cc;
@@ -456,7 +456,7 @@ unsigned int bpf_buf_length = 0;
 uint8_t ether_bpf_buf[BPF_MTU];
 #endif // ETHER_BPF
 
-int
+static int
 get_packet (int if_fd, u_char *buf, int buflen)
 {
   int i, rlen;
@@ -731,7 +731,7 @@ void print_arp_table()
   }
 }
 
-u_char *find_arp_entry(u_short daddr)
+static u_char *find_arp_entry(u_short daddr)
 {
   int i;
   if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, *charp_len);
@@ -759,7 +759,7 @@ u_char *find_arp_entry(u_short daddr)
 }
 
 // Find my chaos address on the ether link #### check config that there are no conflicting addrs?
-u_short find_ether_chaos_address() {
+static u_short find_ether_chaos_address() {
   int i;
   u_short ech = 0;
   PTLOCK(rttbl_lock);
@@ -807,7 +807,7 @@ send_chaos_arp_request(int fd, u_short chaddr)
   send_packet(fd, ETHERTYPE_ARP, eth_brd, ETHER_ADDR_LEN, req, sizeof(req));
 }
 
-void
+static void
 send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
 {
   u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
@@ -829,7 +829,7 @@ send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
   send_packet(fd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
 }
 
-void handle_arp_input(u_char *data, int dlen)
+static void handle_arp_input(u_char *data, int dlen)
 {
   if (debug) fprintf(stderr,"Handle ARP\n");
   /* Chaos over Ethernet */
@@ -906,7 +906,7 @@ void handle_arp_input(u_char *data, int dlen)
   PTUNLOCK(charp_lock);
 }
 
-void arp_input(int arpfd, u_char *data, int dlen) {
+static void arp_input(int arpfd, u_char *data, int dlen) {
   int len;
   struct arphdr *arp = (struct arphdr *)data;
 

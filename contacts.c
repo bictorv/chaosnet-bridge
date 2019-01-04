@@ -35,7 +35,7 @@ void uptime_responder(u_char *, int);
 void time_responder(u_char *, int);
 
 // the contacts and their handler function
-struct rfc_handler mycontacts[] = {
+static struct rfc_handler mycontacts[] = {
   { "STATUS", &status_responder },
   { "LASTCN", &lastcn_responder },
   { "DUMP-ROUTING-TABLE", &dump_routing_table_responder },
@@ -98,7 +98,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 // (Stupid format, can only handle subnets up to decimal #122 - RUT
 // handles 122 subnets regardless of their actual subnet number.)
 
-int
+static int
 make_dump_routing_table_pkt(u_char *pkt, int pklen)
 {
   struct chaos_header *cha = (struct chaos_header *)pkt;
@@ -168,7 +168,7 @@ dump_routing_table_responder(u_char *rfc, int len)
   send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
 }
 
-int
+static int
 make_time_pkt(u_char *pkt, int pklen, time_t t)
 {
   u_char *data = (u_char *)&pkt[CHAOS_HEADERSIZE];

@@ -20,7 +20,7 @@
 
 extern int chudp_dynamic, chudp_port;
 
-pthread_mutex_t chudp_lock;
+static pthread_mutex_t chudp_lock;
 
 /* **** CHUDP protocol functions **** */
 
@@ -100,7 +100,7 @@ void reparse_chudp_names()
   PTUNLOCK(chudp_lock);
 }
 
-void
+static void
 chudp_dumppkt(unsigned char *ucp, int cnt)
 {
     fprintf(stderr,"CHUDP version %d, function %d\n", ucp[0], ucp[1]);
@@ -108,7 +108,7 @@ chudp_dumppkt(unsigned char *ucp, int cnt)
 }
 
 
-int chudp_connect(u_short port, sa_family_t family) 
+static int chudp_connect(u_short port, sa_family_t family) 
 {
   int sock;
 
@@ -146,7 +146,7 @@ int chudp_connect(u_short port, sa_family_t family)
   return sock;
 }
 
-void
+static void
 chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
@@ -193,7 +193,7 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
   }
 }
 
-void
+static void
 add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
 {
   if (*chudpdest_len < CHUDPDEST_MAX) {
@@ -240,7 +240,7 @@ add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
   }
 }
 
-int
+static int
 chudp_receive(int sock, unsigned char *buf, int buflen)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];

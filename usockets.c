@@ -23,12 +23,12 @@
 /* **** Chaos-over-Unix-Sockets functions **** */
 // Based on code by Brad Parker (brad@heeltoe.com), see http://www.unlambda.com/cadr/
 
-int unixsock;
+static int unixsock;
 
 /*
  * connect to server using specificed socket type
  */
-int
+static int
 u_connect_to_server(void)
 {
     int len, fd;
@@ -92,7 +92,7 @@ u_connect_to_server(void)
     return fd;
 }
 
-int
+static int
 u_read_chaos(int fd, u_char *buf, int buflen)
 {
     int ret, len;
@@ -128,7 +128,7 @@ u_read_chaos(int fd, u_char *buf, int buflen)
     return ret;
 }
 
-void
+static void
 u_send_chaos(int fd, u_char *buf, int buflen)
 {
   u_char lenbytes[4];
