@@ -127,6 +127,14 @@ int *tlsdest_len;
 
 #endif // CHAOS_TLS
 
+#if CHAOS_DNS
+int do_dns = 0;
+void init_chaos_dns(void);
+int parse_dns_config_line(void);
+void print_config_dns(void);
+void *dns_forwarder_thread(void *v);
+#endif
+
 
 int udpsock = 0, udp6sock = 0;
 
@@ -162,12 +170,16 @@ int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
 void init_chaos_udp(int v6, int v4);
 void reparse_chudp_names(void);
 
+#if CHAOS_ETHERP
 // chether
 void init_chaos_ether(void);
 void print_config_ether(void);
+#endif
 
+#if CHAOS_TLS
 // chtls
 void init_chaos_tls();
+#endif
 
 // usockets
 int init_chaos_usockets(void);
@@ -1322,6 +1334,14 @@ int parse_config_line(char *line)
     return 0;
   }
 #endif // CHAOS_TLS
+#if CHAOS_DNS
+  else if (strcasecmp(tok, "dns") == 0) {
+    int val = parse_dns_config_line();
+    if (val == 0)
+      do_dns = 1;
+    return val;
+  }
+#endif
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
     strncpy(ifname,tok,sizeof(ifname));
@@ -1390,6 +1410,12 @@ print_stats(int sig)
       if (do_tls_server)
 	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
+#if CHAOS_DNS
+    if (do_dns) {
+      printf("DNS forwarder enabled\n");
+      print_config_dns();
+    }
+#endif
   }
   print_arp_table();
   print_routing_table();
@@ -1506,6 +1532,10 @@ main(int argc, char *argv[])
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
   }
+#if CHAOS_DNS
+  if (do_dns)
+    init_chaos_dns();
+#endif
 
 #if 1
   if (verbose)
@@ -1590,6 +1620,15 @@ main(int argc, char *argv[])
 	}
       }
     }    
+  }
+#endif
+#if CHAOS_DNS
+  if (do_dns) {
+    if (verbose) fprintf(stderr,"Starting thread for DNS forwarder\n");
+    if (pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL) < 0) {
+      perror("pthread_create(dns_forwarder_thread)");
+      exit(1);
+    }
   }
 #endif
 

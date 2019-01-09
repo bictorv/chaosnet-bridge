@@ -33,6 +33,9 @@ void lastcn_responder(u_char *, int);
 void dump_routing_table_responder(u_char *, int);
 void uptime_responder(u_char *, int);
 void time_responder(u_char *, int);
+#if CHAOS_DNS
+void dns_responder(u_char *, int);
+#endif
 
 // the contacts and their handler function
 static struct rfc_handler mycontacts[] = {
@@ -40,10 +43,12 @@ static struct rfc_handler mycontacts[] = {
   { "LASTCN", &lastcn_responder },
   { "DUMP-ROUTING-TABLE", &dump_routing_table_responder },
   { "UPTIME", &uptime_responder },
-  { "TIME", &time_responder }
+  { "TIME", &time_responder },
+#if CHAOS_DNS
+  { "DNS", &dns_responder },
+#endif
+  { NULL, NULL}			/* end marker */
 };
-// KEEP THIS IN SYNC WITH LENGTH OF mycontacts
-#define MAX_CONTACT 5
 
 // Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.
 int
@@ -365,7 +370,7 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
   int i;
   u_char *cname = (u_char *)calloc(ch_nbytes(ch)+1, sizeof(u_char));
   ch_11_gets(&data[CHAOS_HEADERSIZE], cname, ch_nbytes(ch));
-  for (i = 0; i < MAX_CONTACT; i++) {
+  for (i = 0; mycontacts[i].contact != NULL; i++) {
     if ((strncmp((char *)cname, (char *)mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
 	&& (ch_nbytes(ch) == strlen(mycontacts[i].contact))) {
       if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);

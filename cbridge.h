@@ -24,6 +24,11 @@
 #define CHAOS_TLS 1
 #endif
 
+#ifndef CHAOS_DNS
+// enable the DNS code (forwarder and internal host/addr parser)
+#define CHAOS_DNS 1
+#endif
+
 #if CHAOS_ETHERP
 #ifndef ETHER_BPF
 // use BPF rather than sockaddr_ll, e.g. for MacOS

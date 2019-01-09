@@ -17,11 +17,11 @@ endif
 
 all: cbridge
 
-OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o
+OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o
 
 # YMMV, but sometimes openssl etc are in /opt/local. -lssl and -lcrypto are needed only for TLS
 cbridge: cbridge.c $(OBJS) chaosd.h cbridge-chaos.h chudp.h contacts.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto -lresolv
 
 contacts.o: contacts.c cbridge-chaos.h cbridge.h
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -39,6 +39,9 @@ debug.o: debug.c cbridge.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 chether.o: chether.c cbridge.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+dns.o: dns.c cbridge.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 clean:
