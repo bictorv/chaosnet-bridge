@@ -10,11 +10,12 @@
 
 // TODO
 // x add config parsing
-// - add to mycontacts: either
+// x add to mycontacts: either
 // -- make mycontacts dynamic (contacts.c) and add dns_responder to it (in init_dns?)
-// -- or just add it in contacts.c, using an #if
-// - call init_dns from main
-// - start dns_forwarder_thread
+// x- or just add it in contacts.c, using an #if
+// x call init_chaos_dns from main
+// x start dns_forwarder_thread
+// x parse name/addr in TLS code
 
 #include <sys/types.h>
 #include <netinet/in.h>
@@ -36,6 +37,7 @@
 #endif
 
 static int trace_dns = 0;
+int do_dns_forwarding = 0;
 static char chaos_dns_server[4*3+3+1] = CHAOS_DNS_SERVER;
 static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 
@@ -130,6 +132,11 @@ dns_forwarder_thread(void *v)
 
     PTLOCK(dns_lock);
     struct chaos_dns_req *q = &chreq[*chreq_rix];
+    if ((q->reqlen == 0) || (q->req == NULL)) {
+      fprintf(stderr,"%% DNS: reading request at rix %d but it is NULL!\n", *chreq_rix);
+      PTUNLOCK(dns_lock);
+      continue;
+    }
     if (trace_dns) {
       fprintf(stderr,"DNS: reading request at rix %d\n", *chreq_rix);
       if (verbose) {
@@ -142,6 +149,8 @@ dns_forwarder_thread(void *v)
     if ((anslen = res_nsend(&_res, q->req, q->reqlen, (u_char *)&answer, sizeof(answer))) >= 0) {
       // success, free the RFC buffer
       free(q->req);
+      q->req = NULL;
+      q->reqlen = 0;
 
       if (trace_dns) {
 	fprintf(stderr,"DNS: got answer, len %d\n", anslen);
@@ -189,71 +198,6 @@ dns_forwarder_thread(void *v)
       perror("sem_post(dns forwarder)");
     }
   }
-}
-
-void
-init_chaos_dns()
-{
-  res_state statp = &_res;
-
-  // init lock and semaphores
-  pthread_mutex_init(&dns_lock, NULL);
-#if __APPLE__
-  // no support for "anonymous" semaphores
-  if ((dns_thread_readerp = sem_open("/cbridge-dns-reader", O_CREAT, S_IRWXU, 0)) < 0) {
-    perror("sem_open(/cbridge-dns-reader)");
-    exit(1);
-  }
-  if ((dns_thread_writerp = sem_open("/cbridge-dns-writer", O_CREAT, S_IRWXU, CHREQ_MAX)) < 0) {
-    perror("sem_open(/cbridge-dns-writer)");
-    exit(1);
-  }
-#else
-  if (sem_init(&dns_thread_reader, 0, 0) < 0) {
-    perror("sem_init(dns reader)");
-    exit(1);
-  }
-  sem_init(&dns_thread_writer, 0, CHREQ_MAX) {
-    perror("sem_init(dns writer)");
-    exit(1);
-  }
-  dns_thread_readerp = &dns_thread_reader;
-  dns_thread_writerp = &dns_thread_writer;
-#endif
-
-  // allocate shared structure
-  if ((chreq = malloc(sizeof(struct chaos_dns_req)*CHREQ_MAX)) == NULL) {
-    perror("malloc(chreq)");
-    exit(1);
-  }
-  if ((chreq_wix = malloc(sizeof(chreq_wix))) == NULL) {
-    perror("malloc(chreq_wix)");
-    exit(1);
-  }
-  if ((chreq_rix = malloc(sizeof(chreq_rix))) == NULL) {
-    perror("malloc(chreq_rix)");
-    exit(1);
-  }
-  memset((char *)chreq, 0, sizeof(struct chaos_dns_req)*CHREQ_MAX);
-  *chreq_wix = *chreq_rix = 0;
-
-  // initialize resolver library
-  if (res_ninit(statp) < 0) {
-    fprintf(stderr,"Can't init statp\n");
-    exit(1);
-  }
-  // make sure to make recursive requests
-  statp->options |= RES_RECURSE;
-  // change nameserver
-  if (inet_aton(chaos_dns_server, &statp->nsaddr_list[0].sin_addr) < 0) {
-    perror("inet_aton (chaos_dns_server does not parse)");
-    exit(1);
-  } else {
-    statp->nsaddr_list[0].sin_family = AF_INET;
-    statp->nsaddr_list[0].sin_port = htons(53);
-    statp->nscount = 1;
-  }
-  // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
 }
 
 // given a Chaosnet address, return its domain name in namestr.
@@ -373,12 +317,80 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   return ix;
 }
 
+void
+init_chaos_dns(int do_forwarding)
+{
+  res_state statp = &_res;
+
+  if (do_forwarding) {
+    // init lock and semaphores
+    pthread_mutex_init(&dns_lock, NULL);
+#if __APPLE__
+    // no support for "anonymous" semaphores
+    if ((dns_thread_readerp = sem_open("/cbridge-dns-reader", O_CREAT, S_IRWXU, 0)) < 0) {
+      perror("sem_open(/cbridge-dns-reader)");
+      exit(1);
+    }
+    if ((dns_thread_writerp = sem_open("/cbridge-dns-writer", O_CREAT, S_IRWXU, CHREQ_MAX)) < 0) {
+      perror("sem_open(/cbridge-dns-writer)");
+      exit(1);
+    }
+#else
+    if (sem_init(&dns_thread_reader, 0, 0) < 0) {
+      perror("sem_init(dns reader)");
+      exit(1);
+    }
+    sem_init(&dns_thread_writer, 0, CHREQ_MAX) {
+      perror("sem_init(dns writer)");
+      exit(1);
+    }
+    dns_thread_readerp = &dns_thread_reader;
+    dns_thread_writerp = &dns_thread_writer;
+#endif
+
+    // allocate shared structure
+    if ((chreq = malloc(sizeof(struct chaos_dns_req)*CHREQ_MAX)) == NULL) {
+      perror("malloc(chreq)");
+      exit(1);
+    }
+    if ((chreq_wix = malloc(sizeof(chreq_wix))) == NULL) {
+      perror("malloc(chreq_wix)");
+      exit(1);
+    }
+    if ((chreq_rix = malloc(sizeof(chreq_rix))) == NULL) {
+      perror("malloc(chreq_rix)");
+      exit(1);
+    }
+    memset((char *)chreq, 0, sizeof(struct chaos_dns_req)*CHREQ_MAX);
+    *chreq_wix = *chreq_rix = 0;
+  }
+
+  // initialize resolver library
+  if (res_ninit(statp) < 0) {
+    fprintf(stderr,"Can't init statp\n");
+    exit(1);
+  }
+  // make sure to make recursive requests
+  statp->options |= RES_RECURSE;
+  // change nameserver
+  if (inet_aton(chaos_dns_server, &statp->nsaddr_list[0].sin_addr) < 0) {
+    perror("inet_aton (chaos_dns_server does not parse)");
+    exit(1);
+  } else {
+    statp->nsaddr_list[0].sin_family = AF_INET;
+    statp->nsaddr_list[0].sin_port = htons(53);
+    statp->nscount = 1;
+  }
+  // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
+}
+
 // **** for parsing/printing config
 
 // parse a line beginning with "dns" (after parsing the "dns" keyword)
 // args:
 //   server 1.2.3.4
 //   addrdomain ch-addr.net.
+//   forwarder on/off
 //   trace on/off
 int
 parse_dns_config_line()
@@ -395,11 +407,19 @@ parse_dns_config_line()
       if (tok == NULL) { fprintf(stderr,"dns: no addrdomain specified\n"); return -1; }
       strncpy(chaos_address_domain, tok, sizeof(chaos_address_domain));
     }
+    else if (strcasecmp(tok, "forwarder") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
+	do_dns_forwarding = 1;
+      else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0))
+	do_dns_forwarding = 0;
+      else { fprintf(stderr,"dns: invalid forwarder arg %s specified\n", tok); return -1; }
+    }
     else if (strcasecmp(tok, "trace") == 0) {
       tok = strtok(NULL, " \t\r\n");
-      if ((tok == NULL) || (strncmp(tok,"on", 2) == 0) || (strncmp(tok,"yes",3) == 0))
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
 	trace_dns = 1;
-      else if ((strncmp(tok,"off", 3) == 0) || (strncmp(tok,"no",2) == 0))
+      else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0))
 	trace_dns = 0;
       else { fprintf(stderr,"dns: invalid trace arg %s specified\n", tok); return -1; }
     }
@@ -416,6 +436,16 @@ print_config_dns()
 {
   printf(" Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
 	 chaos_dns_server, chaos_address_domain, trace_dns ? "on" : "off");
+  if (chreq != NULL) {
+    int i;
+    PTLOCK(dns_lock);
+    printf(" Request queue:\n  i\tsrc\tsix\tlen\n");
+    for (i = 0; i < CHREQ_MAX; i++) {
+      if (chreq[i].reqlen > 0)
+	printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
+    }
+    PTUNLOCK(dns_lock);
+  }
 }
 
 // **** for debugging

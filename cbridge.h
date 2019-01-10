@@ -278,3 +278,8 @@ void print_arp_table(void);
 
 struct chroute *find_in_routing_table(u_short dchad, int only_host, int also_nopath);
 void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen, u_char src_linktype);
+
+#if CHAOS_DNS
+int dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len);
+int dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len);
+#endif

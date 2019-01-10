@@ -943,6 +943,18 @@ tls_server(void *v)
 	  continue;
 	}
 	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
+#if CHAOS_DNS
+	if (client_cn) {
+	  u_short claddrs[4];
+	  int i, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+	  if (tls_debug) {
+	    fprintf(stderr, "TLS server client CN %s has %d Chaos address(es): ", client_cn, naddrs);
+	    for (i = 0; i < naddrs; i++)
+	      fprintf(stderr,"%#o ", claddrs[i]);
+	    fprintf(stderr,"\n");
+	  }
+	}
+#endif
 	// create tlsdest, fill in stuff
 	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen);
     } else {
@@ -1048,6 +1060,15 @@ void * tls_input(void *v)
 	    if (srcrt == NULL) {
 	      // add route
 	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
+#if CHAOS_DNS
+	      if (tls_debug) {
+		u_char hname[256];  /* random size limit */
+		if (dns_name_of_addr(srcaddr, hname, sizeof(hname)) < 0)
+		  fprintf(stderr,"TLS: no host name found for source %#o\n", srcaddr);
+		else 
+		  fprintf(stderr,"TLS: source %#o has DNS host name '%s', TLS name '%s'\n", srcaddr, hname, tlsdest[tindex].tls_name);
+	      }
+#endif
 	      if (!serverp)
 		fprintf(stderr,"TLS: No source route found for incoming data, but we are a client?? (source %#o, tlsdest %d)\n",
 			srcaddr, tindex);

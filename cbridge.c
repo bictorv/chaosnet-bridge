@@ -128,8 +128,8 @@ int *tlsdest_len;
 #endif // CHAOS_TLS
 
 #if CHAOS_DNS
-int do_dns = 0;
-void init_chaos_dns(void);
+extern int do_dns_forwarding;
+void init_chaos_dns(int do_forwarding);
 int parse_dns_config_line(void);
 void print_config_dns(void);
 void *dns_forwarder_thread(void *v);
@@ -1336,10 +1336,7 @@ int parse_config_line(char *line)
 #endif // CHAOS_TLS
 #if CHAOS_DNS
   else if (strcasecmp(tok, "dns") == 0) {
-    int val = parse_dns_config_line();
-    if (val == 0)
-      do_dns = 1;
-    return val;
+    return parse_dns_config_line();
   }
 #endif
   else if (strcasecmp(tok, "ether") == 0) {
@@ -1411,7 +1408,7 @@ print_stats(int sig)
 	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
 #if CHAOS_DNS
-    if (do_dns) {
+    if (do_dns_forwarding) {
       printf("DNS forwarder enabled\n");
       print_config_dns();
     }
@@ -1533,8 +1530,7 @@ main(int argc, char *argv[])
 #endif // CHAOS_ETHERP
   }
 #if CHAOS_DNS
-  if (do_dns)
-    init_chaos_dns();
+  init_chaos_dns(do_dns_forwarding);
 #endif
 
 #if 1
@@ -1623,7 +1619,7 @@ main(int argc, char *argv[])
   }
 #endif
 #if CHAOS_DNS
-  if (do_dns) {
+  if (do_dns_forwarding) {
     if (verbose) fprintf(stderr,"Starting thread for DNS forwarder\n");
     if (pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL) < 0) {
       perror("pthread_create(dns_forwarder_thread)");
