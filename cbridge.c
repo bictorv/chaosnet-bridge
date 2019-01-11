@@ -1408,9 +1408,9 @@ print_stats(int sig)
 	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
 #if CHAOS_DNS
+    print_config_dns();
     if (do_dns_forwarding) {
-      printf("DNS forwarder enabled\n");
-      print_config_dns();
+      printf(" DNS forwarder enabled\n");
     }
 #endif
   }

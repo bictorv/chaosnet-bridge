@@ -589,6 +589,18 @@ void *tls_connector(void *arg)
 	  continue;
 	}
 	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
+#if CHAOS_DNS
+	if (server_cn) {
+	  u_short claddrs[4];
+	  int i, naddrs = dns_addrs_of_name(server_cn, (u_short *)&claddrs, 4);
+	  if (tls_debug) {
+	    fprintf(stderr, "TLS server CN %s has %d Chaos address(es): ", server_cn, naddrs);
+	    for (i = 0; i < naddrs; i++)
+	      fprintf(stderr,"%#o ", claddrs[i]);
+	    fprintf(stderr,"\n");
+	  }
+	}
+#endif
 	// create tlsdest, fill in stuff
 	update_client_tlsdest(td, server_cn, tsock, ssl);
 
