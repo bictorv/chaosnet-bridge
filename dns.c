@@ -276,7 +276,11 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   sprintf(qstring,"%s.", namestr);
 
   if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_a, (u_char *)&answer, sizeof(answer))) < 0) {
-    if (trace_dns) fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
+    if (trace_dns) {
+      fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
+      fprintf(stderr,"DNS: %d nsaddrs, family %d, port %d", _res.nscount, _res.nsaddr_list[0].sin_family, ntohs(_res.nsaddr_list[0].sin_port));
+      fprintf(stderr,", addr %s\n", inet_ntoa(_res.nsaddr_list[0].sin_addr));
+    }
     return -1;
   }
 
