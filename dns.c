@@ -159,6 +159,8 @@ dns_forwarder_thread(void *v)
       }
 
       // Check that the answer fits in a Chaos pkt
+      // @@@@ libresolv seems to handle truncation to 512 bytes, but here we need manual truncation to 488.
+      // @@@@ TC flag + removing whole sections until it fits
       if (anslen > 488) {
 	// test case: amnesia.lmi.com. on pi3
 	if (trace_dns) fprintf(stderr,"%% DNS: answer doesn't fit in Chaos ANS, truncating\n");
@@ -340,7 +342,7 @@ init_chaos_dns(int do_forwarding)
       perror("sem_init(dns reader)");
       exit(1);
     }
-    sem_init(&dns_thread_writer, 0, CHREQ_MAX) {
+    if (sem_init(&dns_thread_writer, 0, CHREQ_MAX) < 0) {
       perror("sem_init(dns writer)");
       exit(1);
     }
