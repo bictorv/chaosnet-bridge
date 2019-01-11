@@ -217,13 +217,13 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   sprintf(qstring,"%o.%s", chaddr, chaos_address_domain);
 
   if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
-    if (trace_dns) fprintf(stderr,"DNS: name of %s failed, errcode %d\n", qstring, _res.res_h_errno);
+    if (trace_dns) fprintf(stderr,"DNS: PTR of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
     *namestr = '\0';
     return -1;
   }
 
   if (trace_dns && verbose) {
-    fprintf(stderr,"DNS: got response for name of %#o\n", chaddr);
+    fprintf(stderr,"DNS: got response for PTR of %s\n", qstring);
     dns_describe_packet(answer, anslen);
   }
 
@@ -266,19 +266,22 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 {
   char a_dom[NS_MAXDNAME];
   int a_addr;
+  char qstring[NS_MAXDNAME];
   u_char answer[NS_PACKETSZ];
   int anslen;
   ns_msg m;
   ns_rr rr;
   int i, ix = 0, offs;
 
-  if ((anslen = res_nquery(&_res, (char *)namestr, ns_c_chaos, ns_t_a, (u_char *)&answer, sizeof(answer))) < 0) {
-    if (trace_dns) fprintf(stderr,"DNS: addrs of %s failed, errcode %d\n", namestr, _res.res_h_errno);
+  sprintf(qstring,"%s.", namestr);
+
+  if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_a, (u_char *)&answer, sizeof(answer))) < 0) {
+    if (trace_dns) fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
     return -1;
   }
 
   if (trace_dns && verbose) {
-    fprintf(stderr,"DNS: got response for addrs of %s\n", namestr);
+    fprintf(stderr,"DNS: got response for addrs of %s\n", qstring);
     dns_describe_packet(answer, anslen);
   }
 
