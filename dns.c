@@ -217,7 +217,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   sprintf(qstring,"%o.%s", chaddr, chaos_address_domain);
 
   if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
-    if (trace_dns) fprintf(stderr,"DNS: addrs of %s failed, errcode %d\n", namestr, _res.res_h_errno);
+    if (trace_dns) fprintf(stderr,"DNS: name of %s failed, errcode %d\n", qstring, _res.res_h_errno);
     *namestr = '\0';
     return -1;
   }
@@ -441,7 +441,7 @@ print_config_dns()
   if (chreq != NULL) {
     int i;
     PTLOCK(dns_lock);
-    printf(" Request queue:\n  i\tsrc\tsix\tlen\n");
+    printf(" DNS request queue:\n  i\tsrc\tsix\tlen\n");
     for (i = 0; i < CHREQ_MAX; i++) {
       if (chreq[i].reqlen > 0)
 	printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
