@@ -33,13 +33,17 @@
 #define CHAOS_DNS_SERVER "130.238.19.25"
 #endif
 #ifndef CHAOS_ADDR_DOMAIN
-#define CHAOS_ADDR_DOMAIN "CH-ADDR.NET."
+// NOT dot-terminated
+#define CHAOS_ADDR_DOMAIN "CH-ADDR.NET"
 #endif
 
 static int trace_dns = 0;
 int do_dns_forwarding = 0;
 static char chaos_dns_server[4*3+3+1] = CHAOS_DNS_SERVER;
 static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
+
+// resolver state, shared between threads (maybe a bad idea)
+struct __res_state chres;
 
 // consumer/producer lock and semaphores
 static pthread_mutex_t dns_lock;
@@ -113,6 +117,7 @@ dns_responder(u_char *rfc, int len)
 void *
 dns_forwarder_thread(void *v)
 {
+  res_state statp = &chres;
 #if 1
   u_char answer[NS_PACKETSZ];
 #else
@@ -146,7 +151,7 @@ dns_forwarder_thread(void *v)
     }
 
     // forward the query
-    if ((anslen = res_nsend(&_res, q->req, q->reqlen, (u_char *)&answer, sizeof(answer))) >= 0) {
+    if ((anslen = res_nsend(statp, q->req, q->reqlen, (u_char *)&answer, sizeof(answer))) >= 0) {
       // success, free the RFC buffer
       free(q->req);
       q->req = NULL;
@@ -192,7 +197,7 @@ dns_forwarder_thread(void *v)
 
     } else {
       // query failed @@@@ maybe send LOS?
-      if (trace_dns) fprintf(stderr,"DNS: query failed, error code %d\n", _res.res_h_errno);
+      if (trace_dns) fprintf(stderr,"DNS: query failed, error code %d\n", statp->res_h_errno);
       PTUNLOCK(dns_lock);
     }
     // tell responder there is room for one more
@@ -207,6 +212,7 @@ dns_forwarder_thread(void *v)
 int
 dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
 {
+  res_state statp = &chres;
   char qstring[12+6];
   u_char answer[NS_PACKETSZ];
   int anslen;
@@ -214,10 +220,11 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   ns_rr rr;
   int i, offs;
 
-  sprintf(qstring,"%o.%s", chaddr, chaos_address_domain);
+  // note that chaos_address_domain should NOT end with dot.
+  sprintf(qstring,"%o.%s.", chaddr, chaos_address_domain);
 
-  if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
-    if (trace_dns) fprintf(stderr,"DNS: PTR of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
+  if ((anslen = res_nquery(statp, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
+    if (trace_dns) fprintf(stderr,"DNS: PTR of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     *namestr = '\0';
     return -1;
   }
@@ -228,31 +235,35 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   }
 
   if (ns_initparse((u_char *)&answer, anslen, &m) < 0) {
-    fprintf(stderr,"ns_init_parse failure code %d",_res.res_h_errno);
+    fprintf(stderr,"ns_init_parse failure code %d", statp->res_h_errno);
     return -1;
   }
 
   if (ns_msg_getflag(m, ns_f_rcode) != ns_r_noerror) {
+    if (trace_dns) fprintf(stderr,"DNS: bad response code %d\n", ns_msg_getflag(m, ns_f_rcode));
     *namestr = '\0';
     return -1;
   }
   if (ns_msg_count(m, ns_s_an) < 1) {
+    if (trace_dns) fprintf(stderr,"DNS: bad answer count %d\n", ns_msg_count(m, ns_s_an));
     *namestr = '\0';
     return -1;
   }
   for (i = 0; i < ns_msg_count(m, ns_s_an); i++) {
     if (ns_parserr(&m, ns_s_an, i, &rr) < 0) {
+      if (trace_dns) fprintf(stderr,"DNS: failed to parse answer RR %d\n", i);
       return -1;
-      if (ns_rr_type(rr) == ns_t_ptr) {
-	if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)namestr, namestr_len)) < 0) {
-	  return -1;
-	} else
-	  // there can/should be only one.
-	  return strlen((char *)namestr);
-      } else {
-	fprintf(stderr,"%% DNS: warning - asked for PTR for %s but got answer type %s\n",
-		qstring, p_type(ns_rr_type(rr)));
-      }
+    }
+    if (ns_rr_type(rr) == ns_t_ptr) {
+      if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)namestr, namestr_len)) < 0) {
+	if (trace_dns) fprintf(stderr,"DNS: failed to expand PTR domain %d\n", i);
+	return -1;
+      } else
+	// there can/should be only one.
+	return strlen((char *)namestr);
+    } else if (trace_dns) {
+      fprintf(stderr,"%% DNS: warning - asked for PTR for %s but got answer type %s\n",
+	      qstring, p_type(ns_rr_type(rr)));
     }
   }
   return -1;
@@ -264,6 +275,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
 int 
 dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 {
+  res_state statp = &chres;
   char a_dom[NS_MAXDNAME];
   int a_addr;
   char qstring[NS_MAXDNAME];
@@ -275,11 +287,9 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 
   sprintf(qstring,"%s.", namestr);
 
-  if ((anslen = res_nquery(&_res, qstring, ns_c_chaos, ns_t_a, (u_char *)&answer, sizeof(answer))) < 0) {
+  if ((anslen = res_nquery(statp, qstring, ns_c_chaos, ns_t_a, (u_char *)&answer, sizeof(answer))) < 0) {
     if (trace_dns) {
-      fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, _res.res_h_errno, hstrerror(_res.res_h_errno));
-      fprintf(stderr,"DNS: %d nsaddrs, family %d, port %d", _res.nscount, _res.nsaddr_list[0].sin_family, ntohs(_res.nsaddr_list[0].sin_port));
-      fprintf(stderr,", addr %s\n", inet_ntoa(_res.nsaddr_list[0].sin_addr));
+      fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     }
     return -1;
   }
@@ -290,37 +300,40 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   }
 
   if (ns_initparse((u_char *)&answer, anslen, &m) < 0) {
-    fprintf(stderr,"ns_init_parse failure code %d",_res.res_h_errno);
+    fprintf(stderr,"ns_init_parse failure code %d",statp->res_h_errno);
     return -1;
   }
 
   if (ns_msg_getflag(m, ns_f_rcode) != ns_r_noerror) {
+    if (trace_dns) fprintf(stderr,"DNS: bad response code %d\n", ns_msg_getflag(m, ns_f_rcode));
     return -1;
   }
   if (ns_msg_count(m, ns_s_an) < 1) {
+    if (trace_dns) fprintf(stderr,"DNS: bad answer count %d\n", ns_msg_count(m, ns_s_an));
     return -1;
   }
   for (i = 0; i < ns_msg_count(m, ns_s_an); i++) {
-    if (ns_parserr(&m, ns_s_an, i, &rr) < 0) {
+    if (ns_parserr(&m, ns_s_an, i, &rr) < 0) { 
+      if (trace_dns) fprintf(stderr,"DNS: failed to parse answer RR %d\n", i);
       return -1;
-      if (ns_rr_type(rr) == ns_t_a) {
-	if (((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0)
-	    ||
-	    ((a_addr = ns_get16(ns_rr_rdata(rr)+offs)) < 0))
-	  return -1;
-	if (strncasecmp(a_dom, chaos_address_domain, strlen(chaos_address_domain)) == 0) {
-	  // only use addresses in "our" address domain
-	  if (ix < addrs_len) {
-	    addrs[ix++] = a_addr;
-	  }
-	} else {
-	  fprintf(stderr,"%% DNS: warning - address for %s is in %s which is different from %s\n",
-		  namestr, a_dom, chaos_address_domain);
+    }
+    if (ns_rr_type(rr) == ns_t_a) {
+      if (((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0)
+	  ||
+	  ((a_addr = ns_get16(ns_rr_rdata(rr)+offs)) < 0))
+	return -1;
+      if (strncasecmp(a_dom, chaos_address_domain, strlen(chaos_address_domain)) == 0) {
+	// only use addresses in "our" address domain
+	if (ix < addrs_len) {
+	  addrs[ix++] = a_addr;
 	}
-      } else {
-	fprintf(stderr,"%% DNS: warning - asked for A for %s but got answer type %s\n",
-		namestr, p_type(ns_rr_type(rr)));
+      } else if (trace_dns) {
+	fprintf(stderr,"%% DNS: warning - address for %s is in %s which is different from %s\n",
+		namestr, a_dom, chaos_address_domain);
       }
+    } else if (trace_dns) {
+      fprintf(stderr,"%% DNS: warning - asked for A for %s but got answer type %s\n",
+	      namestr, p_type(ns_rr_type(rr)));
     }
   }
   return ix;
@@ -329,7 +342,7 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 void
 init_chaos_dns(int do_forwarding)
 {
-  res_state statp = &_res;
+  res_state statp = &chres;
 
   if (do_forwarding) {
     // init lock and semaphores
@@ -415,6 +428,10 @@ parse_dns_config_line()
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"dns: no addrdomain specified\n"); return -1; }
       strncpy(chaos_address_domain, tok, sizeof(chaos_address_domain));
+      if (chaos_address_domain[strlen(chaos_address_domain)-1] == '.') {
+	fprintf(stderr,"dns: addrdomain should not be dot-terminated (fixing it for you)\n");
+	chaos_address_domain[strlen(chaos_address_domain)-1] = '\0';
+      }
     }
     else if (strcasecmp(tok, "forwarder") == 0) {
       tok = strtok(NULL, " \t\r\n");
@@ -443,8 +460,14 @@ parse_dns_config_line()
 void
 print_config_dns()
 {
+  res_state statp = &chres;
   printf(" Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
 	 chaos_dns_server, chaos_address_domain, trace_dns ? "on" : "off");
+  if (trace_dns) {
+    printf(" DNS options %#lx, nsaddrs %d, family %d, port %d", statp->options, statp->nscount, statp->nsaddr_list[0].sin_family, ntohs(statp->nsaddr_list[0].sin_port));
+    printf(", addr %s\n", inet_ntoa(statp->nsaddr_list[0].sin_addr));
+  }
+
   if (chreq != NULL) {
     int i;
     PTLOCK(dns_lock);
@@ -500,18 +523,18 @@ dns_show_section(int sect, ns_msg m)
 	return;
 	//exit(1);
       }
-      printf("%d: %s addr domain %s, addr %#o\n", i, ns_rr_name(rr), a_dom, a_addr);
+      printf(" %d: %s addr domain %s, addr %#o\n", i, ns_rr_name(rr), a_dom, a_addr);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_a) && (ns_rr_class(rr) == ns_c_in)) {
       struct in_addr in;
       memcpy(&in, ns_rr_rdata(rr), sizeof(in));
-      printf("%d: %s addr %s\n", i, ns_rr_name(rr), inet_ntoa(in));
+      printf(" %d: %s addr %s\n", i, ns_rr_name(rr), inet_ntoa(in));
     } else if ((ns_rr_rdlen(rr) > 0) && ((ns_rr_type(rr) == ns_t_cname) || (ns_rr_type(rr) == ns_t_ptr) || (ns_rr_type(rr) == ns_t_ns))) {
       // Expand the domain
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0) {
 	perror("dn_expand");
 	exit(1);
       }
-      printf("%d: %s %s %s\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom);
+      printf(" %d: %s %s %s\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_rp)) {
       // Expand the mbox domain
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0) {
@@ -525,7 +548,7 @@ dns_show_section(int sect, ns_msg m)
 	return;
 	//exit(1);
       }
-      printf("%d: %s %s %s \"%s\"\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom, b_dom);
+      printf(" %d: %s %s %s \"%s\"\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom, b_dom);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_hinfo)) {
       char *rd, cpu[256], os[256];
       rd = (char *)ns_rr_rdata(rr);
@@ -536,29 +559,28 @@ dns_show_section(int sect, ns_msg m)
       x = *rd;
       strncpy(os, rd+1, x);
       os[x] = '\0';
-      printf("%d: %s hinfo %s %s\n", i, ns_rr_name(rr), cpu, os);
+      printf(" %d: %s hinfo %s %s\n", i, ns_rr_name(rr), cpu, os);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_txt)) {
       char txt[256];
       x = *ns_rr_rdata(rr);
       strncpy(txt, (char *)ns_rr_rdata(rr)+1, x);
       txt[x] = '\0';
-      printf("%d: %s txt \"%s\"\n", i, ns_rr_name(rr), txt);
+      printf(" %d: %s txt \"%s\"\n", i, ns_rr_name(rr), txt);
     } else
-      printf("%d: %s rrtype %s (%d) rrclass %s (%d), rdlen %d\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), ns_rr_type(rr), p_class(ns_rr_class(rr)), ns_rr_class(rr), ns_rr_rdlen(rr));
+      printf(" %d: %s rrtype %s (%d) rrclass %s (%d), rdlen %d\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), ns_rr_type(rr), p_class(ns_rr_class(rr)), ns_rr_class(rr), ns_rr_rdlen(rr));
   }
 }
 
 static void
 dns_describe_packet(u_char *pkt, int len)
 {
-  res_state statp = &_res;
+  res_state statp = &chres;
   ns_msg m;
   ns_rr rr;
 
   if (ns_initparse(pkt, len, &m) < 0) {
     fprintf(stderr,"ns_initparse failure code %d: %s",statp->res_h_errno, hstrerror(statp->res_h_errno));
     return;
-    //exit(1);
   }
   dns_show_flags(m);
   printf("Counts: Ques %d, Ans %d, NS %d, Add %d\n",
@@ -567,22 +589,18 @@ dns_describe_packet(u_char *pkt, int len)
   if (ns_msg_count(m, ns_s_qd) > 0) {
     printf("Questions:\n");
     dns_show_section(ns_s_qd, m);
-    printf("\n");
   }
 
   if (ns_msg_count(m, ns_s_an) > 0) {
     printf("Answers:\n");
     dns_show_section(ns_s_an, m);
-    printf("\n");
   }
   if (ns_msg_count(m, ns_s_ns) > 0) {
     printf("Name servers:\n");
     dns_show_section(ns_s_ns, m);
-    printf("\n");
   }
   if (ns_msg_count(m, ns_s_ar) > 0) {
     printf("Additional:\n");
     dns_show_section(ns_s_ar, m);
-    printf("\n");
   }
 }
