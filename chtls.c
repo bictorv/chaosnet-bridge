@@ -323,7 +323,7 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
 
 
 static void
-add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len)
+add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len, u_short chaddr)
 {
   // no tlsdest exists for server end, until it is connected
   struct tls_dest *td = NULL;
@@ -370,6 +370,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     tlsdest[*tlsdest_len].tls_serverp = 1;
     tlsdest[*tlsdest_len].tls_sock = sock;
     tlsdest[*tlsdest_len].tls_ssl = ssl;
+    tlsdest[*tlsdest_len].tls_addr = chaddr;
 
     (*tlsdest_len)++;
   }
@@ -598,6 +599,19 @@ void *tls_connector(void *arg)
 	    for (i = 0; i < naddrs; i++)
 	      fprintf(stderr,"%#o ", claddrs[i]);
 	    fprintf(stderr,"\n");
+	  }
+	  int found = 0;
+	  for (i = 0; i < naddrs; i++) {
+	    if (claddrs[i] == td->tls_addr) {
+	      found = 1;
+	      break;
+	    }
+	  }
+	  if (!found) {
+	    if (tls_debug || verbose || debug) {
+	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
+	      // one day, do something
+	    }
 	  }
 	}
 #endif
@@ -955,6 +969,7 @@ tls_server(void *v)
 	  continue;
 	}
 	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
+	u_short client_chaddr = 0;
 #if CHAOS_DNS
 	if (client_cn) {
 	  u_short claddrs[4];
@@ -965,10 +980,14 @@ tls_server(void *v)
 	      fprintf(stderr,"%#o ", claddrs[i]);
 	    fprintf(stderr,"\n");
 	  }
+	  // if there is just one address, use it
+	  // @@@@ search for address on my subnet
+	  if (naddrs == 1)
+	    client_chaddr = claddrs[0];
 	}
 #endif
 	// create tlsdest, fill in stuff
-	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen);
+	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen, client_chaddr);
     } else {
       // no cert
       if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");
