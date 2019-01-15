@@ -98,7 +98,8 @@ dns_responder(u_char *rfc, int len)
     perror("malloc(dns responder)");
     exit(1);
   }
-  memcpy(req, &rfc[CHAOS_HEADERSIZE+4], qlen);
+  // PDP11 swap
+  ntohs_buf((u_short *)&rfc[CHAOS_HEADERSIZE+4], (u_short *)req, qlen);
   q->req = req;
   q->reqlen = qlen;
   // update index for next RFC to come
@@ -145,7 +146,7 @@ dns_forwarder_thread(void *v)
     if (trace_dns) {
       fprintf(stderr,"DNS: reading request at rix %d\n", *chreq_rix);
       if (verbose) {
-	fprintf(stderr,"DNS request from Chaos %#o:\n", q->srcaddr);
+	fprintf(stderr,"DNS request from Chaos %#o, len %d:\n", q->srcaddr, q->reqlen);
 	dns_describe_packet(q->req, q->reqlen);
       }
     }
@@ -190,7 +191,8 @@ dns_forwarder_thread(void *v)
       // ITS has 64 unique ones (six bits, see $CHXUN)
       set_ch_srcindex(ap, 0);
       // only 488 fit in a pkt
-      memcpy(&ans[CHAOS_HEADERSIZE], answer, anslen > 488 ? 488 : anslen);
+      // PDP11 swap
+      htons_buf((u_short *)answer,(u_short *)&ans[CHAOS_HEADERSIZE], anslen > 488 ? 488 : anslen);
       set_ch_nbytes(ap, anslen > 488 ? 488 : anslen);
 
       send_chaos_pkt((u_char *)&ans, ch_nbytes(ap)+CHAOS_HEADERSIZE);
@@ -571,6 +573,8 @@ dns_show_section(int sect, ns_msg m)
   }
 }
 
+void dumppkt_raw(unsigned char *ucp, int cnt);
+
 static void
 dns_describe_packet(u_char *pkt, int len)
 {
@@ -579,9 +583,14 @@ dns_describe_packet(u_char *pkt, int len)
   ns_rr rr;
 
   if (ns_initparse(pkt, len, &m) < 0) {
-    fprintf(stderr,"ns_initparse failure code %d: %s",statp->res_h_errno, hstrerror(statp->res_h_errno));
+    fprintf(stderr,"ns_initparse failure code %d: %s\n",statp->res_h_errno, hstrerror(statp->res_h_errno));
+    if (debug) dumppkt_raw(pkt, len);
     return;
   }
+  // dumppkt_raw(pkt, 4*2);	/* header, qd, an */
+  printf("Pkt len %d, Msg ID %d, Type %s, Opcode %d, Rcode %d\n",
+	 len, ns_msg_id(m), ns_msg_getflag(m, ns_f_qr) == 0 ? "query" : "response",
+	 ns_msg_getflag(m, ns_f_opcode), ns_msg_getflag(m, ns_f_rcode));
   dns_show_flags(m);
   printf("Counts: Ques %d, Ans %d, NS %d, Add %d\n",
 	 ns_msg_count(m,ns_s_qd), ns_msg_count(m,ns_s_an), ns_msg_count(m,ns_s_ns), ns_msg_count(m,ns_s_ar));

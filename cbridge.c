@@ -708,6 +708,10 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   // To me?
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
     if (ch_opcode(ch) == CHOP_RFC) {
+      if (verbose)
+	fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
+		ch_opcode_name(ch_opcode(ch)),
+		dchad);
       // see what contact they look for
       handle_rfc(ch, data, dlen);
     }
