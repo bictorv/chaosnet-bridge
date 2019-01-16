@@ -114,17 +114,103 @@ dns_responder(u_char *rfc, int len)
   }
 }
 
+// from libresolv, ns_parse
+// * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
+// * Copyright (c) 1996,1999 by Internet Software Consortium.
+int
+ns_skiprr(const u_char *ptr, const u_char *eom, ns_sect section, int count) {
+	const u_char *optr = ptr;
+
+	for ((void)NULL; count > 0; count--) {
+		int b, rdlength;
+
+		b = dn_skipname(ptr, eom);
+		if (b < 0)
+			return -EMSGSIZE; // RETERR(EMSGSIZE);
+		ptr += b/*Name*/ + NS_INT16SZ/*Type*/ + NS_INT16SZ/*Class*/;
+		if (section != ns_s_qd) {
+			if (ptr + NS_INT32SZ + NS_INT16SZ > eom)
+			  return -EMSGSIZE; // RETERR(EMSGSIZE);
+			ptr += NS_INT32SZ/*TTL*/;
+			NS_GET16(rdlength, ptr);
+			ptr += rdlength/*RData*/;
+		}
+	}
+	if (ptr > eom)
+	  return -EMSGSIZE; // RETERR(EMSGSIZE);
+	return (ptr - optr);
+}
+int
+truncate_dns_pkt(u_char *pkt, int len)
+{
+  // truncate a [raw] packet "manually"
+  int i;
+  int size = 6*2;		/* header size */
+  ns_msg m;
+
+  // get some assistance from the libresolv parser
+  if (ns_initparse(pkt, len, &m) < 0) {
+    // bail out, do nothing
+    // @@@@ should handle this - do it manually.
+    if (trace_dns) fprintf(stderr,"%% DNS: parsing failed, not truncating\n");
+    return len;
+  }
+
+  for (i = 0; i < ns_s_max; i++) {
+    // check each section
+    if (ns_msg_count(m, i) > 0) {
+      // calculate length of section
+      int l = (((i < ns_s_max-1) && (m._sections[i+1] != NULL)) ? m._sections[i+1] : ns_msg_end(m)) - m._sections[i];
+      if (size + l > 488) {
+	// this section is too long, truncate where in it
+	// Look at RRs, add them one by one while under 488
+	u_char *p = (u_char *)m._sections[i];	
+	int nrr = 0;
+	while ((size < 488) && (size < len)) {
+	  // skip over a RR, finding length of the RR
+	  int rrlen = ns_skiprr(p, ns_msg_end(m), i, 1);
+	  if (rrlen < 0) {
+	    fprintf(stderr,"Failed skipping RR!\n");
+	    return -1;
+	  }
+	  if (size + rrlen < 488) {
+	    // this RR is OK to include
+	    nrr++;
+	    size += rrlen;
+	    p += rrlen;
+	  } else {
+	    // time to truncate: this and following RRs are not to be included
+	    if (trace_dns) fprintf(stderr,"DNS: truncating section %d\n", i);
+	    int j;
+	    // update counts of this and later sections,
+	    u_short *pwords = (u_short *)pkt;
+	    pwords[2+i] = htons(nrr);
+	    m._counts[i] = nrr;
+	    for (j = i+1; j < ns_s_max; j++) {
+	      pwords[2+j]  = 0;
+	      m._counts[j] = 0;
+	      m._sections[j] = NULL;
+	    }
+	    // update eom
+	    m._eom = p;
+	    // and return new size
+	    return size;
+	  }
+	}
+      }
+      // include this whole section
+      size += l;
+    }
+  }
+}
+
+
 // Standard consumer thread
 void *
 dns_forwarder_thread(void *v)
 {
   res_state statp = &chres;
-#if 1
-  u_char answer[NS_PACKETSZ];
-#else
-  /* all that fits in a Chaos pkt */
-  u_char answer[488];		/* but ns_initparse breaks of too short buffer?? */
-#endif
+  u_char answer[NS_PACKETSZ*4];	/* fit ridiculous amounts to avoid ns_initparse breaking */
   int anslen;
   u_char ans[CH_PK_MAXLEN];	/* incl header+trailer */
   struct chaos_header *ap = (struct chaos_header *)&ans;
@@ -165,11 +251,21 @@ dns_forwarder_thread(void *v)
       }
 
       // Check that the answer fits in a Chaos pkt
-      // @@@@ libresolv seems to handle truncation to 512 bytes, but here we need manual truncation to 488.
-      // @@@@ TC flag + removing whole sections until it fits
+      // libresolv seems to handle truncation to 512 bytes, but here we need manual truncation to 488.
       if (anslen > 488) {
 	// test case: amnesia.lmi.com. on pi3
 	if (trace_dns) fprintf(stderr,"%% DNS: answer doesn't fit in Chaos ANS, truncating\n");
+
+	anslen = truncate_dns_pkt(answer, anslen);
+	if (trace_dns) fprintf(stderr,"%% DNS: answer truncated to length %d\n", anslen);
+	if (anslen < 0) {
+	  // in case truncation failed, just skip it
+	  PTUNLOCK(dns_lock);
+	  if (sem_post(dns_thread_writerp) < 0) {
+	    perror("sem_post(dns_forwarder)");
+	  }
+	  continue;
+	}
 	// set Truncated flag, cf RFC 1035 p26f
 	answer[2] |= 2;
       }
@@ -183,7 +279,6 @@ dns_forwarder_thread(void *v)
       set_ch_destaddr(ap, q->srcaddr);
       set_ch_destindex(ap, q->srcindex);
       set_ch_srcaddr(ap, q->dstaddr);
-
       PTUNLOCK(dns_lock);
 
       // @@@@ set random srcindex

@@ -36,9 +36,6 @@
 
 // TODO
 
-// DNS contact handler (simple RFC-ANS protocol),
-// forwarding requests using resolver library, in a separate thread
-
 // logging:
 // - lock to avoid mixed output from different threads
 // - improve granularity, e.g. to only log "major" events
