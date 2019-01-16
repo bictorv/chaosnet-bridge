@@ -359,7 +359,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 		     (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
 		    ip6, sizeof(ip6)) == NULL)
 	strerror_r(errno,ip6,sizeof(ip6));
-      fprintf(stderr,"Adding new TLS destination %s from %s port %d\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port), chaddr);
     }
 
     memset(&tlsdest[*tlsdest_len], 0, sizeof(struct tls_dest));
@@ -1078,12 +1078,14 @@ void * tls_input(void *v)
 	    if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
 	      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	      srcaddr = ntohs(tr->ch_hw_srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from trailer: %#o\n", srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
+				     ch_opcode_name(ch_opcode(cha)), srcaddr);
 	    } else {
 	      srcaddr = ch_srcaddr(cha);
 	      if (verbose || tls_debug || debug)
 		fprintf(stderr,"%%%% TLS input: no trailer in pkt from %#o\n", srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from header: %#o\n", srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from header: %#o\n",
+				     ch_opcode_name(ch_opcode(cha)), srcaddr);
 	    }
 	    // find the route to where from
 	    struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
@@ -1095,9 +1097,9 @@ void * tls_input(void *v)
 	      if (tls_debug) {
 		u_char hname[256];  /* random size limit */
 		if (dns_name_of_addr(srcaddr, hname, sizeof(hname)) < 0)
-		  fprintf(stderr,"TLS: no host name found for source %#o\n", srcaddr);
+		  fprintf(stderr,"TLS: no host name found for source %#o (TLS name '%s')\n", srcaddr, tlsdest[tindex].tls_name);
 		else 
-		  fprintf(stderr,"TLS: source %#o has DNS host name '%s', TLS name '%s'\n", srcaddr, hname, tlsdest[tindex].tls_name);
+		  fprintf(stderr,"TLS: source %#o has DNS host name '%s' (TLS name '%s')\n", srcaddr, hname, tlsdest[tindex].tls_name);
 	      }
 #endif
 	      if (!serverp)
