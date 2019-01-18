@@ -102,9 +102,9 @@ program in ITS.
 
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
-"myname" configuration parameter (defaults to "real" host name up to
-first period). Yes, it could try to look it up in Chaosnet DNS given
-the chaddr parameter, but... [libresolv won't play nicely with Chaos.]
+"myname" configuration parameter (defaults to the DNS address of the
+configured Chaosnet address ("chaddr" below), or the "real" host name,
+up to first period).
 
 It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the

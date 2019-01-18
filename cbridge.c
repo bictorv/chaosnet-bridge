@@ -1451,16 +1451,6 @@ main(int argc, char *argv[])
   init_linktab();
   init_hosttab();
 
-  if (gethostname(myname, sizeof(myname)) < 0) {
-    perror("gethostname");
-    strcpy(myname,"UNKNOWN");
-  } else {
-    char *c = index(myname,'.');  /* only use unqualified part */
-    if (c)
-      *c = '\0';
-    *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
-  }
-
   // parse args
   while ((c = getopt(argc, argv, "c:vdst")) != -1) {
     switch (c) {
@@ -1491,6 +1481,10 @@ main(int argc, char *argv[])
     }
   }
 
+  // clear myname
+  memset(myname, 0, sizeof(myname));
+
+  // parse config
   parse_config(cfile);
 
   // Check config, validate settings
@@ -1498,6 +1492,39 @@ main(int argc, char *argv[])
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
     exit(1);
   }
+
+#if CHAOS_DNS
+  // after config, can init DNS
+  init_chaos_dns(do_dns_forwarding);
+
+  // check if myname should/can be initialized
+  if (myname[0] == '\0') {
+    u_char mylongname[256];
+    // look up my address
+    if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
+      // use first part only
+      char *c = index(mylongname, '.');
+      if (c) *c = '\0';
+      // prettify in case lower
+      mylongname[0] = toupper(mylongname[0]);
+      strncpy(myname, mylongname, sizeof(myname));
+    }
+  }
+#endif
+
+  // check if myname need be initialized
+  if (myname[0] == '\0') {
+    if (gethostname(myname, sizeof(myname)) < 0) {
+      perror("gethostname");
+      strcpy(myname,"UNKNOWN");
+    } else {
+      char *c = index(myname,'.');  /* only use unqualified part */
+      if (c)
+	*c = '\0';
+      *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
+    }
+  }
+
 
 #if CHAOS_TLS
   // Just a little user-friendly config validation
@@ -1530,9 +1557,6 @@ main(int argc, char *argv[])
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
   }
-#if CHAOS_DNS
-  init_chaos_dns(do_dns_forwarding);
-#endif
 
 #if 1
   if (verbose)
