@@ -8,15 +8,6 @@
 // -- when to send LOS? on non-answer (from DNS) failures
 // - use standard consumer/producer lock and semaphores
 
-// TODO
-// x add config parsing
-// x add to mycontacts: either
-// -- make mycontacts dynamic (contacts.c) and add dns_responder to it (in init_dns?)
-// x- or just add it in contacts.c, using an #if
-// x call init_chaos_dns from main
-// x start dns_forwarder_thread
-// x parse name/addr in TLS code
-
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/nameser.h>
@@ -28,7 +19,6 @@
 
 #include "cbridge.h"
 
-// @@@@ these should be configurable at runtime, of course
 #ifndef CHAOS_DNS_SERVER
 #define CHAOS_DNS_SERVER "130.238.19.25"
 #endif
