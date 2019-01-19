@@ -102,7 +102,7 @@ program in ITS.
 
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
-"myname" configuration parameter (defaults to the DNS address of the
+"myname" configuration parameter (defaults to the DNS name of the
 configured Chaosnet address ("chaddr" below), or the "real" host name,
 up to first period).
 
