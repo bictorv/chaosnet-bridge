@@ -244,7 +244,7 @@ time_responder(u_char *rfc, int len)
   set_ch_srcindex(ap, ch_destindex(ch));
 
   time_t now = time(NULL);
-  i = make_time_pkt((u_char *)ap, sizeof(ans), now+2208988800L);  /* see RFC 868 */
+  i = make_time_pkt((u_char *)ap, sizeof(ans), now+2208988800UL);  /* see RFC 868 */
   if (verbose || debug) {
     fprintf(stderr,"Responding to TIME with %d bytes\n", i);
   }
