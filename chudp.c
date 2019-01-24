@@ -285,6 +285,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   if (debug) fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, *chudpdest_len);
   for (i = 0; i < *chudpdest_len; i++) {
     if ((chudpdest[i].chu_sa.chu_saddr.sa_family == sin.sin6_family)
+	&& (chudpdest[i].chu_sa.chu_sin.sin_port == sin.sin6_port)
 	&& (((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET) &&
 	     (memcmp((u_char *)&chudpdest[i].chu_sa.chu_sin.sin_addr, (u_char *)&((struct sockaddr_in *)&sin)->sin_addr, sizeof(struct in_addr)) == 0))
 	    ||
@@ -313,6 +314,8 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	}
       }
 #endif
+#if 0
+      // There may be more than one CHUDP host on a single IP.
       if (chudpdest[i].chu_sa.chu_sin.sin_port != sin.sin6_port) {
 	if (verbose) fprintf(stderr,"CHUDP from %s port different from configured: %d # %d (dropping)\n",
 			     ip, ntohs(sin.sin6_port),
@@ -321,6 +324,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	PTUNLOCK(chudp_lock);
 	return 0;
       }
+#endif
       break;
     }
   }
