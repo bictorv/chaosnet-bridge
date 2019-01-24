@@ -258,11 +258,11 @@ Assuming your local Chaosnet network is over Ethernet, and uses subnet 11 (octal
     link chudp localhost:42043 host 4411
 
 For a ITS/klh10 running on the same host as cbridge, you can use
-    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
 
 If you let ITS/klh10 use Chaos-over-Ethernet, you do not need the last
 "link chudp" line in the cbridge config, and in klh10.ini you can use
-    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 ifmeth=pcap
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 ifmeth=pcap
 
 The ITS will pick up routing info from cbridge. (Of course you also
 need to configure ITS to use address 4411.)
