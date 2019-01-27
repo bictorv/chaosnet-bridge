@@ -192,6 +192,8 @@ truncate_dns_pkt(u_char *pkt, int len)
       size += l;
     }
   }
+  // should never get here
+  return len;
 }
 
 

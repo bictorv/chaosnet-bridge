@@ -85,13 +85,6 @@ static void cleanup_openssl()
     EVP_cleanup();
 }
 
-// Find Chaosnet addr of CN through DNS:
-// this is just too much work with a poorly documented library (libresolv)
-// which also seems to think it needs to connect over chaosnet to find chaosnet data.
-// Instead, can we find the subjectAltName and let that be just an int 0x701 etc?
-// Seems too hairy (yet) to include it in cert (maybe not with openssl
-// 1.1.1, see https://security.stackexchange.com/a/183973)
-
 static u_char *
 tls_get_cert_cn(X509 *cert)
 {

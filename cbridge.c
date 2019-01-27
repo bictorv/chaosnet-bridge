@@ -362,9 +362,8 @@ reparse_chudp_names_thread(void *v)
 }
 
 
-// Look at an incoming pkt given a connection type and a cost, 
-// update our routing table if appropriate. 
-// Always look at RUT pkts, and if configured, peek at pkts to discover routing info.
+// Look at an incoming RUT pkt given a connection type and a cost, 
+// and update our routing table if appropriate. 
 void
 peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 {
@@ -584,6 +583,40 @@ ntohs_buf(u_short *ibuf, u_short *obuf, int len)
     *obuf++ = ntohs(*ibuf++);
 }
 
+void
+handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad)
+{
+  if (ch_opcode(ch) == CHOP_RFC) {
+    if (verbose)
+      fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
+	      ch_opcode_name(ch_opcode(ch)),
+	      dchad);
+    // see what contact they look for
+    handle_rfc(ch, data, dlen);
+  }
+  else
+    if (verbose) {
+      fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
+	      ch_opcode_name(ch_opcode(ch)),
+	      dchad);
+      if (ch_opcode(ch) == CHOP_RFC) {
+	fprintf(stderr,"; Contact: ");
+	int max = ch_nbytes(ch);
+	u_char *cp = &data[CHAOS_HEADERSIZE];
+	u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
+	if (cont != NULL) {
+	  ch_11_gets(cp, cont, max);
+	  char *space = index((char *)cont, ' ');
+	  if (space) *space = '\0'; // show only contact name, not args
+	  fprintf(stderr,"%s\n", cont);
+	  free(cont);
+	} else
+	  fprintf(stderr,"calloc(%d) failed\n", max+1);
+      } else
+	fprintf(stderr,"\n");
+    }
+}
+
 // **** Bridging between links
 
 void
@@ -704,40 +737,12 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 
   // To me?
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
-    if (ch_opcode(ch) == CHOP_RFC) {
-      if (verbose)
-	fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
-		ch_opcode_name(ch_opcode(ch)),
-		dchad);
-      // see what contact they look for
-      handle_rfc(ch, data, dlen);
-    }
-    else
-      if (verbose) {
-	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
-		ch_opcode_name(ch_opcode(ch)),
-		dchad);
-	if (ch_opcode(ch) == CHOP_RFC) {
-	  fprintf(stderr,"; Contact: ");
-	  int max = ch_nbytes(ch);
-	  u_char *cp = &data[CHAOS_HEADERSIZE];
-	  u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
-	  if (cont != NULL) {
-	    ch_11_gets(cp, cont, max);
-	    char *space = index((char *)cont, ' ');
-	    if (space) *space = '\0'; // show only contact name, not args
-	    fprintf(stderr,"%s\n", cont);
-	    free(cont);
-	  } else
-	    fprintf(stderr,"calloc(%d) failed\n", max+1);
-	} else
-	  fprintf(stderr,"\n");
-      }
+    handle_pkt_for_me(ch, data, dlen, dchad);
     return;			/* after checking for RUT */
   }
 
   if (dchad == 0) {		/* broadcast */
-    // send on all links to the same subnet.
+    // send on all links to the same subnet?
     // But how can we know they didn't also receive it, and sent it on their links?
     // Possibly do this for BRD packets, which have a storm prevention feature?
     // Punt for now:
@@ -999,7 +1004,7 @@ int parse_route_config()
 
 int parse_link_config()
 {
-  // link ether|unix|chudp ... host|subnet y [type t cost c]
+  // link ether|unix|chudp|tls ... host|subnet y [type t cost c]
   u_short addr, subnetp, sval;
   struct addrinfo *he, hints;
   struct sockaddr_in *s;
@@ -1499,9 +1504,9 @@ main(int argc, char *argv[])
 
   // check if myname should/can be initialized
   if (myname[0] == '\0') {
-    u_char mylongname[256];
+    char mylongname[256];
     // look up my address
-    if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
+    if (dns_name_of_addr(mychaddr[0], (u_char *)mylongname, sizeof(mylongname)) > 0) {
       // use first part only
       char *c = index(mylongname, '.');
       if (c) *c = '\0';

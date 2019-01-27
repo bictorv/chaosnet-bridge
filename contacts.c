@@ -368,13 +368,13 @@ void
 handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
 {
   int i;
-  u_char *cname = (u_char *)calloc(ch_nbytes(ch)+1, sizeof(u_char));
-  ch_11_gets(&data[CHAOS_HEADERSIZE], cname, ch_nbytes(ch));
-  char *space = index((char *)cname, ' ');
+  char *cname = (char *)calloc(ch_nbytes(ch)+1, sizeof(u_char));
+  ch_11_gets(&data[CHAOS_HEADERSIZE], (u_char *)cname, ch_nbytes(ch));
+  char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);
   for (i = 0; mycontacts[i].contact != NULL; i++) {
-    if ((strncmp((char *)cname, (char *)mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
+    if ((strncmp(cname, mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
 	&& (strlen(cname) == strlen(mycontacts[i].contact))
 	) {
       if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);
