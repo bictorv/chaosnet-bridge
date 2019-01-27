@@ -63,6 +63,10 @@ static void dns_describe_packet(u_char *pkt, int len);
 void
 dns_responder(u_char *rfc, int len)
 {
+  if (!do_dns_forwarding)
+    // just ignore it
+    return;
+
   if (sem_trywait(dns_thread_writerp) < 0) {
     if (errno == EAGAIN) {
       // no room for request - don't hang, let other end resend request
