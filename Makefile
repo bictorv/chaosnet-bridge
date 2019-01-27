@@ -17,28 +17,33 @@ endif
 
 all: cbridge
 
-OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o
+OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o
 
-# YMMV, but sometimes openssl etc are in /opt/local. -lssl and -lcrypto are needed only for TLS
-cbridge: cbridge.c $(OBJS) chaosd.h cbridge-chaos.h chudp.h contacts.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto
+# YMMV, but sometimes openssl etc are in /opt/local.
+# -lssl and -lcrypto are needed only for TLS.
+# -lresolv needed only for dns.o
+cbridge: cbridge.c $(OBJS) chaosd.h cbridge-chaos.h chudp.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto -lresolv
 
-contacts.o: contacts.c cbridge-chaos.h cbridge.h
+contacts.o: contacts.c cbridge.h cbridge-chaos.h 
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-usockets.o: usockets.c cbridge.h
+usockets.o: usockets.c cbridge.h cbridge-chaos.h chaosd.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-chtls.o: chtls.c cbridge.h
+chtls.o: chtls.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-chudp.o: chudp.c cbridge.h chudp.h
+chudp.o: chudp.c cbridge.h cbridge-chaos.h chudp.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-debug.o: debug.c cbridge.h
+debug.o: debug.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-chether.o: chether.c cbridge.h
+chether.o: chether.c cbridge.h cbridge-chaos.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+dns.o: dns.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 clean:

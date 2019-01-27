@@ -102,9 +102,9 @@ program in ITS.
 
 When cbridge is compiled to collect statistics, it also responds to
 the STATUS protocol (see AI Memo 628), using the host name from the
-"myname" configuration parameter (defaults to "real" host name up to
-first period). Yes, it could try to look it up in Chaosnet DNS given
-the chaddr parameter, but... [libresolv won't play nicely with Chaos.]
+"myname" configuration parameter (defaults to the DNS name of the
+configured Chaosnet address ("chaddr" below), or the "real" host name,
+up to first period).
 
 It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the
@@ -120,6 +120,14 @@ word 0: length of entry in 16-bit words (7)
      4: address the host was last seen from (e.g. a bridge)
      6: how many seconds ago was the host seen (LSB 16 bits)
      7:   (MSB 16 bits)
+
+A non-standard contact DNS is also supported, which responds to a
+"simple" protocol. The contact string is "DNS" followed by a space and
+then the DNS query packet. The cbridge process, if configured for it,
+forwards the query to a DNS server (over IP/UDP) and sends the
+response as an ANS packet to the (Chaosnet) requester. A client
+implementation for the LambdaDelta lisp machine exists, which could
+prossibly be ported to the CADR system (which doesn't have IP). 
 
 ----------------------------------------------------------------
 
@@ -175,6 +183,14 @@ Global settings:
 	to the myaddr parameter, or the global chaddr.
  ether ifname
        use this ether interface, default eth0
+ dns [ server 130.238.19.25 ] [ addrdomain CH-ADDR.NET ] [ forwarder off/on ] [ trace off/on ]
+       set the DNS IP server (which should handle CH records, default
+       above), the domain of "local" CH class addresses (default above, no
+       ending dot), enable/disable forwarding of pkts received on the "DNS"
+       contact name (default off), and enable trace printouts (default off).
+       DNS is used internally by the TLS server/client to look up the
+       certificate CN (of server and client) as Chaos hosts, looking
+       for their addresses.
 
 LINKDEF:
  link LINKTYPE subnet %o ROUTEARGS
@@ -242,11 +258,11 @@ Assuming your local Chaosnet network is over Ethernet, and uses subnet 11 (octal
     link chudp localhost:42043 host 4411
 
 For a ITS/klh10 running on the same host as cbridge, you can use
-    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
 
 If you let ITS/klh10 use Chaos-over-Ethernet, you do not need the last
 "link chudp" line in the cbridge config, and in klh10.ini you can use
-    devdef chaos ub3 ch11 addr=764140 br=5 vec=270 myaddr=4411 ifmeth=pcap
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 ifmeth=pcap
 
 The ITS will pick up routing info from cbridge. (Of course you also
 need to configure ITS to use address 4411.)

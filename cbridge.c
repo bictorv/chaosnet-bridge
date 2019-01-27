@@ -36,9 +36,6 @@
 
 // TODO
 
-// DNS contact handler (simple RFC-ANS protocol),
-// forwarding requests using resolver library, in a separate thread
-
 // logging:
 // - lock to avoid mixed output from different threads
 // - improve granularity, e.g. to only log "major" events
@@ -127,6 +124,14 @@ int *tlsdest_len;
 
 #endif // CHAOS_TLS
 
+#if CHAOS_DNS
+extern int do_dns_forwarding;
+void init_chaos_dns(int do_forwarding);
+int parse_dns_config_line(void);
+void print_config_dns(void);
+void *dns_forwarder_thread(void *v);
+#endif
+
 
 int udpsock = 0, udp6sock = 0;
 
@@ -162,12 +167,16 @@ int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
 void init_chaos_udp(int v6, int v4);
 void reparse_chudp_names(void);
 
+#if CHAOS_ETHERP
 // chether
 void init_chaos_ether(void);
 void print_config_ether(void);
+#endif
 
+#if CHAOS_TLS
 // chtls
 void init_chaos_tls();
+#endif
 
 // usockets
 int init_chaos_usockets(void);
@@ -353,9 +362,8 @@ reparse_chudp_names_thread(void *v)
 }
 
 
-// Look at an incoming pkt given a connection type and a cost, 
-// update our routing table if appropriate. 
-// Always look at RUT pkts, and if configured, peek at pkts to discover routing info.
+// Look at an incoming RUT pkt given a connection type and a cost, 
+// and update our routing table if appropriate. 
 void
 peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 {
@@ -575,6 +583,40 @@ ntohs_buf(u_short *ibuf, u_short *obuf, int len)
     *obuf++ = ntohs(*ibuf++);
 }
 
+void
+handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad)
+{
+  if (ch_opcode(ch) == CHOP_RFC) {
+    if (verbose)
+      fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
+	      ch_opcode_name(ch_opcode(ch)),
+	      dchad);
+    // see what contact they look for
+    handle_rfc(ch, data, dlen);
+  }
+  else
+    if (verbose) {
+      fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
+	      ch_opcode_name(ch_opcode(ch)),
+	      dchad);
+      if (ch_opcode(ch) == CHOP_RFC) {
+	fprintf(stderr,"; Contact: ");
+	int max = ch_nbytes(ch);
+	u_char *cp = &data[CHAOS_HEADERSIZE];
+	u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
+	if (cont != NULL) {
+	  ch_11_gets(cp, cont, max);
+	  char *space = index((char *)cont, ' ');
+	  if (space) *space = '\0'; // show only contact name, not args
+	  fprintf(stderr,"%s\n", cont);
+	  free(cont);
+	} else
+	  fprintf(stderr,"calloc(%d) failed\n", max+1);
+      } else
+	fprintf(stderr,"\n");
+    }
+}
+
 // **** Bridging between links
 
 void
@@ -695,36 +737,12 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
 
   // To me?
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
-    if (ch_opcode(ch) == CHOP_RFC) {
-      // see what contact they look for
-      handle_rfc(ch, data, dlen);
-    }
-    else
-      if (verbose) {
-	fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
-		ch_opcode_name(ch_opcode(ch)),
-		dchad);
-	if (ch_opcode(ch) == CHOP_RFC) {
-	  fprintf(stderr,"; Contact: ");
-	  int max = ch_nbytes(ch);
-	  u_char *cp = &data[CHAOS_HEADERSIZE];
-	  u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
-	  if (cont != NULL) {
-	    ch_11_gets(cp, cont, max);
-	    char *space = index((char *)cont, ' ');
-	    if (space) *space = '\0'; // show only contact name, not args
-	    fprintf(stderr,"%s\n", cont);
-	    free(cont);
-	  } else
-	    fprintf(stderr,"calloc(%d) failed\n", max+1);
-	} else
-	  fprintf(stderr,"\n");
-      }
+    handle_pkt_for_me(ch, data, dlen, dchad);
     return;			/* after checking for RUT */
   }
 
   if (dchad == 0) {		/* broadcast */
-    // send on all links to the same subnet.
+    // send on all links to the same subnet?
     // But how can we know they didn't also receive it, and sent it on their links?
     // Possibly do this for BRD packets, which have a storm prevention feature?
     // Punt for now:
@@ -986,7 +1004,7 @@ int parse_route_config()
 
 int parse_link_config()
 {
-  // link ether|unix|chudp ... host|subnet y [type t cost c]
+  // link ether|unix|chudp|tls ... host|subnet y [type t cost c]
   u_short addr, subnetp, sval;
   struct addrinfo *he, hints;
   struct sockaddr_in *s;
@@ -1322,6 +1340,11 @@ int parse_config_line(char *line)
     return 0;
   }
 #endif // CHAOS_TLS
+#if CHAOS_DNS
+  else if (strcasecmp(tok, "dns") == 0) {
+    return parse_dns_config_line();
+  }
+#endif
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
     strncpy(ifname,tok,sizeof(ifname));
@@ -1390,6 +1413,12 @@ print_stats(int sig)
       if (do_tls_server)
 	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
+#if CHAOS_DNS
+    print_config_dns();
+    if (do_dns_forwarding) {
+      printf(" DNS forwarder enabled\n");
+    }
+#endif
   }
   print_arp_table();
   print_routing_table();
@@ -1427,16 +1456,6 @@ main(int argc, char *argv[])
   init_linktab();
   init_hosttab();
 
-  if (gethostname(myname, sizeof(myname)) < 0) {
-    perror("gethostname");
-    strcpy(myname,"UNKNOWN");
-  } else {
-    char *c = index(myname,'.');  /* only use unqualified part */
-    if (c)
-      *c = '\0';
-    *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
-  }
-
   // parse args
   while ((c = getopt(argc, argv, "c:vdst")) != -1) {
     switch (c) {
@@ -1467,6 +1486,10 @@ main(int argc, char *argv[])
     }
   }
 
+  // clear myname
+  memset(myname, 0, sizeof(myname));
+
+  // parse config
   parse_config(cfile);
 
   // Check config, validate settings
@@ -1474,6 +1497,39 @@ main(int argc, char *argv[])
     fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
     exit(1);
   }
+
+#if CHAOS_DNS
+  // after config, can init DNS
+  init_chaos_dns(do_dns_forwarding);
+
+  // check if myname should/can be initialized
+  if (myname[0] == '\0') {
+    char mylongname[256];
+    // look up my address
+    if (dns_name_of_addr(mychaddr[0], (u_char *)mylongname, sizeof(mylongname)) > 0) {
+      // use first part only
+      char *c = index(mylongname, '.');
+      if (c) *c = '\0';
+      // prettify in case lower
+      mylongname[0] = toupper(mylongname[0]);
+      strncpy(myname, mylongname, sizeof(myname));
+    }
+  }
+#endif
+
+  // check if myname need be initialized
+  if (myname[0] == '\0') {
+    if (gethostname(myname, sizeof(myname)) < 0) {
+      perror("gethostname");
+      strcpy(myname,"UNKNOWN");
+    } else {
+      char *c = index(myname,'.');  /* only use unqualified part */
+      if (c)
+	*c = '\0';
+      *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
+    }
+  }
+
 
 #if CHAOS_TLS
   // Just a little user-friendly config validation
@@ -1590,6 +1646,15 @@ main(int argc, char *argv[])
 	}
       }
     }    
+  }
+#endif
+#if CHAOS_DNS
+  if (do_dns_forwarding) {
+    if (verbose) fprintf(stderr,"Starting thread for DNS forwarder\n");
+    if (pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL) < 0) {
+      perror("pthread_create(dns_forwarder_thread)");
+      exit(1);
+    }
   }
 #endif
 

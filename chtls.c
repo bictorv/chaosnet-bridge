@@ -85,13 +85,6 @@ static void cleanup_openssl()
     EVP_cleanup();
 }
 
-// Find Chaosnet addr of CN through DNS:
-// this is just too much work with a poorly documented library (libresolv)
-// which also seems to think it needs to connect over chaosnet to find chaosnet data.
-// Instead, can we find the subjectAltName and let that be just an int 0x701 etc?
-// Seems too hairy (yet) to include it in cert (maybe not with openssl
-// 1.1.1, see https://security.stackexchange.com/a/183973)
-
 static u_char *
 tls_get_cert_cn(X509 *cert)
 {
@@ -323,7 +316,7 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
 
 
 static void
-add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len)
+add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa_len, u_short chaddr)
 {
   // no tlsdest exists for server end, until it is connected
   struct tls_dest *td = NULL;
@@ -359,7 +352,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 		     (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
 		    ip6, sizeof(ip6)) == NULL)
 	strerror_r(errno,ip6,sizeof(ip6));
-      fprintf(stderr,"Adding new TLS destination %s from %s port %d\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port), chaddr);
     }
 
     memset(&tlsdest[*tlsdest_len], 0, sizeof(struct tls_dest));
@@ -370,6 +363,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     tlsdest[*tlsdest_len].tls_serverp = 1;
     tlsdest[*tlsdest_len].tls_sock = sock;
     tlsdest[*tlsdest_len].tls_ssl = ssl;
+    tlsdest[*tlsdest_len].tls_addr = chaddr;
 
     (*tlsdest_len)++;
   }
@@ -589,6 +583,31 @@ void *tls_connector(void *arg)
 	  continue;
 	}
 	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
+#if CHAOS_DNS
+	if (server_cn) {
+	  u_short claddrs[4];
+	  int i, naddrs = dns_addrs_of_name(server_cn, (u_short *)&claddrs, 4);
+	  if (tls_debug) {
+	    fprintf(stderr, "TLS server CN %s has %d Chaos address(es): ", server_cn, naddrs);
+	    for (i = 0; i < naddrs; i++)
+	      fprintf(stderr,"%#o ", claddrs[i]);
+	    fprintf(stderr,"\n");
+	  }
+	  int found = 0;
+	  for (i = 0; i < naddrs; i++) {
+	    if (claddrs[i] == td->tls_addr) {
+	      found = 1;
+	      break;
+	    }
+	  }
+	  if (!found) {
+	    if (tls_debug || verbose || debug) {
+	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
+	      // one day, do something
+	    }
+	  }
+	}
+#endif
 	// create tlsdest, fill in stuff
 	update_client_tlsdest(td, server_cn, tsock, ssl);
 
@@ -943,8 +962,25 @@ tls_server(void *v)
 	  continue;
 	}
 	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
+	u_short client_chaddr = 0;
+#if CHAOS_DNS
+	if (client_cn) {
+	  u_short claddrs[4];
+	  int i, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+	  if (tls_debug) {
+	    fprintf(stderr, "TLS server client CN %s has %d Chaos address(es): ", client_cn, naddrs);
+	    for (i = 0; i < naddrs; i++)
+	      fprintf(stderr,"%#o ", claddrs[i]);
+	    fprintf(stderr,"\n");
+	  }
+	  // if there is just one address, use it
+	  // @@@@ search for address on my subnet
+	  if (naddrs == 1)
+	    client_chaddr = claddrs[0];
+	}
+#endif
 	// create tlsdest, fill in stuff
-	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen);
+	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen, client_chaddr);
     } else {
       // no cert
       if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");
@@ -1035,12 +1071,14 @@ void * tls_input(void *v)
 	    if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
 	      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	      srcaddr = ntohs(tr->ch_hw_srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from trailer: %#o\n", srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
+				     ch_opcode_name(ch_opcode(cha)), srcaddr);
 	    } else {
 	      srcaddr = ch_srcaddr(cha);
 	      if (verbose || tls_debug || debug)
 		fprintf(stderr,"%%%% TLS input: no trailer in pkt from %#o\n", srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input: Using source addr from header: %#o\n", srcaddr);
+	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from header: %#o\n",
+				     ch_opcode_name(ch_opcode(cha)), srcaddr);
 	    }
 	    // find the route to where from
 	    struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
@@ -1048,6 +1086,15 @@ void * tls_input(void *v)
 	    if (srcrt == NULL) {
 	      // add route
 	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
+#if CHAOS_DNS
+	      if (tls_debug) {
+		u_char hname[256];  /* random size limit */
+		if (dns_name_of_addr(srcaddr, hname, sizeof(hname)) < 0)
+		  fprintf(stderr,"TLS: no host name found for source %#o (TLS name '%s')\n", srcaddr, tlsdest[tindex].tls_name);
+		else 
+		  fprintf(stderr,"TLS: source %#o has DNS host name '%s' (TLS name '%s')\n", srcaddr, hname, tlsdest[tindex].tls_name);
+	      }
+#endif
 	      if (!serverp)
 		fprintf(stderr,"TLS: No source route found for incoming data, but we are a client?? (source %#o, tlsdest %d)\n",
 			srcaddr, tindex);
