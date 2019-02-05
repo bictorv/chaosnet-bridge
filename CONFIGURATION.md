@@ -11,7 +11,7 @@
 
 ## Configuration file syntax
 
-`;` or `#` at the **start** of a line begins a comment
+`;` or `#` at the **start** of a line begins a comment. Below, *%o* stands for "an octal number", typically 16-bit.
 
 ### Global settings
 
@@ -19,20 +19,8 @@
 | --- | --- |
 | `chaddr` *%o* | set my default chaos address - must be set |
 | `myname` *name* | set my Chaosnet host name, max 32 bytes, for STATUS. Defaults to "real" host name up to first period. |
-| `chudp` *portnr* [`dynamic` | `static` | `ipv6` ] | set my chudp portnr (default 42042). If "dynamic", add new
-	chudp destinations dynamically when receiving pkts from
-	unknown sources. 
-	With ipv6 option, listens to both v4 and v6 (enabled also by
-	defining a chudp link where the host has an ipv6 addr). |
-| `tls` [ `key` *keyfile* ] [ `cert` *certfile* ] [ `ca-chain` *ca-chain-cert-file* ] [ `myaddr` *%o* ] [ `server` *portnr* ] | set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*.
-\
-	If `server` is specified, a TLS server is started listening to
-	*portnr* (default 42042, if at EOL). TLS servers are always
-	"dynamic" in that they listen to connections from anywhere,
-	but accept only those using certificates trusted by the CA
-	trust chain. Server-end connections are added dynamically at
-	runtime, and can not be pre-declared. The local address is set
-	to the `myaddr` parameter, or the global `chaddr`. |
+| `chudp` *portnr* [`dynamic` \| `static` \| `ipv6` ] | set my chudp portnr (default 42042). If "dynamic", add new chudp destinations dynamically when receiving pkts from unknown sources. With ipv6 option, listens to both v4 and v6 (enabled also by defining a chudp link where the host has an ipv6 addr). |
+| `tls` [ `key` *keyfile* ] [ `cert` *certfile* ] [ `ca-chain` *ca-chain-cert-file* ] [ `myaddr` *%o* ] [ `server` *portnr* ] | set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*. If `server` is specified, a TLS server is started listening to *portnr* (default 42042, if at EOL). TLS servers are always "dynamic" in that they listen to connections from anywhere, but accept only those using certificates trusted by the CA trust chain. Server-end connections are added dynamically at runtime, and can not be pre-declared. The local address is set to the `myaddr` parameter, or the global `chaddr`. |
 | `ether` *ifname* | use this ether interface, default eth0 |
 | `dns` [ `server` 130.238.19.25 ] [ `addrdomain` CH-ADDR.NET ] [ `forwarder` off/on ] [ `trace` off/on ] | set the DNS IP server (which should handle CH records, default
        above), the domain of "local" CH class addresses (default above, no
