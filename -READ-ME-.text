@@ -100,11 +100,10 @@ systems, the CHAOS:PRINT-ROUTING-TABLE function on Symbolics systems,
 and if you're lucky, the DUMP-ROUTING-TABLE command of the CHATST
 program in ITS. 
 
-When cbridge is compiled to collect statistics, it also responds to
-the STATUS protocol (see AI Memo 628), using the host name from the
-"myname" configuration parameter (defaults to the DNS name of the
-configured Chaosnet address ("chaddr" below), or the "real" host name,
-up to first period).
+It also responds to the STATUS protocol (see AI Memo 628), using the
+host name from the "myname" configuration parameter (defaults to the
+DNS name of the configured Chaosnet address ("chaddr" below), or the
+"real" host name, up to first period).
 
 It also responds to TIME and UPTIME contacts. Note that UPTIME is wrt
 the start of the bridge program, which is more interesting than the

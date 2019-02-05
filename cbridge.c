@@ -40,6 +40,12 @@
 // - lock to avoid mixed output from different threads
 // - improve granularity, e.g. to only log "major" events
 
+// HOSTAB server?
+// - No clients except LMI but would be simpler for CADR than porting DNS?
+// - requires stream protocol (cf MIT AIM 628 sec 5.10)
+// - bite the bullet and implement stream server - externally - but then perhaps in ITS?
+// - or invent a HOSTTB connectionless protocol
+
 // rewrite using pcap (replace BPF) - then implement multiple interfaces?
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
