@@ -35,15 +35,18 @@ For more info on the Global Chaosnet, see https://aosnet.ch.
 ## Features
 
 ### Chaos-over-UDP
+
 Chaosnet packets are encapsulated in UDP packets, using a four-byte
 header (version=1, function=1, 0, 0), and with a ["hardware
 trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols)
 containing the destination and source addresses and an [Internet
 Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
-"little-endian" order, i.e. with the least significant byte of a
-16-bit word before the most significant byte. (I'm really sorry about
-this, and might invent version 2 of the protocol with the only change
-being big-endian byte order.)
+["little-endian"
+order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
+i.e. with the least significant byte of a 16-bit word before the most
+significant byte. (I'm really sorry about this, and might invent
+version 2 of the protocol with the only change being big-endian byte
+order.)
 
 When configured to use Chaos-over-UDP (chudp)
 - the "dynamic" keyword can be used to allow new hosts to be added to
@@ -73,10 +76,7 @@ Chaosnet packets are sent using Ethernet protocol
 No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
 628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the
 Ethernet header does the corresponding job. Packets are sent in
-["big-endian" or "network"
-order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
-i.e. with the most significant byte of a 16-bit word before the least
-significant byte.
+"big-endian" order.
 
 When configured to use Ethernet, ARP for Chaosnet is used: 
 - ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
