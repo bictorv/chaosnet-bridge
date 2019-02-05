@@ -1,5 +1,7 @@
 # Supported Chaosnet protocols
 
+The following Chaosnet contacts (protocol names) are supported by the bridge program.
+
 ### `DUMP-ROUTING-TABLE`
 The bridge responds to the `DUMP-ROUTING-TABLE` contact, which sends the
 routing table (for subnets up to nr 122). This is used by e.g. the

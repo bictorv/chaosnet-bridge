@@ -1,5 +1,7 @@
 # Examples
 
+Some examples of configurations.
+
 ## Basic example
 
 Assuming you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 11 (octal). In the example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
