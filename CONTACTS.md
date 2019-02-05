@@ -12,7 +12,7 @@ program in ITS.
 
 It also responds to the `STATUS` protocol (see AI Memo 628), using the
 host name from the "myname" configuration parameter (defaults to the
-DNS name of the configured Chaosnet address ("chaddr" below), or the
+DNS name of the configured Chaosnet address (the "chaddr" parameter), or the
 "real" host name, up to first period).
 
 ### `TIME` and `UPTIME`
@@ -25,9 +25,10 @@ A non-standard contact `LASTCN` is also supported, which reponds with
 info about which hosts the bridge has received packets from, from what
 other host (e.g. another router) and how long ago. Each entry consists of
 the following 16-bit words:
+
  0. length of entry in 16-bit words (7)
  1. host addr which was seen
- 2. # input pkts from that (least significant 16 bits)
+ 2. \# input pkts from that (least significant 16 bits)
  3.   (most significant 16 bits)
  4. address the host was last seen from (e.g. a bridge)
  5. how many seconds ago was the host seen (LSB 16 bits)
