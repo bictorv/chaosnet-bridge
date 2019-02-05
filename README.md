@@ -7,11 +7,11 @@ This program is a bridge between Chaosnet implementations. It supports
 - Chaos-over-TLS (see below)
 
 ## See also
-- (CONTACTS.md) for info about which Chaosnet application protocols are supported.
-- (CONFIGURATION.md) for how to configure the bridge program.
-- (EXAMPLES.md) for some example configurations.
-- (HISTORY.md) for some historic notes.
-- (COPYRIGHT.md) for copyright notice and acknowledgements.
+- [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
+- [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
+- [EXAMPLES](EXAMPLES.md) for some example configurations.
+- [HISTORY](HISTORY.md) for some historic notes.
+- [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 
 ## Use cases
 
@@ -35,7 +35,7 @@ For more info on the Global Chaosnet, see https://aosnet.ch.
 ## Features
 
 ### Chaos-over-Ethernet
-Chaosnet packets are sent using Ethernet protocol 0x0804. No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo 628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the Ethernet header does the corresponding job. Packets are sent in ["big-endian" or "network" order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory), i.e. with the most significant byte of a 16-bit word before the least significant byte.
+Chaosnet packets are sent using Ethernet protocol [0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml). No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo 628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the Ethernet header does the corresponding job. Packets are sent in ["big-endian" or "network" order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory), i.e. with the most significant byte of a 16-bit word before the least significant byte.
 
 When configured to use Ethernet, ARP for Chaosnet is used: 
 - ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
@@ -44,7 +44,7 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 Currently only one Ethernet interface is supported.
 
 ### Chaos-over-UDP
-Chaosnet packets are encapsulated in UDP packets, using a four-byte header (version=1, function=1, 0, 0), and with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols) containing the destination and source addresses, and an [Internet Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in "little-endian" order, i.e. with the least significant byte of a 16-bit word before the most significant byte. (I'm really sorry about this, and might invent version 2 of the protocol with the only change being big-endian byte order.)
+Chaosnet packets are encapsulated in UDP packets, using a four-byte header (version=1, function=1, 0, 0), and with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols) containing the destination and source addresses and an [Internet Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in "little-endian" order, i.e. with the least significant byte of a 16-bit word before the most significant byte. (I'm really sorry about this, and might invent version 2 of the protocol with the only change being big-endian byte order.)
 
 When configured to use Chaos-over-UDP (chudp)
 - the "dynamic" keyword can be used to allow new hosts to be added to
@@ -57,16 +57,16 @@ When configured to use Chaos-over-UDP (chudp)
   addresses). (Maybe this should be configurable.)
 
 ### Chaos-over-Unix-sockets
-Chaosnet packets are sent over a named Unix socket, with a 4-byte header (length MSB, length LSB, 1, 0). Packets are sent in "big-endian" order, with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols) containing the destination and source addresses, and an [Internet Checksum](https://tools.ietf.org/html/rfc1071).
+Chaosnet packets are sent over a named Unix socket, with a 4-byte header (length MSB, length LSB, 1, 0). Packets are sent in "big-endian" order, with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
 
 When configured to use Chaos-over-unix-sockets, you need to also run
 the "chaosd" server (found with the usim CADR emulator, see
 http://www.unlambda.com/cadr/, or at https://github.com/LM-3/chaos).
 There can be only one such server per host system (on the same host as
-the bridge).
+the bridge) since the named socket of the server is constant.
 
 ### Chaos-over-TLS
-Chaosnet packets are sent over TLS, with a 2-byte header (length MSB, length LSB). Packets are sent in "big-endian" order, with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols) containing the destination and source addresses, and an [Internet Checksum](https://tools.ietf.org/html/rfc1071).
+Chaosnet packets are sent over TLS, with a 2-byte header (length MSB, length LSB). Packets are sent in "big-endian" order, with a ["hardware trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
 
 There are different reasons to want to use TLS:
 - one is for improved security (confidentiality, authenticity), and
