@@ -48,17 +48,18 @@ significant byte. (I'm really sorry about this, and might invent
 version 2 of the protocol with the only change being big-endian byte
 order.)
 
-When configured to use Chaos-over-UDP (chudp)
-- the "dynamic" keyword can be used to allow new hosts to be added to
+When configured to use Chaos-over-UDP ("chudp", see the [configuration](CONFIGURATION.md) section)
+- the `dynamic` keyword can be used to allow new hosts to be added to
   the configuration by simply sending a chudp packet to us.
   This feature is not as useful here as in klh10, since it's easy
   to configure new links and fast to restart the bridge, as opposed to
   a whole ITS system.
-- host names given in chudp links (see below) are re-parsed every five
+- host names given in chudp links (see [configuration](CONFIGURATION.md)) are re-parsed every five
   minutes or so, to support dynamic DNS entries (hosts changing
   addresses). (Maybe this should be configurable.)
 
 ### Chaos-over-Unix-sockets
+
 Chaosnet packets are sent over a named Unix socket, with a 4-byte
 header (length MSB, length LSB, 1, 0). Packets are sent in
 "big-endian" order, with a ["hardware
@@ -71,6 +72,7 @@ There can be only one such server per host system (on the same host as
 the bridge) since the named socket of the server is constant.
 
 ### Chaos-over-Ethernet
+
 Chaosnet packets are sent using Ethernet protocol
 [0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
 No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
@@ -85,6 +87,7 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 Currently only one Ethernet interface is supported.
 
 ### Chaos-over-TLS
+
 Chaosnet packets are sent over TLS, with a 2-byte header (length MSB,
 length LSB). Packets are sent in "big-endian" order, with a ["hardware
 trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
@@ -114,7 +117,9 @@ same subnet on different media is harder to get right than
 interconnecting two different subnets. Attaching single hosts to a
 subnet through this bridge is more doable.
 
-A bridge between two subnets needs an address on each one of them.
+A bridge between two subnets needs an address on each one of them. In
+the [configuration](CONFIGURATION.md), see the `myaddr` parameter for
+links.
 
 ## Other features
 
