@@ -1,5 +1,7 @@
 # Configuration
 
+See also the [example configurations](EXAMPLES.md).
+
 ## Command line options:
 
 | Option | Description |
