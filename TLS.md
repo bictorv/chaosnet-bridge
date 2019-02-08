@@ -17,7 +17,7 @@ To get a certificate for the [Global Chaosnet](https://aosnet.ch), you need the 
 
 Unless you are already connected to the Global Chaosnet, register your host with the DNS server: send the following info about your Chaosnet host to Björn:
 1. the host name, including its domain. Do not invent domains, but use a domain you have permission to use. If you have none, use "aosnet.CH".
-1. the OS type (e.g. ITS or LISPM) and the system type (e.g. KLH10 or LAMBDA)
+1. the OS type (e.g. ITS or LISPM or UNIX) and the system type (e.g. KLH10 or LAMBDA or UNIX).
 
 If you were not already connected, Björn will assign a Chaosnet address for you on subnet 6.
 
@@ -38,11 +38,13 @@ Add TLS configuration to your `cbridge.conf` file:
 
     tls key private/my.key.pem cert certs/my.cert.pem
 
-If you were already connected over `chudp`, remove your old `link chudp router.aosnet.ch...` line.
+*If* you were already connected over `chudp`, **remove** your old `link chudp router.aosnet.ch...` line.
 
 Add the link configuration:
 
     link tls router.aosnet.ch host 3040 myaddr 3xxx
+
+where 3xxx is the Chaosnet address on subnet 6 which you got from Björn.
 
 ## Restart cbridge
 
