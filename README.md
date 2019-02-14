@@ -10,6 +10,7 @@ This program is a bridge between Chaosnet implementations. It supports
 - [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
 - [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
 - [EXAMPLES](EXAMPLES.md) for some example configurations.
+- [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
 - [HISTORY](HISTORY.md) for some historic notes.
 - [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 
@@ -130,17 +131,15 @@ macOS, using ctrl-T in bash), that signal does the same.
 ## Future work (let me know if you do it!):
 
 - [ ] validate configuration (at least warn about crazy things, subnet-specific address on each link, multiple links/routes to same dest))
-- [ ] improve logging (avoid mixing output from different threads, improve granularity e.g. to only log "significant" events)
-- [ ] rewrite BPF part using libpcap
+- [ ] improve logging (avoid mixing output from different threads, improve granularity e.g. to only log "significant" events, "levels" and "facilities" a'la LambdaDelta)
+- [ ] rewrite BPF part (Chaos-over-Ethernet) using libpcap (for portability, simplicity, and perhaps Chaos-over-IP)
+- [ ] add support for Chaos-over-IP (encapsulating using [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
+  used by the [pdp10x FPGA implementation](http://www.fpgaretrocomputing.org/pdp10x/)). See also  "[Cisco's
+  implementation of Chaosnet](https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm)", with the same type of mapping
+  (But the IP address mapping is crazy^W very limited, and if you just want encapsulation, use UDP? Yes, but interoperability...)
+- [ ] invent version 2 of CHUDP to send packets in network order, like all the others, and thus avoid swapping/copying data all over (except for version 1 of CHUDP)
 - [ ] detect unexpected traffic (e.g. traffic from a known subnet coming on a different link)
-- [ ] minimize copying (not much of a problem?) - see comments in code
 - [ ] make Open Genera use tap instead of tun, to allow Chaosnet (quite different project, but for Chaos interoperability)
-- [ ] add support for Chaos-over-IP (encapsulating using IP protocol 16,
-  used by the pdp10x FPGA implementation). See also  "Cisco's
-  implementation of Chaosnet", with the same type of mapping
-  https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
-  But the IP address mapping is crazy^W very limited, and if you just
-  want encapsulation, use UDP?
 
 
 ---
