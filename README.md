@@ -10,6 +10,7 @@ This program is a bridge between Chaosnet implementations. It supports
 - [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
 - [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
 - [EXAMPLES](EXAMPLES.md) for some example configurations.
+- [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
 - [HISTORY](HISTORY.md) for some historic notes.
 - [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 
