@@ -21,7 +21,7 @@ To get a certificate for the Global Chaosnet, you need to do the following.
 ## Register
 
 Unless you are already connected to the Global Chaosnet, register your cbridge with the DNS server: send the following info about it to Björn:
-1. the host name, including its domain. Do not invent domains, but use a domain you have permission to use. If you have none, use "aosnet.CH".
+- the host name, including its domain. Do not invent domains, but use a domain you have permission to use. If you have none, use "aosnet.CH".
 
 If you were not already connected, Björn will assign a Chaosnet address for you on subnet 6.
 
