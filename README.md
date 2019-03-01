@@ -95,8 +95,14 @@ Chaosnet packets are sent in IP/IPv6 packets, using
 Packets are sent in "big-endian" order, with a ["hardware
 trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
 
-Chaosnet addresses are mapped to IP/IPv6 addresses either individually, 
-or for a whole subnet (see [configuration](CONFIGURATION.md)).
+Chaosnet addresses are mapped to IP/IPv6 addresses either
+individually, or for a whole subnet (see
+[configuration](CONFIGURATION.md)).
+
+Chaosnet addresses where the host byte is 0xFF cannot be used with
+subnet mappings on IPv4, since they map to the broadcast address. 
+Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
+Yet Implemented.
 
 Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` (on Mac, using `port`).
 

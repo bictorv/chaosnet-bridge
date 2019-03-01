@@ -20,12 +20,11 @@
 // Uses libpcap for input, libnet for output
 
 // TODO:
-// - UP problems
+// - UP problems, due to Hurricane Electric IPv6 tunnel
 // -- he-ipv6 device doesn't take pcap_set_datalink (resource temp unavailable)
-// -- he-ipv6 doesn't have ipv4 address (shows as 255.55.255.255)
+// -- he-ipv6 doesn't have ipv4 address (shows as 255.255.255.255)
 // -- UP must pick either v4 or v6 because only one device - bad
 // -- he-ipv6 doesn't seem to forward Chaos pkts anyway?
-// - must handle if v4 or v6 address not existing
 // - IPv6 broadcast
 // - config warning if my IPv6 is link-local?
 
@@ -196,8 +195,11 @@ init_chaos_ip()
     exit(1);
   }
   // there may be more than one address on the interface
-  if (my_ip.s_addr == 0)
+  if (my_ip.s_addr == 0) {
     my_ip.s_addr = libnet_get_ipaddr4(ip_ctx);  /* save my IPv4 address on that interface */
+    if (my_ip.s_addr == -1)
+      my_ip.s_addr = 0;		/* no address, a bit clearer */
+  }
   // there is very probably more than one address on the interface
   // @@@@ consider doing a version of libnet_get_ipaddr6 which looks for non-LL addresses?
   if (my_ip6.libnet_s6_addr[0] == 0) {
@@ -243,7 +245,8 @@ init_chaos_ip()
   }
   if (pcap_set_datalink(ip_pc, DLT_EN10MB) < 0) {
     perror("pcap_set_datalink");
-    exit(1);
+    // Allow this, to debug he-ipv6
+    // exit(1);
   }
 }
 
@@ -486,6 +489,12 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
   int c;
   struct libnet_in6_addr dst_ip6;
 
+  if (libnet_in6_is_error(my_ip6)) {
+    if (verbose || debug)
+      fprintf(stderr,"%%%% CHIP: wanted to send on IPv6 but have no address\n");
+    return;
+  }
+
   memcpy(&dst_ip6, &sout->sin6_addr.s6_addr, sizeof(dst_ip6));
 
   // Construct an IPv6 packet
@@ -577,7 +586,13 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
 	  memcpy(&dip, &chipdest[i].chip_sa.chip_sin, sizeof(dip));
 	  if (dchad == 0)	/* broadcast */
 	    dip.sin_addr.s_addr |= htonl(0xff);
-	  else
+	  else if ((dchad & 0xff) == 0xff) {
+	    if (debug) {
+	      fprintf(stderr,"CHIP: not forwarding to Chaos %#o (%#x) because it maps to the broadcast address\n",
+		      dchad, dchad);
+	    }
+	    break;
+	  } else
 	    dip.sin_addr.s_addr |= htonl(dchad & 0xff);
 	  if (debug) fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IP %s\n",
 			     chipdest[i].chip_addr, dchad, inet_ntoa(dip.sin_addr));
