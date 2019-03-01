@@ -20,9 +20,11 @@
 // Uses libpcap for input, libnet for output
 
 // TODO:
-// - he-ipv6 device doesn't take pcap_set_datalink (resource temp unavailable)
-// - he-ipv6 doesn't have ipv4 address (shows as 255.55.255.255)
-// - UP must pick either v4 or v6 because only one device - bad
+// - UP problems
+// -- he-ipv6 device doesn't take pcap_set_datalink (resource temp unavailable)
+// -- he-ipv6 doesn't have ipv4 address (shows as 255.55.255.255)
+// -- UP must pick either v4 or v6 because only one device - bad
+// -- he-ipv6 doesn't seem to forward Chaos pkts anyway?
 // - must handle if v4 or v6 address not existing
 // - IPv6 broadcast
 // - config warning if my IPv6 is link-local?
@@ -343,19 +345,23 @@ chip_input(void *v)
       // Get it in host order
       ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
 
+      // Expected length
+      int xlen = (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE);
+      if ((xlen % 2) == 1)
+	xlen++;			/* alignment */
+
       // check Chaos trailer (incl checksum)
-      if (chlen < (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)) {
+      if (chlen < xlen) {
 	fprintf(stderr,"CHIP: short packet received from %#o, no room for hw trailer: total %d, chaos %d (nbytes %d) (expected %d)\n",
 		ch_srcaddr(ch),
-		len, chlen, ch_nbytes(ch), (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE));
+		len, chlen, ch_nbytes(ch), xlen);
 	if (debug) ch_dumpkt(chdata, chlen);
 	PTLOCK(linktab_lock);
 	linktab[srcaddr>>8].pkt_badlen++;
 	PTUNLOCK(linktab_lock);
 	continue;
-      } else if (chlen > (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)) {
-	fprintf(stderr,"CHIP: long pkt received: %d. expected %ld\n",
-		len, (ETHER_HEADER_SIZE+iphl+CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE));
+      } else if (chlen > xlen) {
+	fprintf(stderr,"CHIP: long pkt received: %d. expected %ld\n", chlen, xlen);
       }
 
 
@@ -406,8 +412,8 @@ chip_input(void *v)
 		      ipv == 4 ? (void *)&ip_src : (void *)&ip6_src,
 		      ipaddr, sizeof(ipaddr)) == NULL)
 	  strerror_r(errno,ipaddr,sizeof(ipaddr));
-	fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
-		ipaddr, srcaddr, chlen, ch_srcaddr(ch));
+	if (verbose || debug) fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
+				      ipaddr, srcaddr, chlen, ch_srcaddr(ch));
 	if (debug) ch_dumpkt(chdata, chlen);
 	if (!found) {
 	  if (!chip_dynamic) {
