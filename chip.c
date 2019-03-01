@@ -160,7 +160,6 @@ void reparse_chip_names()
   PTUNLOCK(chipdest_lock);
 }
 
-
 void
 init_chaos_ip()
 {
@@ -179,13 +178,13 @@ init_chaos_ip()
     my_ip.s_addr = libnet_get_ipaddr4(ip_ctx);  /* save my IPv4 address on that interface */
   // there is very probably more than one address on the interface
   // @@@@ consider doing a version of libnet_get_ipaddr6 which looks for non-LL addresses?
-  if (my_ip6.s6_addr[0] == 0) {
+  if (my_ip6.libnet_s6_addr[0] == 0) {
     my_ip6 = libnet_get_ipaddr6(ip6_ctx);  /* save my IPv6 address on that interface */
   }
   
 
   // init libpcap
-  if ((ip_pc = pcap_create(chip_ifname, pc_errbuf)) != 0) {
+  if ((ip_pc = pcap_create(chip_ifname, pc_errbuf)) == NULL) {
     perror("pcap_create");
     exit(1);
   }
@@ -198,12 +197,17 @@ init_chaos_ip()
     exit(1);
   }
 
-  struct bpf_insn bpf_pftab[50];
+  if (pcap_activate(ip_pc) < 0) {
+    perror("pcap_activate");
+    exit(1);
+  }
+
+  struct bpf_insn bpf_pftab[128];
   struct bpf_program bpf_pfilter = {0, bpf_pftab};
   struct bpf_program *pfp = &bpf_pfilter;
-  char bpfilter[16];
-  sprintf(bpfilter, "(ip proto %d) or (ip6 proto %d)", IPPROTO_CHAOS, IPPROTO_CHAOS);
-  if (pcap_compile(ip_pc, pfp, bpfilter, 1, PCAP_NETMASK_UNKNOWN) != 0) {
+  char bpfilter[64];
+  sprintf(bpfilter, "(ip proto %d) || (ip6 proto %d)", IPPROTO_CHAOS, IPPROTO_CHAOS);
+  if (pcap_compile(ip_pc, pfp, bpfilter, 0, PCAP_NETMASK_UNKNOWN) != 0) {
     perror("pcap_compile");
     exit(1);
   }
@@ -217,10 +221,6 @@ init_chaos_ip()
   }
   if (pcap_set_datalink(ip_pc, DLT_EN10MB) < 0) {
     perror("pcap_set_datalink");
-    exit(1);
-  }
-  if (pcap_activate(ip_pc) < 0) {
-    perror("pcap_activate");
     exit(1);
   }
 }
@@ -475,15 +475,28 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
 	  /* dest is a subnet, and it matches our dest */
 	  // (chip_addr is just the subnet, cf parse_link_config)
 	  ((chipdest[i].chip_addr & 0xff00) == 0) && ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8)
+	  ||
+	  /* dest is broadcast */
+	  (((rt->rt_dest & 0xff) == 0) &&  /* dest is broadcast */
+	   ((chipdest[i].chip_addr & 0xff00) == 0) &&  /* this is a subnet dest */
+	   ((chipdest[i].chip_addr << 8) == (rt->rt_dest & 0xff00)))  /* and it matches */
 	  ) {
 	if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET) {
 	  struct sockaddr_in dip;
 	  memcpy(&dip, &chipdest[i].chip_sa.chip_sin, sizeof(dip));
-	  dip.sin_addr.s_addr |= (dchad & 0xff);
+	  if (dchad == 0)	/* broadcast */
+	    dip.sin_addr.s_addr |= htonl(0xff);
+	  else
+	    dip.sin_addr.s_addr |= htonl(dchad & 0xff);
 	  if (debug) fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IP %s\n",
 			     chipdest[i].chip_addr, dchad, inet_ntoa(dip.sin_addr));
 	  chip_send_pkt((struct sockaddr *)&dip, data, dlen);
 	} else if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET6) {
+	  if (dchad == 0) {
+	    // @@@@ fixme
+	    if (verbose || debug) fprintf(stderr,"%%%% CHIP: broadcast to IPv6 not implemented yet\n");
+	    break;
+	  }
 	  struct sockaddr_in6 dip;
 	  memcpy(&dip, &chipdest[i].chip_sa.chip_sin6, sizeof(dip));
 	  dip.sin6_addr.s6_addr[15] = (dchad & 0xff);

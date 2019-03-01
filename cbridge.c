@@ -215,6 +215,7 @@ void init_chaos_tls();
 
 #if CHAOS_IP
 // chip
+void reparse_chip_names();
 void init_chaos_ip();
 void print_chipdest_config();
 #endif
@@ -1176,6 +1177,7 @@ int parse_link_config()
 	return -1;
       }
       memcpy(&chipdest[chipdest_len].chip_name, tok, CHIPDEST_NAME_LEN);
+      // filled it all in, update length
       chipdest_len++;
     } else {
       fprintf(stderr,"bad chip arg %s: %s (%d)\n", tok,
@@ -1248,19 +1250,19 @@ int parse_link_config()
     // for subnetp, check that the IP address is not complete
     if (subnetp) {
       if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET) {
-	if ((chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr & 0xff) != 0) {
+	if ((ntohl(chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr.s_addr) & 0xff) != 0) {
 	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IP with last octet 0, fixing it for you\n",
 		  addr, inet_ntoa(chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr));
-	  chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr &= 0xffffff00;
+	  chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr.s_addr &= htonl(0xffffff00);
 	}
       } else if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET6) {
-	if (chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr[15] != 0) {
+	if (chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr.s6_addr[15] != 0) {
 	  char ip6[INET6_ADDRSTRLEN];
-	  if (inet_ntop(AF_INET6, chipdest[chipdest_len-1].chip_sa.chip_sin6, ip6, sizeof(ip6)) == NULL)
+	  if (inet_ntop(AF_INET6, &chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr, ip6, sizeof(ip6)) == NULL)
 	    strerror_r(errno, ip6, sizeof(ip6));
 	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IPv6 with last octet 0, fixing it for you\n",
 		  addr, ip6);
-	  chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr[15] = 0;
+	  chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr.s6_addr[15] = 0;
 	}
       }
     }
