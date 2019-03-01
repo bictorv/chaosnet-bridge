@@ -184,6 +184,9 @@ void reparse_chip_names()
 void
 init_chaos_ip()
 {
+  if (chip_ifname[0] == '\0')
+    memcpy(chip_ifname, ifname, sizeof(chip_ifname));
+
   // init libnet
   if ((ip_ctx = libnet_init(LIBNET_RAW4, chip_ifname, ip_errbuf)) == NULL) {
     fprintf(stderr,"libnet_init failed\n");
@@ -208,6 +211,7 @@ init_chaos_ip()
   
 
   // init libpcap
+  if (debug) fprintf(stderr,"CHIP: initiating PCAP on interface '%s'\n", chip_ifname);
   if ((ip_pc = pcap_create(chip_ifname, pc_errbuf)) == NULL) {
     perror("pcap_create");
     exit(1);
