@@ -19,6 +19,14 @@
 
 // Uses libpcap for input, libnet for output
 
+// TODO:
+// - he-ipv6 device doesn't take pcap_set_datalink (resource temp unavailable)
+// - he-ipv6 doesn't have ipv4 address (shows as 255.55.255.255)
+// - UP must pick either v4 or v6 because only one device - bad
+// - must handle if v4 or v6 address not existing
+// - IPv6 broadcast
+// - config warning if my IPv6 is link-local?
+
 #include "cbridge.h"
 
 // For Linux, install libnet1-dev
@@ -39,6 +47,8 @@
 
 extern char ifname[128];	/* default */
 char chip_ifname[128];		/* chip specific config */
+
+int chip_dynamic = 0;
 
 static struct in_addr my_ip;
 static struct libnet_in6_addr my_ip6;
@@ -95,6 +105,16 @@ parse_chip_config_line()
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"chip: no interface specificed\n"); return -1; }
       strncpy(chip_ifname, tok, sizeof(chip_ifname));
+    } else if (strcasecmp(tok, "dynamic") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
+	chip_dynamic = 1;
+      else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0))
+	chip_dynamic = 0;
+      else {
+	fprintf(stderr,"chip: bad 'dynamic' arg %s specified\n", tok);
+	return -1;
+      }
     } else {
       fprintf(stderr,"chip config keyword %s unknown\n", tok);
       return -1;
@@ -156,7 +176,7 @@ void reparse_chip_names()
 	}
       }
   }
-  // if (verbose) print_chip_config();
+  // if (verbose) print_chipdest_config();
   PTUNLOCK(chipdest_lock);
 }
 
@@ -225,6 +245,57 @@ init_chaos_ip()
   }
 }
 
+static void
+add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
+{
+  if (chipdest_len < CHIPDEST_MAX) {
+    if (verbose || stats) fprintf(stderr,"Adding new CHIP destination %#o.\n", srcaddr);
+    PTLOCK(chipdest_lock);
+    /* clear any non-specified fields */
+    memset(&chipdest[chipdest_len], 0, sizeof(struct chipdest));
+    chipdest[chipdest_len].chip_addr = srcaddr;
+    chipdest[chipdest_len].chip_sa.chip_saddr.sa_family = fam;
+    if (fam == AF_INET)
+      memcpy(&chipdest[chipdest_len].chip_sa.chip_sin.sin_addr, addr, sizeof(struct in_addr));
+    else
+      memcpy(&chipdest[chipdest_len].chip_sa.chip_sin6.sin6_addr.s6_addr, addr, sizeof(struct in6_addr));
+    chipdest_len++;
+    if (verbose) print_chipdest_config();
+    PTUNLOCK(chipdest_lock);
+
+    // see if there is a host route for this, otherwise add it
+    if (*rttbl_host_len < RTTBL_HOST_MAX) {
+      int i, found = 0;
+      for (i = 0; i < *rttbl_host_len; i++) {
+	if (rttbl_host[i].rt_dest == srcaddr) {
+	  found = 1;
+	  break;
+	}
+      }
+      if (!found) {
+	PTLOCK(rttbl_lock);
+	if (*rttbl_host_len < RTTBL_HOST_MAX) { // double check
+	  // Add a host route (as if "link chip [host] host [srcaddr]" was given)	    
+	  rttbl_host[(*rttbl_host_len)].rt_dest = srcaddr;
+	  rttbl_host[(*rttbl_host_len)].rt_type = RT_FIXED;
+	  rttbl_host[(*rttbl_host_len)].rt_cost = RTCOST_ASYNCH;
+	  rttbl_host[(*rttbl_host_len)].rt_link = LINK_IP;
+	  (*rttbl_host_len)++;
+	  if (verbose) print_routing_table();
+	}
+	PTUNLOCK(rttbl_lock);
+      }
+    } else {
+      if (stats || verbose) fprintf(stderr,"%%%% Host routing table full, not adding new route.\n");
+      // and the chip dest is useless, really.
+      return;
+    }
+  } else {
+    if (stats || verbose) fprintf(stderr,"%%%% CHIP table full, not adding new destination.\n");
+    return;
+  }
+}
+
 void *
 chip_input(void *v)
 {
@@ -255,10 +326,10 @@ chip_input(void *v)
       bzero(data, sizeof(data));
       memcpy(data, pkt_data, len);
 #else
-      ipdata = (u_char *)pkt_data + ETHER_HEADER_SIZE;
-      iphl = ((struct ip *)ipdata)->ip_hl;
+      ipdata = (u_char *)&pkt_data[ETHER_HEADER_SIZE];
+      iphl = ((struct ip *)ipdata)->ip_hl * 4;
       ipv = ((struct ip *)ipdata)->ip_v;
-      chdata = (u_char *)pkt_data + ETHER_HEADER_SIZE + iphl;
+      chdata = (u_char *)&pkt_data[ETHER_HEADER_SIZE + iphl];
 #endif
       ch = (struct chaos_header *)chdata;
       len = pkt_header.caplen;
@@ -269,9 +340,15 @@ chip_input(void *v)
 	if (debug) fprintf(stderr,"pcap_next: no content, only %d bytes read\n", len);
 	continue;
       }
+      // Get it in host order
+      ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
+
       // check Chaos trailer (incl checksum)
       if (chlen < (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)) {
-	fprintf(stderr,"CHIP: short packet received, no room for hw trailer: %d\n", len);
+	fprintf(stderr,"CHIP: short packet received from %#o, no room for hw trailer: total %d, chaos %d (nbytes %d) (expected %d)\n",
+		ch_srcaddr(ch),
+		len, chlen, ch_nbytes(ch), (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE));
+	if (debug) ch_dumpkt(chdata, chlen);
 	PTLOCK(linktab_lock);
 	linktab[srcaddr>>8].pkt_badlen++;
 	PTUNLOCK(linktab_lock);
@@ -293,11 +370,8 @@ chip_input(void *v)
 	continue;
       }
 
-      // Get it in host order
-      ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
-
       // Process trailer info
-      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(chdata-CHAOS_HW_TRAILERSIZE);
+      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
       srcaddr = ntohs(tr->ch_hw_srcaddr);
       int cks = ch_checksum(chdata, chlen);
       if (cks != 0) {
@@ -334,9 +408,15 @@ chip_input(void *v)
 	  strerror_r(errno,ipaddr,sizeof(ipaddr));
 	fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
 		ipaddr, srcaddr, chlen, ch_srcaddr(ch));
+	if (debug) ch_dumpkt(chdata, chlen);
 	if (!found) {
-	  fprintf(stderr,"%%%% CHIP pkt received from unknown source %s - dropping it\n", ipaddr);
-	  return 0;
+	  if (!chip_dynamic) {
+	    fprintf(stderr,"%%%% CHIP pkt received from unknown source %s - dropping it\n", ipaddr);
+	    return 0;
+	  } else {
+	    if (verbose || debug) fprintf(stderr,"%%%% CHIP adding dest %#o at %s\n", srcaddr, ipaddr);
+	    add_chip_dest(srcaddr, (ipv == 4 ? AF_INET : AF_INET6), (ipv == 4 ? (u_char *)&ip_src : (u_char *)&ip6_src));
+	  }
 	}
       }
 
@@ -358,6 +438,11 @@ chip_send_pkt_ipv4(struct sockaddr_in *sout, u_char *pkt, int pklen)
 
   dst_ip = ((struct sockaddr_in *)sout)->sin_addr.s_addr;
   src_ip = my_ip.s_addr;
+  if ((src_ip == 0) || (src_ip == -1)) {
+    if (verbose || debug)
+      fprintf(stderr,"%%%% CHIP: wanted to send on IPv4 but have no address (%#x)\n", src_ip);
+    return;
+  }
 
   // Construct an IP packet
   if ((ip_ptag = libnet_build_ipv4(LIBNET_IPV4_H + pklen,  /* length */
@@ -409,18 +494,18 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
 				   pklen,  /* payload length */
 				   ip6_ctx,  /* libnet context */
 				   ip6_ptag)) == -1) {  /* reuse previous packet if you can */
-    fprintf(stderr,"CHIP: build ipv6 failed: %s\n", libnet_geterror(ip_ctx));
+    fprintf(stderr,"CHIP: build ipv6 failed: %s\n", libnet_geterror(ip6_ctx));
     exit(1);
   }
 
   if (debug) {
     fprintf(stderr,"CHIP: About to send IPv6 pkt:\n");
-    dumppkt_raw(libnet_getpbuf(ip_ctx, ip_ptag), libnet_getpbuf_size(ip_ctx, ip_ptag));
+    dumppkt_raw(libnet_getpbuf(ip6_ctx, ip6_ptag), libnet_getpbuf_size(ip6_ctx, ip6_ptag));
   }
 
-  if (debug) fprintf(stderr,"CHIP: Sending %d bytes\n", libnet_getpacket_size(ip_ctx));
-  if ((c = libnet_write(ip_ctx)) == -1) {
-    fprintf(stderr,"CHIP: write failed: %s\n", libnet_geterror(ip_ctx));
+  if (debug) fprintf(stderr,"CHIP: Sending %d bytes\n", libnet_getpacket_size(ip6_ctx));
+  if ((c = libnet_write(ip6_ctx)) == -1) {
+    fprintf(stderr,"CHIP: write failed: %s\n", libnet_geterror(ip6_ctx));
     exit(1);
   } 
 }

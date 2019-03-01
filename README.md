@@ -98,6 +98,8 @@ trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
 Chaosnet addresses are mapped to IP/IPv6 addresses either individually, 
 or for a whole subnet (see [configuration](CONFIGURATION.md)).
 
+Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` (on Mac, using `port`).
+
 ### Chaos-over-TLS
 
 Chaosnet packets are sent over TLS, with a 2-byte header (length MSB,
@@ -119,7 +121,8 @@ TLS is asymmetric, in the sense that one end is the server which the
 clients connect to. The implementation is not yet tested for cbridges
 which have both roles, but might work. :-) 
 (My preliminary impression is that it is faster than CHUDP!)
-Needs libssl-dev to compile.
+
+Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`.
 
 ## Routing basics
 
