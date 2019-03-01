@@ -68,3 +68,25 @@ To tell cbridge to send routing info about net 6, which only has
 individual host links, a route declaration is necessary.
 
     route subnet 6 bridge 3040 cost asynch
+
+## Example: Chaos-over-IP
+
+To set up an individual link to another host (a chaosnet bridge, or perhaps a PDP-10/X) using Chaos-over-IP, use
+
+    link chip host.name.com host NNNN
+
+where `host.name.com` is the host name, and `NNNN` is its Chaosnet address. If the host is on a different subnet, add your address on that subnet using the `myaddr` parameter (see [configuration](CONFIGURATION.md)).
+
+To set up a whole Chaosnet subnet mapped to an IP subnet, use
+
+    link chip a.b.c.0 subnet NN
+
+where `a.b.c.0` is the IP address of the IP subnet, with the last octet being zero, and `NN` is the (octal) subnet. If this is not your default subnet, i.e. your `chaddr` setting is not on that subnet, add your address on subnet `NN` using the `myaddr` parameter.
+
+The effect is that any Chaosnet packets sent to an address on subnet NN is forwarded to the corresponding IP address on net `a.b.c.0`. For example, suppose you map Chaos subnet 2 to the IP net 10.11.12.0. 
+
+    link chip 10.11.12.0 subnet 2
+
+Addresses on Chaos subnet 2 range from 1001 to 1377 octal. The address 1066 has host byte 66 (octal) = 54 (decimal), and is mapped to 10.11.12.54. Note that address 1377, which has host byte 255, can not be mapped to the IPv4 address 10.11.12.255, since that is the broadcast address on net 10.11.12.0.
+
+For IPv6 addresses, the same mapping is used: the last byte of the IPv6 address is set to the host byte. Note that IPv6 subnet mappings are unfortunately less useful, since the chaosnet bridge doesn't support IPv6 broadcast yet.

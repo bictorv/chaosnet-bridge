@@ -52,14 +52,14 @@ See also the [example configurations](EXAMPLES.md).
 | --- | --- |
 | `ether` | this is a Chaos-over-Ethernet link. Default type: direct, cost: direct. |
 | `unix` | this is a Chaos-over-unix-sockets link. Default type: direct, cost: direct. |
-| `chudp` *host:port* | this is a Chaos-over-UDP link to *host* (ip or name) on *port* (default 42042). Default type: fixed, cost: asynch. |
+| `chudp` *host:port* | this is a Chaos-over-UDP link to *host* (IPv4, IPv6, or hostname) on *port* (default 42042). Default type: fixed, cost: asynch. |
 | `tls` *host:port* | this is a Chaos-over-TLS link, client end, connecting to *host* (ip or name) at *port* (default 42042). Default type: fixed, cost: asynch. |
 | `chip` *addr* | this is a Chaos-over-IP link to *addr* (IPv4, IPv6, or hostname). Default type: fixed, cost: asynch. |
 
 Note that while links implicitly define a route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;
 you need an additional route definition for the subnet.
-(See EXAMPLE.)
+(See the MX-11 [example config](EXAMPLES.md).)
 
 Note that when configuring a CHIP subnet link, you should use an
 explicit IP/IPv6 address (not a host name), and the last octet should
@@ -68,9 +68,10 @@ to the last octet of the configured IP/IPv6 address. For IPv4, the
 host byte can not be 0xFF, since that would map to the IP subnet
 broadcast address.
 (IPv6-mapped subnets will not receive routing info until broadcast for IPv6 is implemented.)
+(The name `chip` coincides with a parameter to the `chudp` implementation in klh10, which is a tiny bit unfortunate.)
 
-A `link` definition is automatically created when using "dynamic" chudp
-and a chudp pkt arrives from a new source.
+A `link` definition is automatically created when using "dynamic" chudp (or chip)
+and a chudp (or chip) pkt arrives from a new source.
 
 A `route` definition (of type "bridge") is automatically created when a
 Chaosnet routing (RUT) pkt is received, describing a new or better route to a subnet.

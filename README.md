@@ -21,16 +21,19 @@ You can configure the bridge to connect subnets and/or individual hosts.
 
 Use cases could be
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
-  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS
+  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS or -over-IP
   link between them). 
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
-  with others using usim (use a Chaos-over-UDP or -over-TLS link between them).
+  with others using usim (use a Chaos-over-UDP or -over-TLS or
+  -over-IP link between them). 
+- connecting remote Chaosnet-over-IP networks, e.g. in case you run a
+  [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
 - connecting ITSes running on klh10 - rather than configuring your
   klh10 to handle all other chudp hosts and iptables to forward chudp
   pkts over the tun interface, keep routing in the bridge
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
-- and interconnecting these three, of course!
+- and interconnecting these, of course!
 
 For more info on the Global Chaosnet, see https://aosnet.ch.
 
