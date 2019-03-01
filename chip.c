@@ -368,7 +368,7 @@ chip_input(void *v)
 	PTUNLOCK(linktab_lock);
 	continue;
       } else if (chlen > xlen) {
-	fprintf(stderr,"CHIP: long pkt received: %d. expected %ld\n", chlen, xlen);
+	if (debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %ld\n", chlen, xlen);
       }
 
 
