@@ -12,18 +12,18 @@ endif
 # Mac OSX
 ifeq ($(OS), OSX)
 CFLAGS = -I/opt/local/include
-LDFLAGS = -L/opt/local/include
+LDFLAGS = -L/opt/local/lib
 endif
 
 all: cbridge
 
-OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o
+OBJS = contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o
 
 # YMMV, but sometimes openssl etc are in /opt/local.
 # -lssl and -lcrypto are needed only for TLS.
 # -lresolv needed only for dns.o
 cbridge: cbridge.c $(OBJS) chaosd.h cbridge-chaos.h chudp.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto -lresolv
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge cbridge.c $(OBJS) -lpthread -lssl -lcrypto -lresolv -lnet -lpcap
 
 contacts.o: contacts.c cbridge.h cbridge-chaos.h 
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -35,6 +35,9 @@ chtls.o: chtls.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 chudp.o: chudp.c cbridge.h cbridge-chaos.h chudp.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+chip.o: chip.c cbridge.h cbridge-chaos.h chudp.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 debug.o: debug.c cbridge.h cbridge-chaos.h

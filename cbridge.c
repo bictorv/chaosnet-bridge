@@ -25,7 +25,7 @@
    - CHUDP (Chaos-over-UDP, used by klh10/its)
    - Chaos-over-TLS (using two bytes of record length)
    - chaosd (Unix socket protocol, used by the usim CADR emulator)
-   - Chaos-over-IP (direct address mapping, used by pdp10x) #### TODO
+   - Chaos-over-IP (IP address mapping, used by pdp10x)
      see also "Cisco's implementation of Chaosnet", same type of mapping
      https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
 
@@ -38,7 +38,29 @@
 
 // logging:
 // - lock to avoid mixed output from different threads
+// -- need two output fns, one assuming a lock is held, one with built-in locking.
+// -- or recursive mutex.
 // - improve granularity, e.g. to only log "major" events
+// -- define "levels" as in LambdaDelta (higher for more details, 0 for no output, 1 for "major stuff")
+// -- levels: emergency, major, minor, info, debug
+// - turn on/off module-specific tracing (similar to LambdaDelta again)
+// - consider including thread id, include time
+// "tls trace 5" or "routing trace 1" or "arp trace 2" etc?
+
+// CHUDP version 2, using network order (big-endian). Also fix klh10/CH11 for this.
+// Can this be modular enough to keep within the chudp "module"? Needs per-link config.
+
+// Chaos-over-IP.
+// IP protocol 16. (See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
+// Data is just the Chaosnet pkt (network order)
+// Map Chaosnet addresses <-> IP addresses
+// - individual host #oXXXX to individual IP a.b.c.d
+// - subnet #oX to IP subnet a.b.c.0/24 (or a.b.c.0/N where N<=24)
+// -- so Chaos host #xXXHH maps to IP a.b.c.HH
+// Need to use trailer, since source (and dest) IP may get rewritten by NAT, and checksum is needed.
+// All this is probably not very useful given CHUDP and CHTLS,
+// but it would be interoperable with pdp10x (which hasn't been
+// developed the last couple (7?) of years, see http://www.fpgaretrocomputing.org/pdp10x/).
 
 // HOSTAB server?
 // - No clients except LMI but would be simpler for CADR than porting DNS?
@@ -130,6 +152,12 @@ int *tlsdest_len;
 
 #endif // CHAOS_TLS
 
+#if CHAOS_IP
+int do_chip = 0;
+int parse_chip_config_line(void);
+void print_config_chip(void);
+#endif
+
 #if CHAOS_DNS
 extern int do_dns_forwarding;
 void init_chaos_dns(int do_forwarding);
@@ -159,6 +187,7 @@ void forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct c
 void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+void forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 
 // shared memory datastructures and locks
 void init_chudpdest(void);
@@ -184,6 +213,12 @@ void print_config_ether(void);
 void init_chaos_tls();
 #endif
 
+#if CHAOS_IP
+// chip
+void init_chaos_ip();
+void print_chipdest_config();
+#endif
+
 // usockets
 int init_chaos_usockets(void);
 void print_config_usockets(void);
@@ -192,6 +227,7 @@ void print_config_usockets(void);
 void *unix_input(void *v);
 void *chudp_input(void *v);
 void *ether_input(void *v);
+void *chip_input(void *v);
 void *tls_server(void *v);
 void *tls_input(void *v);
 void *tls_connector(void *arg);
@@ -315,6 +351,9 @@ char *rt_linkname(u_char linktype)
 #if CHAOS_TLS
   case LINK_TLS: return "TLS";
 #endif
+#if CHAOS_IP
+  case LINK_IP: return "CHIP";
+#endif
   case LINK_ETHER: return "Ether";
   case LINK_INDIRECT: return "Indir";
   default: return "Unknown?";
@@ -359,11 +398,14 @@ print_routing_table() {
 
 
 void *
-reparse_chudp_names_thread(void *v)
+reparse_link_host_names_thread(void *v)
 {
   while (1) {
     sleep(60*5);		// Hmm, how often really?
     reparse_chudp_names();   // occasionally re-parse chu_name strings
+#if CHAOS_IP
+    reparse_chip_names();
+#endif
   }
 }
 
@@ -547,33 +589,6 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
   return NULL;
 }
 
-unsigned int
-ch_checksum(const unsigned char *addr, int count)
-{
-  /* RFC1071 */
-  /* Compute Internet Checksum for "count" bytes
-   *         beginning at location "addr".
-   */
-  register long sum = 0;
-
-  while( count > 1 )  {
-    /*  This is the inner loop */
-    sum += *(addr)<<8 | *(addr+1);
-    addr += 2;
-    count -= 2;
-  }
-
-  /*  Add left-over byte, if any */
-  if( count > 0 )
-    sum += * (unsigned char *) addr;
-
-  /*  Fold 32-bit sum to 16 bits */
-  while (sum>>16)
-    sum = (sum & 0xffff) + (sum >> 16);
-
-  return (~sum) & 0xffff;
-}
-
 void
 htons_buf(u_short *ibuf, u_short *obuf, int len)
 {
@@ -666,6 +681,11 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 #if CHAOS_TLS
   case LINK_TLS:
     forward_on_tls(rt, schad, dchad, ch, data, dlen);
+    break;
+#endif
+#if CHAOS_IP
+  case LINK_IP:
+    forward_on_ip(rt, schad, dchad, ch, data, dlen);
     break;
 #endif
   case LINK_CHUDP:
@@ -802,6 +822,9 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
     break;
 #if CHAOS_TLS
   case LINK_TLS: // fall through
+#endif
+#if CHAOS_IP
+  case LINK_IP: // fall through
 #endif
   case LINK_CHUDP:
     if ((rt->rt_dest & 0xff) == 0) {
@@ -1126,6 +1149,40 @@ int parse_link_config()
       return -1;
     }
 #endif
+#if CHAOS_IP
+  } else if (strcasecmp(tok, "chip") == 0) {
+    // similar to chudp case, should generalize code
+    int res;
+
+    rt->rt_link = LINK_IP;
+    rt->rt_type = RT_FIXED;
+    rt->rt_cost = RTCOST_ASYNCH;
+    rt->rt_cost_updated = time(NULL);
+
+    tok = strtok(NULL," \t\r\n");
+    if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
+      chipdest[chipdest_len].chip_sa.chip_sin.sin_family = he->ai_family;
+      if (he->ai_family == AF_INET) {
+	do_chip = 1;
+	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	memcpy(&chipdest[chipdest_len].chip_sa.chip_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
+      } else if (he->ai_family == AF_INET6) {
+	do_chip = 1;
+	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	memcpy(&chipdest[chipdest_len].chip_sa.chip_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
+      } else {
+	fprintf(stderr,"error parsing chip host %s: unknown address family %d\n",
+		tok, he->ai_family);
+	return -1;
+      }
+      memcpy(&chipdest[chipdest_len].chip_name, tok, CHIPDEST_NAME_LEN);
+      chipdest_len++;
+    } else {
+      fprintf(stderr,"bad chip arg %s: %s (%d)\n", tok,
+	      gai_strerror(res), res);
+      return -1;
+    }
+#endif
   }
   // host|subnet y type t cost c
   tok = strtok(NULL," \t\r\n");
@@ -1186,6 +1243,30 @@ int parse_link_config()
     }
   }
 #endif // CHAOS_TLS
+#if CHAOS_IP
+  if (rt->rt_link == LINK_IP) {
+    // for subnetp, check that the IP address is not complete
+    if (subnetp) {
+      if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET) {
+	if ((chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr & 0xff) != 0) {
+	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IP with last octet 0, fixing it for you\n",
+		  addr, inet_ntoa(chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr));
+	  chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr &= 0xffffff00;
+	}
+      } else if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET6) {
+	if (chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr[15] != 0) {
+	  char ip6[INET6_ADDRSTRLEN];
+	  if (inet_ntop(AF_INET6, chipdest[chipdest_len-1].chip_sa.chip_sin6, ip6, sizeof(ip6)) == NULL)
+	    strerror_r(errno, ip6, sizeof(ip6));
+	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IPv6 with last octet 0, fixing it for you\n",
+		  addr, ip6);
+	  chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr[15] = 0;
+	}
+      }
+    }
+    chipdest[chipdest_len - 1].chip_addr = addr;
+  }
+#endif // CHAOS_IP
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
@@ -1351,8 +1432,16 @@ int parse_config_line(char *line)
     return parse_dns_config_line();
   }
 #endif
+#if CHAOS_IP
+  else if (strcasecmp(tok,"chip") == 0) {
+    // this is pointless until chip is "dynamic", but...
+    do_chip = 1;
+    return parse_chip_config_line();
+  }
+#endif
   else if (strcasecmp(tok, "ether") == 0) {
     tok = strtok(NULL," \t\r\n");
+    if (tok == NULL) { fprintf(stderr,"no ether interface given\n"); return -1; }
     strncpy(ifname,tok,sizeof(ifname));
     do_ether = 1;
     if (verbose) {
@@ -1419,6 +1508,9 @@ print_stats(int sig)
       if (do_tls_server)
 	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
+#if CHAOS_IP
+    print_config_chip();
+#endif
 #if CHAOS_DNS
     print_config_dns();
     if (do_dns_forwarding) {
@@ -1431,6 +1523,9 @@ print_stats(int sig)
   print_chudp_config();
 #if CHAOS_TLS
   print_tlsdest_config();
+#endif
+#if CHAOS_IP
+  print_chipdest_config();
 #endif
   print_link_stats();
   print_host_stats();
@@ -1568,6 +1663,11 @@ main(int argc, char *argv[])
     fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
 #endif // CHAOS_ETHERP
   }
+#if CHAOS_IP
+  if (do_chip) {
+    init_chaos_ip();
+  }
+#endif
 
 #if 1
   if (verbose)
@@ -1622,6 +1722,15 @@ main(int argc, char *argv[])
     }
   }
 #endif // CHAOS_ETHERP
+#if CHAOS_IP
+  if (do_chip) {
+    if (verbose) fprintf(stderr,"Starting thread for Chaos-over-IP\n");
+    if (pthread_create(&threads[ti++], NULL, &chip_input, NULL) < 0) {
+      perror("pthread_create(chip_input)");
+      exit(1);
+    }
+  }
+#endif
 
 #if CHAOS_TLS
   if (do_tls_server || do_tls) {
@@ -1675,10 +1784,14 @@ main(int argc, char *argv[])
     perror("pthread_create(route_cost_updater)");
     exit(1);
   }
-  if (do_udp || do_udp6) {
+  if (do_udp || do_udp6
+#if CHAOS_IP
+      || do_chip
+#endif
+      ) {
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
-    if (pthread_create(&threads[ti++], NULL, &reparse_chudp_names_thread, NULL) < 0) {
-      perror("pthread_create(reparse_chudp_names_thread)");
+    if (pthread_create(&threads[ti++], NULL, &reparse_link_host_names_thread, NULL) < 0) {
+      perror("pthread_create(reparse_link_host_names_thread)");
       exit(1);
     }
   }

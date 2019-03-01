@@ -5,6 +5,7 @@ This program is a bridge between Chaosnet implementations. It supports
 - Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator, see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see http://www.unlambda.com/cadr/) 
 - Chaos-over-TLS (see below)
+- Chaos-over-IP (using IP protocol 16, cf https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml)
 
 ## See also
 - [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
@@ -86,6 +87,16 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 - Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
 
 Currently only one Ethernet interface is supported.
+
+### Chaos-over-IP
+
+Chaosnet packets are sent in IP/IPv6 packets, using 
+[IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
+Packets are sent in "big-endian" order, with a ["hardware
+trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
+
+Chaosnet addresses are mapped to IP/IPv6 addresses either individually, 
+or for a whole subnet (see [configuration](CONFIGURATION.md)).
 
 ### Chaos-over-TLS
 
