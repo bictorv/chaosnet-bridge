@@ -474,7 +474,7 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
       if (
 	  /* dest is a subnet, and it matches our dest */
 	  // (chip_addr is just the subnet, cf parse_link_config)
-	  ((chipdest[i].chip_addr & 0xff00) == 0) && ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8)
+	  (((chipdest[i].chip_addr & 0xff00) == 0) && ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8))
 	  ||
 	  /* dest is broadcast */
 	  (((rt->rt_dest & 0xff) == 0) &&  /* dest is broadcast */
