@@ -75,7 +75,9 @@ To set up an individual link to another host (a chaosnet bridge, or perhaps a PD
 
     link chip host.name.com host NNNN
 
-where `host.name.com` is the host name, and `NNNN` is its Chaosnet address. If the host is on a different subnet, add your address on that subnet using the `myaddr` parameter (see [configuration](CONFIGURATION.md)).
+where `host.name.com` is the host name, and `NNNN` is its Chaosnet address. If the host is on a different subnet, add your address on that subnet using the `myaddr` parameter (see [configuration](CONFIGURATION.md)). A specific example, assuming you have an address on Chaos subnet 6:
+
+    link chip router.aosnet.ch host 3040
 
 To set up a whole Chaosnet subnet mapped to an IP subnet, use
 

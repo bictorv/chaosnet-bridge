@@ -36,6 +36,9 @@
 
 // TODO
 
+// when "other end" changes transport (e.g. from CHUDP to CHIP, or to TLS),
+// may need to make sure the routing table is properly updated.
+
 // logging:
 // - lock to avoid mixed output from different threads
 // -- need two output fns, one assuming a lock is held, one with built-in locking.
@@ -49,18 +52,6 @@
 
 // CHUDP version 2, using network order (big-endian). Also fix klh10/CH11 for this.
 // Can this be modular enough to keep within the chudp "module"? Needs per-link config.
-
-// Chaos-over-IP.
-// IP protocol 16. (See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
-// Data is just the Chaosnet pkt (network order)
-// Map Chaosnet addresses <-> IP addresses
-// - individual host #oXXXX to individual IP a.b.c.d
-// - subnet #oX to IP subnet a.b.c.0/24 (or a.b.c.0/N where N<=24)
-// -- so Chaos host #xXXHH maps to IP a.b.c.HH
-// Need to use trailer, since source (and dest) IP may get rewritten by NAT, and checksum is needed.
-// All this is probably not very useful given CHUDP and CHTLS,
-// but it would be interoperable with pdp10x (which hasn't been
-// developed the last couple (7?) of years, see http://www.fpgaretrocomputing.org/pdp10x/).
 
 // HOSTAB server?
 // - No clients except LMI but would be simpler for CADR than porting DNS?
@@ -79,9 +70,8 @@
 
 // Separate datastructures for links and routes, simplifying things.
 
-// add a more silent variant of output, which just notes new chudp
-//   links, new routes, real weirdness, etc.
 // add parameters for various constants (arp age limit, reparsing interval...)
+
 // minimize copying
 // - now net order is swapped to host order when receiving from Ether and Unix,
 //   and then swapped back before forwarding,
@@ -1319,6 +1309,7 @@ int parse_link_config()
       return -1;
     }
   }
+  // @@@@ check if mychaddr has an entry for the subnet of the newly defined link
   struct chroute *rrt;
   if (subnetp)
     rrt = &rttbl_net[addr];

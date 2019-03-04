@@ -17,56 +17,27 @@
 // **** Chaosnet-over-IP ****
 // See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 
-// Uses libpcap for input, libnet for output
-
 // TODO:
 // - UP problems, due to Hurricane Electric IPv6 tunnel
-// -- he-ipv6 device doesn't take pcap_set_datalink (resource temp unavailable)
 // -- he-ipv6 doesn't have ipv4 address (shows as 255.255.255.255)
 // -- UP must pick either v4 or v6 because only one device - bad
-// -- he-ipv6 doesn't seem to forward Chaos pkts anyway?
-// - IPv6 broadcast
+// -- need to configure interface per link
+// - IPv6 broadcast is "more advanced" than IPv4
 // - config warning if my IPv6 is link-local?
 
 #include "cbridge.h"
 
-// For Linux, install libnet1-dev
-#if __APPLE__
-// For Mac using "port", install libnet11 (not libnet).
-// It's installed in /opt/local/{include,lib} on Mac
-// For some reason these need to be defined before including libnet.h - how stable/reliable is this library...?
-#define LIBNET_LIL_ENDIAN 1
-#define __GLIBC__ 1
-#endif
-
-#include "libnet.h"
-#include <pcap/pcap.h>
-#include <pcap/bpf.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 
 
-extern char ifname[128];	/* default */
-char chip_ifname[128];		/* chip specific config */
-
 int chip_dynamic = 0;
-
-static struct in_addr my_ip;
-static struct libnet_in6_addr my_ip6;
 
 static pthread_mutex_t chipdest_lock = PTHREAD_MUTEX_INITIALIZER;
 struct chipdest chipdest[CHIPDEST_MAX];
 int chipdest_len = 0;
 
-static libnet_ptag_t ip_ptag = 0;
-static libnet_t *ip_ctx;		/* libnet context */
-static libnet_ptag_t ip6_ptag = 0;
-static libnet_t *ip6_ctx;		/* libnet context */
-static char ip_errbuf[LIBNET_ERRBUF_SIZE];
-  
-// pcap
-static pcap_t *ip_pc;
-static char pc_errbuf[PCAP_ERRBUF_SIZE];
+static int ip6_sock, ip_sock;
 
 void 
 print_chipdest_config()
@@ -88,25 +59,13 @@ print_chipdest_config()
   }
 }
 
-// chip ip a.b.c.d ipv6 aa:bb::42 interface eth0
+// chip dynamic on/off
 int
 parse_chip_config_line()
 {
   char *tok = NULL;
   while ((tok = strtok(NULL," \t\r\n")) != NULL) {
-    if (strcasecmp(tok, "ip") == 0) {
-      tok = strtok(NULL, " \t\r\n");
-      if (tok == NULL) { fprintf(stderr,"chip: no ip address specificed\n"); return -1; }
-      if (inet_aton(tok, &my_ip) != 1) { fprintf(stderr,"chip: invalid ip address '%s'\n", tok); return -1; }
-    } else if (strcasecmp(tok, "ipv6") == 0) {
-      tok = strtok(NULL, " \t\r\n");
-      if (tok == NULL) { fprintf(stderr,"chip: no ipv6 address specificed\n"); return -1; }
-      if (inet_pton(AF_INET6, tok, &my_ip6) != 1) { fprintf(stderr,"chip: invalid ipv6 address '%s'\n", tok); return -1; }
-    } else if (strcasecmp(tok, "interface") == 0) {
-      tok = strtok(NULL, " \t\r\n");
-      if (tok == NULL) { fprintf(stderr,"chip: no interface specificed\n"); return -1; }
-      strncpy(chip_ifname, tok, sizeof(chip_ifname));
-    } else if (strcasecmp(tok, "dynamic") == 0) {
+    if (strcasecmp(tok, "dynamic") == 0) {
       tok = strtok(NULL, " \t\r\n");
       if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
 	chip_dynamic = 1;
@@ -127,17 +86,10 @@ parse_chip_config_line()
 void
 print_config_chip()
 {
-  char ip6[INET6_ADDRSTRLEN];
-
-  // oh horror.
-  if (chip_ifname[0] == '\0')
-    memcpy(chip_ifname, ifname, sizeof(chip_ifname));
-
-  if (inet_ntop(AF_INET6, &my_ip6, ip6, sizeof(ip6)) == NULL)
-    strerror_r(errno, ip6, sizeof(ip6));
-  printf("CHIP: using interface %s, IP address %s, IPv6 address %s\n", chip_ifname, inet_ntoa(my_ip), ip6);
+  printf("CHIP: dynamic %s\n", chip_dynamic ? "on" : "off");
 }
 
+// @@@@ copy-paste of reparse_chudp_names, modularize?
 void reparse_chip_names()
 {
   int i, res;
@@ -184,74 +136,16 @@ void reparse_chip_names()
 void
 init_chaos_ip()
 {
-  if (chip_ifname[0] == '\0')
-    memcpy(chip_ifname, ifname, sizeof(chip_ifname));
-
-  // init libnet
-  if ((ip_ctx = libnet_init(LIBNET_RAW4, chip_ifname, ip_errbuf)) == NULL) {
-    fprintf(stderr,"libnet_init failed\n");
+  if ((ip_sock = socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
+    perror("socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)");
     exit(1);
-  }
-  // IPv6 needs a separate context
-  if ((ip6_ctx = libnet_init(LIBNET_RAW6, chip_ifname, ip_errbuf)) == NULL) {
-    fprintf(stderr,"libnet_init failed (IPv6)\n");
+  } else if (debug)
+    fprintf(stderr,"CHIP: IPv4 socket is %d\n", ip_sock);
+  if ((ip6_sock = socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
+    perror("socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)");
     exit(1);
-  }
-  // there may be more than one address on the interface
-  if (my_ip.s_addr == 0) {
-    my_ip.s_addr = libnet_get_ipaddr4(ip_ctx);  /* save my IPv4 address on that interface */
-    if (my_ip.s_addr == -1)
-      my_ip.s_addr = 0;		/* no address, a bit clearer */
-  }
-  // there is very probably more than one address on the interface
-  // @@@@ consider doing a version of libnet_get_ipaddr6 which looks for non-LL addresses?
-  if (my_ip6.libnet_s6_addr[0] == 0) {
-    my_ip6 = libnet_get_ipaddr6(ip6_ctx);  /* save my IPv6 address on that interface */
-  }
-  
-
-  // init libpcap
-  if (debug) fprintf(stderr,"CHIP: initiating PCAP on interface '%s'\n", chip_ifname);
-  if ((ip_pc = pcap_create(chip_ifname, pc_errbuf)) == NULL) {
-    perror("pcap_create");
-    exit(1);
-  }
-  if (pcap_set_snaplen(ip_pc, ETHER_MTU + 100) < 0) {	/* fuzz */
-    perror("pcap_set_snaplen");
-    exit(1);
-  }
-  if (pcap_set_immediate_mode(ip_pc, 1) < 0) {
-    perror("pcap_set_immediate_mode");
-    exit(1);
-  }
-
-  if (pcap_activate(ip_pc) < 0) {
-    perror("pcap_activate");
-    exit(1);
-  }
-
-  struct bpf_insn bpf_pftab[128];
-  struct bpf_program bpf_pfilter = {0, bpf_pftab};
-  struct bpf_program *pfp = &bpf_pfilter;
-  char bpfilter[64];
-  sprintf(bpfilter, "(ip proto %d) || (ip6 proto %d)", IPPROTO_CHAOS, IPPROTO_CHAOS);
-  if (pcap_compile(ip_pc, pfp, bpfilter, 0, PCAP_NETMASK_UNKNOWN) != 0) {
-    perror("pcap_compile");
-    exit(1);
-  }
-  if (pcap_setfilter(ip_pc, pfp) < 0) {
-    perror("pcap_setfilter");
-    exit(1);
-  }
-  if (pcap_setdirection(ip_pc, PCAP_D_IN) < 0) {
-    perror("pcap_setdirection");
-    exit(1);
-  }
-  if (pcap_set_datalink(ip_pc, DLT_EN10MB) < 0) {
-    perror("pcap_set_datalink");
-    // Allow this, to debug he-ipv6
-    // exit(1);
-  }
+  } else if (debug)
+    fprintf(stderr,"CHIP: IPv6 socket is %d\n", ip6_sock);
 }
 
 static void
@@ -305,50 +199,59 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
   }
 }
 
+// @@@@ break this up in parts
 void *
 chip_input(void *v)
 {
+  // @@@@ clean up in_addr vs sockaddr etc
   int len, chlen;
   u_short srcaddr;		/* chaos source */
   struct in_addr ip_src;	/* ip source */
   struct in6_addr ip6_src;	/* ipv6 source */
-  struct pcap_pkthdr pkt_header;
-  const u_char *pkt_data;
-#if 0
-  // @@@@ IPv6
-  u_char data[CH_PK_MAXLEN+IP_HEADER_SIZE+ETHER_HEADER_SIZE];
-  u_char *ipdata = &data[ETHER_HEADER_SIZE];
-  u_char *chdata = &data[IP_HEADER_SIZE+ETHER_HEADER_SIZE];
-#else
-  u_char *ipdata, *chdata;
-#endif
-  int iphl, ipv;
+  struct sockaddr_in6 sa;	// #### sockaddr_in6 is larger than sockaddr_in and sockaddr
+  socklen_t salen;
+  fd_set rfd;
+  int maxfd;
+  u_char data[CH_PK_MAXLEN+sizeof(struct ip)+sizeof(struct ip6_hdr)];	 /* fuzz */
+  u_char *chdata;
+  int sval;
+  int ipv;
   struct chaos_header *ch;
   
-  int fd = pcap_get_selectable_fd(ip_pc);
-
+  maxfd = 1+(ip_sock > ip6_sock ? ip_sock : ip6_sock);
   while (1) {
-    pkt_data = pcap_next(ip_pc, &pkt_header);
-    if (pkt_data) {
-#if 0
-      // Do we really need to copy it? Naah.
-      bzero(data, sizeof(data));
-      memcpy(data, pkt_data, len);
-#else
-      ipdata = (u_char *)&pkt_data[ETHER_HEADER_SIZE];
-      iphl = ((struct ip *)ipdata)->ip_hl * 4;
-      ipv = ((struct ip *)ipdata)->ip_v;
-      chdata = (u_char *)&pkt_data[ETHER_HEADER_SIZE + iphl];
-#endif
-      ch = (struct chaos_header *)chdata;
-      len = pkt_header.caplen;
-      chlen = len - (ETHER_HEADER_SIZE+iphl);
-
-      // Check length
-      if (chlen <= 0) {
-	if (debug) fprintf(stderr,"pcap_next: no content, only %d bytes read\n", len);
-	continue;
+    memset(&sa, 0, sizeof(sa));
+    salen = sizeof(sa);
+    // select, then recvfrom
+    FD_ZERO(&rfd);
+    FD_SET(ip_sock, &rfd);
+    FD_SET(ip6_sock, &rfd);
+    if ((sval = select(maxfd, &rfd, NULL, NULL, NULL)) < 0)
+      perror("select(chip_input)");
+    else if (sval > 0) {
+      if (FD_ISSET(ip_sock, &rfd)) {
+	if (debug) fprintf(stderr,"CHIP: receiving from IPv4 socket\n");
+	len = recvfrom(ip_sock, &data, sizeof(data), 0, (struct sockaddr *) &sa, &salen);
+      } else if (FD_ISSET(ip6_sock, &rfd)) {
+	if (debug) fprintf(stderr,"CHIP: receiving from IPv6 socket\n");
+	len = recvfrom(ip6_sock, &data, sizeof(data), 0, (struct sockaddr *) &sa, &salen);
       }
+      else {
+	if (debug) fprintf(stderr,"CHIP: select returned %d but neither v4/v6 socket set\n", sval);
+	len = -1;
+      }
+    } else if (sval == 0) {
+      if (debug) fprintf(stderr,"CHIP: select timeout? %d\n", sval);
+      len = -1;
+    } else {
+      perror("CHIP: select");
+      len = -1;
+    }
+    if (debug) fprintf(stderr,"CHIP: received %d bytes\n", len);
+    if (len > 0) {
+      chdata = (u_char *)&data;
+      ch = (struct chaos_header *)chdata;
+      chlen = len;
       // Get it in host order
       ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
 
@@ -368,21 +271,20 @@ chip_input(void *v)
 	PTUNLOCK(linktab_lock);
 	continue;
       } else if (chlen > xlen) {
-	if (debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %ld\n", chlen, xlen);
+	if (debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %d\n", chlen, xlen);
       }
 
-
-      // get IP sender
-      if (ipv == 4) {
-	memcpy(&ip_src, (u_char *)&((struct ip *)ipdata)->ip_src.s_addr, sizeof(ip_src));
-	// @@@@ maybe get ip_dest too, and check it's for us, and whether it's broadcast
-      } else if (ipv == 6) {
-	memcpy(&ip6_src, (u_char *)&((struct ip6_hdr *)ipdata)->ip6_src, sizeof(ip6_src));
+      if (debug) fprintf(stderr,"CHIP: sockaddr len %d, family %d\n", salen, ((struct sockaddr *)&sa)->sa_family);
+      if (((struct sockaddr *)&sa)->sa_family == AF_INET) {
+	ipv = 4;
+	memcpy(&ip_src, &((struct sockaddr_in *)&sa)->sin_addr, sizeof(ip_src));
+      } else if (((struct sockaddr *)&sa)->sa_family == AF_INET6) {
+	ipv = 6;
+	memcpy(&ip6_src, &((struct sockaddr_in6 *)&sa)->sin6_addr, sizeof(ip6_src));
       } else {
-	fprintf(stderr,"%%%% CHIP: IP version not 4 or 6 (%d), dropping\n", ipv);
-	continue;
+	fprintf(stderr,"%%%% CHIP: unexpected protocol family %d\n", ((struct sockaddr *)&sa)->sa_family);
+	exit(1);
       }
-
       // Process trailer info
       struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
       srcaddr = ntohs(tr->ch_hw_srcaddr);
@@ -447,86 +349,35 @@ static void
 chip_send_pkt_ipv4(struct sockaddr_in *sout, u_char *pkt, int pklen)
 {
   int c;
-  u_long src_ip, dst_ip;
-
-  dst_ip = ((struct sockaddr_in *)sout)->sin_addr.s_addr;
-  src_ip = my_ip.s_addr;
-  if ((src_ip == 0) || (src_ip == -1)) {
-    if (verbose || debug)
-      fprintf(stderr,"%%%% CHIP: wanted to send on IPv4 but have no address (%#x)\n", src_ip);
-    return;
-  }
-
-  // Construct an IP packet
-  if ((ip_ptag = libnet_build_ipv4(LIBNET_IPV4_H + pklen,  /* length */
-				   0,  /* TOS */
-				   0,	 /* IP ID @@@@ */
-				   0,  /* IP frag */
-				   64,  /* TTL */
-				   IPPROTO_CHAOS,  /* IP protocol */
-				   0,  /* checksum (autofill) */
-				   src_ip,  /* source IP */
-				   dst_ip,  /* dest IP */
-				   pkt,	 /* payload */
-				   pklen,  /* payload length */
-				   ip_ctx,  /* libnet context */
-				   ip_ptag)) == -1) {  /* reuse previous packet if you can */
-    fprintf(stderr,"CHIP: build ipv4 failed: %s\n", libnet_geterror(ip_ctx));
-    exit(1);
-  }
 
   if (debug) {
-    fprintf(stderr,"CHIP: About to send IP pkt:\n");
-    dumppkt_raw(libnet_getpbuf(ip_ctx, ip_ptag), libnet_getpbuf_size(ip_ctx, ip_ptag));
+    fprintf(stderr,"CHIP: About to send IPv4 pkt to %s\n", inet_ntoa(sout->sin_addr));
+    dumppkt_raw(pkt, pklen);
   }
-
-  if (debug) fprintf(stderr,"CHIP: Sending %d bytes\n", libnet_getpacket_size(ip_ctx));
-  if ((c = libnet_write(ip_ctx)) == -1) {
-    fprintf(stderr,"CHIP: write failed: %s\n", libnet_geterror(ip_ctx));
-    exit(1);
-  } 
+  c = sendto(ip_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in));
+  if (c < 0)
+    perror("chip_send_pkt_ipv4");
+  else if (debug)
+    fprintf(stderr,"CHIP: chip_send_pkt_ipv4: wrote %d bytes\n", c);
 }
 
 static void 
 chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
 {
   int c;
-  struct libnet_in6_addr dst_ip6;
-
-  if (libnet_in6_is_error(my_ip6)) {
-    if (verbose || debug)
-      fprintf(stderr,"%%%% CHIP: wanted to send on IPv6 but have no address\n");
-    return;
-  }
-
-  memcpy(&dst_ip6, &sout->sin6_addr.s6_addr, sizeof(dst_ip6));
-
-  // Construct an IPv6 packet
-  if ((ip6_ptag = libnet_build_ipv6(0, /* traffic class */
-				   0, /* flow label */
-				   LIBNET_IPV6_H + pklen, /* total length */
-				   IPPROTO_CHAOS,  /* next header */
-				   64,  /* hop limit */
-				   my_ip6,  /* source IP */
-				   dst_ip6,  /* dest IP */
-				   pkt,	 /* payload */
-				   pklen,  /* payload length */
-				   ip6_ctx,  /* libnet context */
-				   ip6_ptag)) == -1) {  /* reuse previous packet if you can */
-    fprintf(stderr,"CHIP: build ipv6 failed: %s\n", libnet_geterror(ip6_ctx));
-    exit(1);
-  }
 
   if (debug) {
-    fprintf(stderr,"CHIP: About to send IPv6 pkt:\n");
-    dumppkt_raw(libnet_getpbuf(ip6_ctx, ip6_ptag), libnet_getpbuf_size(ip6_ctx, ip6_ptag));
+    char ip6[INET6_ADDRSTRLEN];
+    if (inet_ntop(AF_INET6, &sout->sin6_addr, ip6, sizeof(ip6)) == NULL)
+      strerror_r(errno, ip6, sizeof(ip6));
+    fprintf(stderr,"CHIP: About to send IPv6 pkt to %s\n", ip6);
+    dumppkt_raw(pkt, pklen);
   }
-
-  if (debug) fprintf(stderr,"CHIP: Sending %d bytes\n", libnet_getpacket_size(ip6_ctx));
-  if ((c = libnet_write(ip6_ctx)) == -1) {
-    fprintf(stderr,"CHIP: write failed: %s\n", libnet_geterror(ip6_ctx));
-    exit(1);
-  } 
+  c = sendto(ip6_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in6));
+  if (c < 0)
+    perror("chip_send_pkt_ipv6");
+  else if (debug)
+    fprintf(stderr,"CHIP: chip_send_pkt_ipv6: wrote %d bytes\n", c);
 }
 
 static void 
@@ -544,13 +395,14 @@ chip_send_pkt(struct sockaddr *sout, u_char *pkt, int pklen)
   }
 }
 
+// @@@@ break this up in parts
 void
 forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
   int i, found = 0;
 
   // Swap back to network order
-  htons_buf((u_short *)ch, (u_short *)ch, dlen);
+  htons_buf((u_short *)data, (u_short *)data, dlen);
 
   // look up in chipdest, send using libnet
   PTLOCK(chipdest_lock);
