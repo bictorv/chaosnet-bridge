@@ -18,12 +18,7 @@
 // See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 
 // TODO:
-// - UP problems, due to Hurricane Electric IPv6 tunnel
-// -- he-ipv6 doesn't have ipv4 address (shows as 255.255.255.255)
-// -- UP must pick either v4 or v6 because only one device - bad
-// -- need to configure interface per link
-// - IPv6 broadcast is "more advanced" than IPv4
-// - config warning if my IPv6 is link-local?
+// - implement IPv6 broadcast - "more advanced" than IPv4
 
 #include "cbridge.h"
 
