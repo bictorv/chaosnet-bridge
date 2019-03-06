@@ -42,14 +42,14 @@ For more info on the Global Chaosnet, see https://aosnet.ch.
 ### Chaos-over-UDP
 
 Chaosnet packets are encapsulated in UDP packets, using a four-byte
-header (version=1, function=1, 0, 0), and with a ["hardware
-trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols)
+header (version=1, function=1, 0, 0), and with a "hardware
+trailer" (cf [Section 2.5 of MIT AI Memo 628](https://lm-3.github.io/amber.html#Hardware-Protocols))
 containing the destination and source addresses and an [Internet
 Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
 ["little-endian"
 order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
 i.e. with the least significant byte of a 16-bit word before the most
-significant byte. (I'm really sorry about this, and might invent
+significant byte. (I'm really sorry about this, and might develop
 version 2 of the protocol with the only change being big-endian byte
 order.)
 
@@ -78,7 +78,7 @@ the bridge) since the named socket of the server is constant.
 
 ### Chaos-over-Ethernet
 
-Chaosnet packets are sent using Ethernet protocol
+Chaosnet packets are sent using the standard Ethernet protocol
 [0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
 No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
 628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the
@@ -93,7 +93,7 @@ Currently only one Ethernet interface is supported.
 
 ### Chaos-over-IP
 
-Chaosnet packets are sent in IP/IPv6 packets, using 
+Chaosnet packets are sent in IP/IPv6 packets, using the standard
 [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
 Packets are sent in "big-endian" order, with a ["hardware
 trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
@@ -155,11 +155,7 @@ macOS, using ctrl-T in bash), that signal does the same.
 
 - [ ] validate configuration (at least warn about crazy things, subnet-specific address on each link, multiple links/routes to same dest))
 - [ ] improve logging (avoid mixing output from different threads, improve granularity e.g. to only log "significant" events, "levels" and "facilities" a'la LambdaDelta)
-- [ ] rewrite BPF part (Chaos-over-Ethernet) using libpcap (for portability, simplicity, and perhaps Chaos-over-IP)
-- [ ] add support for Chaos-over-IP (encapsulating using [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
-  used by the [pdp10x FPGA implementation](http://www.fpgaretrocomputing.org/pdp10x/)). See also  "[Cisco's
-  implementation of Chaosnet](https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm)", with the same type of mapping
-  (But the IP address mapping is crazy^W very limited, and if you just want encapsulation, use UDP? Yes, but interoperability...)
+- [ ] rewrite BPF part (Chaos-over-Ethernet) using libpcap (for portability and simplicity)
 - [ ] invent version 2 of CHUDP to send packets in network order, like all the others, and thus avoid swapping/copying data all over (except for version 1 of CHUDP)
 - [ ] detect unexpected traffic (e.g. traffic from a known subnet coming on a different link)
 - [ ] make Open Genera use tap instead of tun, to allow Chaosnet (quite different project, but for Chaos interoperability)

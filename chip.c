@@ -162,10 +162,12 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
     PTUNLOCK(chipdest_lock);
 
     // see if there is a host route for this, otherwise add it
+    // @@@@ break this out to separate fn
     if (*rttbl_host_len < RTTBL_HOST_MAX) {
       int i, found = 0;
       for (i = 0; i < *rttbl_host_len; i++) {
 	if (rttbl_host[i].rt_dest == srcaddr) {
+	  // @@@@ check it's the intended link type
 	  found = 1;
 	  break;
 	}
@@ -194,24 +196,106 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
   }
 }
 
-// @@@@ break this up in parts
+void 
+chudp_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen) {
+  u_short srcaddr;		/* chaos source */
+  struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+  struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
+  struct in_addr ip_src;	/* ip source */
+  struct in6_addr ip6_src;	/* ipv6 source */
+  struct chaos_header *ch = (struct chaos_header *)chdata;
+
+  // Get it in host order
+  ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
+
+  // Expected length
+  int xlen = (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE);
+  if ((xlen % 2) == 1)
+    xlen++;			/* alignment */
+
+  // check Chaos trailer (incl checksum)
+  if (chlen < xlen) {
+    fprintf(stderr,"CHIP: short packet received from %#o, no room for hw trailer: chaos len %d (nbytes %d) (expected %d)\n",
+	    ch_srcaddr(ch),
+	    chlen, ch_nbytes(ch), xlen);
+    if (debug) ch_dumpkt(chdata, chlen);
+    PTLOCK(linktab_lock);
+    linktab[srcaddr>>8].pkt_badlen++;
+    PTUNLOCK(linktab_lock);
+    return;
+  } else if (chlen > xlen) {
+    if (debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %d\n", chlen, xlen);
+  }
+
+  if (debug) fprintf(stderr,"CHIP: sockaddr len %d, family %d\n", salen, ((struct sockaddr *)&sa)->sa_family);
+  // Process trailer info
+  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
+  srcaddr = ntohs(tr->ch_hw_srcaddr);
+  int cks = ch_checksum(chdata, chlen);
+  if (cks != 0) {
+    char ipaddr[INET6_ADDRSTRLEN];
+    if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr,
+		  ipaddr, sizeof(ipaddr)) == NULL)
+      strerror_r(errno,ipaddr,sizeof(ipaddr));
+    fprintf(stderr,"CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ipaddr);
+    PTLOCK(linktab_lock);
+    linktab[srcaddr>>8].pkt_crcerr++;
+    PTUNLOCK(linktab_lock);
+    return;
+  }
+
+  // look up source in CHIP table, verify it exists, maybe add
+  int i, found = 0;
+  sa_family_t ipfam = sa->sa_family;
+  for (i = 0; (i < chipdest_len) && !found; i++) {
+    if ((chipdest[i].chip_sa.chip_saddr.sa_family == ipfam)
+	&& (((ipfam == AF_INET) &&
+	     (memcmp(&sin->sin_addr, &chipdest[i].chip_sa.chip_sin.sin_addr, sizeof(struct in_addr)) == 0))
+	    ||
+	    ((ipfam == AF_INET6) &&
+	     (memcmp(&sin6->sin6_addr, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(struct in6_addr)) == 0)))) {
+      found = 1;
+      break;
+    }
+  }
+
+  if (verbose || debug || !found) {
+    char ipaddr[INET6_ADDRSTRLEN];
+    if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr,
+		  ipaddr, sizeof(ipaddr)) == NULL)
+      strerror_r(errno,ipaddr,sizeof(ipaddr));
+    if (verbose || debug) fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
+				  ipaddr, srcaddr, chlen, ch_srcaddr(ch));
+    if (debug) ch_dumpkt(chdata, chlen);
+    if (!found) {
+      if (!chip_dynamic) {
+	fprintf(stderr,"%%%% CHIP pkt received from unknown source %s - dropping it\n", ipaddr);
+	return;
+      } else {
+	if (verbose || debug) fprintf(stderr,"%%%% CHIP adding dest %#o at %s\n", srcaddr, ipaddr);
+	add_chip_dest(srcaddr, sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr);
+      }
+    }
+  }
+
+  // Find source route, and dispatch the packet
+  struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
+  forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+		    srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
+		    srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
+		    chdata, chlen, LINK_IP);
+}
+
 void *
 chip_input(void *v)
 {
-  // @@@@ clean up in_addr vs sockaddr etc
-  int len, chlen;
-  u_short srcaddr;		/* chaos source */
-  struct in_addr ip_src;	/* ip source */
-  struct in6_addr ip6_src;	/* ipv6 source */
+  int len;
   struct sockaddr_in6 sa;	// #### sockaddr_in6 is larger than sockaddr_in and sockaddr
   socklen_t salen;
   fd_set rfd;
   int maxfd;
   u_char data[CH_PK_MAXLEN+sizeof(struct ip)+sizeof(struct ip6_hdr)];	 /* fuzz */
-  u_char *chdata;
   int sval;
-  int ipv;
-  struct chaos_header *ch;
   
   maxfd = 1+(ip_sock > ip6_sock ? ip_sock : ip6_sock);
   while (1) {
@@ -244,98 +328,7 @@ chip_input(void *v)
     }
     if (debug) fprintf(stderr,"CHIP: received %d bytes\n", len);
     if (len > 0) {
-      chdata = (u_char *)&data;
-      ch = (struct chaos_header *)chdata;
-      chlen = len;
-      // Get it in host order
-      ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
-
-      // Expected length
-      int xlen = (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE);
-      if ((xlen % 2) == 1)
-	xlen++;			/* alignment */
-
-      // check Chaos trailer (incl checksum)
-      if (chlen < xlen) {
-	fprintf(stderr,"CHIP: short packet received from %#o, no room for hw trailer: total %d, chaos %d (nbytes %d) (expected %d)\n",
-		ch_srcaddr(ch),
-		len, chlen, ch_nbytes(ch), xlen);
-	if (debug) ch_dumpkt(chdata, chlen);
-	PTLOCK(linktab_lock);
-	linktab[srcaddr>>8].pkt_badlen++;
-	PTUNLOCK(linktab_lock);
-	continue;
-      } else if (chlen > xlen) {
-	if (debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %d\n", chlen, xlen);
-      }
-
-      if (debug) fprintf(stderr,"CHIP: sockaddr len %d, family %d\n", salen, ((struct sockaddr *)&sa)->sa_family);
-      if (((struct sockaddr *)&sa)->sa_family == AF_INET) {
-	ipv = 4;
-	memcpy(&ip_src, &((struct sockaddr_in *)&sa)->sin_addr, sizeof(ip_src));
-      } else if (((struct sockaddr *)&sa)->sa_family == AF_INET6) {
-	ipv = 6;
-	memcpy(&ip6_src, &((struct sockaddr_in6 *)&sa)->sin6_addr, sizeof(ip6_src));
-      } else {
-	fprintf(stderr,"%%%% CHIP: unexpected protocol family %d\n", ((struct sockaddr *)&sa)->sa_family);
-	exit(1);
-      }
-      // Process trailer info
-      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
-      srcaddr = ntohs(tr->ch_hw_srcaddr);
-      int cks = ch_checksum(chdata, chlen);
-      if (cks != 0) {
-	char ipaddr[INET6_ADDRSTRLEN];
-	if (inet_ntop(ipv == 4 ? AF_INET : AF_INET6,
-		      ipv == 4 ? (void *)&ip_src : (void *)&ip6_src,
-		      ipaddr, sizeof(ipaddr)) == NULL)
-	  strerror_r(errno,ipaddr,sizeof(ipaddr));
-	fprintf(stderr,"CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ipaddr);
-	PTLOCK(linktab_lock);
-	linktab[srcaddr>>8].pkt_crcerr++;
-	PTUNLOCK(linktab_lock);
-	continue;
-      }
-
-      // look up source in CHIP table, verify it exists, maybe add
-      int i, found = 0;
-      sa_family_t ipfam = (ipv == 4 ? AF_INET : AF_INET6);
-      for (i = 0; (i < chipdest_len) && !found; i++) {
-	if ((chipdest[i].chip_sa.chip_saddr.sa_family == ipfam)
-	    && (((ipfam == AF_INET) && (memcmp(&ip_src, &chipdest[i].chip_sa.chip_sin.sin_addr, sizeof(ip_src)) == 0))
-		||
-		((ipfam == AF_INET6) && (memcmp(&ip6_src, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(ip6_src)) == 0)))) {
-	  found = 1;
-	  break;
-	}
-      }
-
-      if (verbose || debug || !found) {
-	char ipaddr[INET6_ADDRSTRLEN];
-	if (inet_ntop(ipv == 4 ? AF_INET : AF_INET6,
-		      ipv == 4 ? (void *)&ip_src : (void *)&ip6_src,
-		      ipaddr, sizeof(ipaddr)) == NULL)
-	  strerror_r(errno,ipaddr,sizeof(ipaddr));
-	if (verbose || debug) fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
-				      ipaddr, srcaddr, chlen, ch_srcaddr(ch));
-	if (debug) ch_dumpkt(chdata, chlen);
-	if (!found) {
-	  if (!chip_dynamic) {
-	    fprintf(stderr,"%%%% CHIP pkt received from unknown source %s - dropping it\n", ipaddr);
-	    return 0;
-	  } else {
-	    if (verbose || debug) fprintf(stderr,"%%%% CHIP adding dest %#o at %s\n", srcaddr, ipaddr);
-	    add_chip_dest(srcaddr, (ipv == 4 ? AF_INET : AF_INET6), (ipv == 4 ? (u_char *)&ip_src : (u_char *)&ip6_src));
-	  }
-	}
-      }
-
-      // Find source route, and dispatch the packet
-      struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-      forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
-			srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
-			chdata, chlen, LINK_IP);
+      chudp_input_handle_data((u_char *)&data, len, (struct sockaddr *)&sa, salen);
     }
   }
 }
@@ -390,18 +383,11 @@ chip_send_pkt(struct sockaddr *sout, u_char *pkt, int pklen)
   }
 }
 
-// @@@@ break this up in parts
-void
-forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
+int
+try_forward_individual_dest(struct chroute *rt, u_short dchad, u_char *data, int dlen)
 {
-  int i, found = 0;
-
-  // Swap back to network order
-  htons_buf((u_short *)data, (u_short *)data, dlen);
-
-  // look up in chipdest, send using libnet
-  PTLOCK(chipdest_lock);
-  for (i = 0; (i < chipdest_len) && !found; i++) {
+  int i;
+  for (i = 0; i < chipdest_len; i++) {
     if ( // maybe check broadcast at some point
 	/* direct link */
 	(chipdest[i].chip_addr == dchad) 
@@ -413,73 +399,102 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
 	(rt->rt_braddr == 0 && (chipdest[i].chip_addr == rt->rt_dest))) {
       if (verbose || debug) fprintf(stderr,"Forward CHIP to dest %#o over direct link %#o (%s)\n",
 				    dchad, chipdest[i].chip_addr, chipdest[i].chip_name);
-      found = 1;
       chip_send_pkt(&chipdest[i].chip_sa.chip_saddr, data, dlen);
+      // success
+      return 1;
     }
   }
-  if (!found) {
-    // check for subnet match and fill in IP subnet addr
-    // IPv4: If chipdest has subnet addr (zero host byte) matching dchad, copy host byte of dchad to last octet of chip_sa
-    // IPv6: same (and still _last_ octet).
-    for (i = 0; (i < chipdest_len) && !found; i++) {
-      if (
-	  /* dest is a subnet, and it matches our dest */
-	  // (chip_addr is just the subnet, cf parse_link_config)
-	  (((chipdest[i].chip_addr & 0xff00) == 0) && ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8))
-	  ||
-	  /* dest is broadcast */
-	  (((rt->rt_dest & 0xff) == 0) &&  /* dest is broadcast */
-	   ((chipdest[i].chip_addr & 0xff00) == 0) &&  /* this is a subnet dest */
-	   ((chipdest[i].chip_addr << 8) == (rt->rt_dest & 0xff00)))  /* and it matches */
-	  ) {
-	if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET) {
-	  struct sockaddr_in dip;
-	  memcpy(&dip, &chipdest[i].chip_sa.chip_sin, sizeof(dip));
-	  if (dchad == 0)	/* broadcast */
-	    dip.sin_addr.s_addr |= htonl(0xff);
-	  else if ((dchad & 0xff) == 0xff) {
-	    if (debug) {
-	      fprintf(stderr,"CHIP: not forwarding to Chaos %#o (%#x) because it maps to the broadcast address\n",
-		      dchad, dchad);
-	    }
-	    break;
-	  } else
-	    dip.sin_addr.s_addr |= htonl(dchad & 0xff);
-	  if (debug) fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IP %s\n",
-			     chipdest[i].chip_addr, dchad, inet_ntoa(dip.sin_addr));
-	  chip_send_pkt((struct sockaddr *)&dip, data, dlen);
-	} else if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET6) {
-	  if (dchad == 0) {
-	    // @@@@ fixme
-	    if (verbose || debug) fprintf(stderr,"%%%% CHIP: broadcast to IPv6 not implemented yet\n");
-	    break;
-	  }
-	  struct sockaddr_in6 dip;
-	  memcpy(&dip, &chipdest[i].chip_sa.chip_sin6, sizeof(dip));
-	  dip.sin6_addr.s6_addr[15] = (dchad & 0xff);
+  // no dest found
+  return 0;
+}
+
+int
+try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dlen)
+{
+  int i;
+  // check for subnet match and fill in IP subnet addr
+  // IPv4: If chipdest has subnet addr (zero host byte) matching dchad, copy host byte of dchad to last octet of chip_sa
+  // IPv6: same (and still _last_ octet).
+  for (i = 0; i < chipdest_len; i++) {
+    if (
+	/* dest is a subnet, and it matches our dest */
+	// (chip_addr is just the subnet, cf parse_link_config)
+	(((chipdest[i].chip_addr & 0xff00) == 0) &&
+	 ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8))
+	||
+	/* dest is broadcast */
+	(((rt->rt_dest & 0xff) == 0) &&  /* dest is broadcast */
+	 ((chipdest[i].chip_addr & 0xff00) == 0) &&  /* this is a subnet dest */
+	 ((chipdest[i].chip_addr << 8) == (rt->rt_dest & 0xff00)))  /* and it matches */
+	) {
+      if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET) {
+	struct sockaddr_in dip;
+	memcpy(&dip, &chipdest[i].chip_sa.chip_sin, sizeof(dip));
+	if (dchad == 0)	/* broadcast */
+	  dip.sin_addr.s_addr |= htonl(0xff);
+	else if ((dchad & 0xff) == 0xff) {
 	  if (debug) {
-	    char ipaddr[INET6_ADDRSTRLEN];
-	    if (inet_ntop(AF_INET6,
-			  &dip.sin6_addr,
-			  ipaddr, sizeof(ipaddr)) == NULL)
-	      strerror_r(errno,ipaddr,sizeof(ipaddr));
-	    fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IPv6 %s\n",
-		    chipdest[i].chip_addr, dchad, ipaddr);
+	    fprintf(stderr,"CHIP: not forwarding to Chaos %#o (%#x) because it maps to the broadcast address\n",
+		    dchad, dchad);
 	  }
-	  chip_send_pkt((struct sockaddr *)&dip, data, dlen);
-	} else {
-	  fprintf(stderr,"%%%% CHIP: unexpected address family %d\n",chipdest[i].chip_sa.chip_saddr.sa_family);
-	  break;
+	  // found a route, although couldn't use it
+	  return 1;
+	} else
+	  dip.sin_addr.s_addr |= htonl(dchad & 0xff);
+	if (debug) fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IP %s\n",
+			   chipdest[i].chip_addr, dchad, inet_ntoa(dip.sin_addr));
+	chip_send_pkt((struct sockaddr *)&dip, data, dlen);
+      } else if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET6) {
+	if (dchad == 0) {
+	  // @@@@ fixme
+	  if (verbose || debug) fprintf(stderr,"%%%% CHIP: broadcast to IPv6 not implemented yet\n");
+	  // found a route, although couldn't use it
+	  return 1;
 	}
-	if (verbose || debug) fprintf(stderr,"Forward CHIP to dest %#o over subnet link %#o (%s)\n",
-				      dchad, chipdest[i].chip_addr, chipdest[i].chip_name);
-	found = 1;
+	struct sockaddr_in6 dip;
+	memcpy(&dip, &chipdest[i].chip_sa.chip_sin6, sizeof(dip));
+	dip.sin6_addr.s6_addr[15] = (dchad & 0xff);
+	if (debug) {
+	  char ipaddr[INET6_ADDRSTRLEN];
+	  if (inet_ntop(AF_INET6,
+			&dip.sin6_addr,
+			ipaddr, sizeof(ipaddr)) == NULL)
+	    strerror_r(errno,ipaddr,sizeof(ipaddr));
+	  fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IPv6 %s\n",
+		  chipdest[i].chip_addr, dchad, ipaddr);
+	}
+	chip_send_pkt((struct sockaddr *)&dip, data, dlen);
+      } else {
+	fprintf(stderr,"%%%% CHIP: dest %d unexpected address family %d\n",
+		i, chipdest[i].chip_sa.chip_saddr.sa_family);
+	// found a route, although broken
+	return 1;
       }
+      if (verbose || debug) fprintf(stderr,"Forwarded CHIP to dest %#o over subnet link %#o (%s)\n",
+				    dchad, chipdest[i].chip_addr, chipdest[i].chip_name);
+      // success
+      return 1;
+    }
+  }
+  // no dest found
+  return 0;
+}
+
+void
+forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
+{
+  int i, found = 0;
+
+  // Swap back to network order
+  htons_buf((u_short *)data, (u_short *)data, dlen);
+
+  // look up in chipdest, send using libnet
+  PTLOCK(chipdest_lock);
+  if (!try_forward_individual_dest(rt, dchad, data, dlen)) {
+    if (!try_forward_subnet_dest(rt, dchad, data, dlen)) {
+      fprintf(stderr,"Can't find CHIP link to %#o via %#o/%#o\n",
+	      dchad, rt->rt_dest, rt->rt_braddr);
     }
   }
   PTUNLOCK(chipdest_lock);
-  if (!found && (verbose || debug)) {
-    fprintf(stderr,"Can't find CHIP link to %#o via %#o/%#o\n",
-	    dchad, rt->rt_dest, rt->rt_braddr);
-  }
 }
