@@ -24,6 +24,11 @@
 #define CHAOS_TLS 1
 #endif
 
+#ifndef CHAOS_IP
+// enable the Chaos-over-IP code
+#define CHAOS_IP 1
+#endif
+
 #ifndef CHAOS_DNS
 // enable the DNS code (forwarder and internal host/addr parser)
 #define CHAOS_DNS 1
@@ -96,6 +101,9 @@ enum { LINK_NOLINK=0,
        LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
 #if CHAOS_TLS
        LINK_TLS,		/* Chaos-over-TLS */
+#endif
+#if CHAOS_IP
+       LINK_IP,			/* Chaos-over-IP */
 #endif
        LINK_INDIRECT,		/* look up the bridge address */
 };
@@ -189,7 +197,6 @@ struct tls_dest {
 // timeout in select (and if no open connections)
 #define TLS_INPUT_RETRY_TIMEOUT 1
 
-
 // ================ Ether ================
 // ARP stuff
 #ifndef ETHERTYPE_CHAOS
@@ -213,6 +220,34 @@ struct charp_ent {
   u_char charp_eaddr[ETHER_ADDR_LEN];
   u_short charp_chaddr;
   time_t charp_age;
+};
+
+// ================ IP ================
+#ifndef IPPROTO_CHAOS
+// See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+#  define IPPROTO_CHAOS 16	/* Chaos */
+#endif
+#ifndef ETHER_MTU
+#  define ETHER_MTU 1500	/* Max # data bytes in ethernet pkt */
+#endif
+// #ifndef IP_HEADER_SIZE
+// // #define IP_HEADER_SIZE (sizeof(struct ip))
+// #  define IP_HEADER_SIZE 20
+// #endif
+#ifndef ETHER_HEADER_SIZE
+#  define ETHER_HEADER_SIZE 14 /* # bytes in header (2 addrs plus type) */
+#endif
+
+#define CHIPDEST_MAX 64
+#define CHIPDEST_NAME_LEN 128
+struct chipdest {
+  union {
+    struct sockaddr chip_saddr;
+    struct sockaddr_in chip_sin;	/* IPv4 addr */
+    struct sockaddr_in6 chip_sin6;
+  } chip_sa;
+  u_short chip_addr;		/* chaos address or subnet */
+  char chip_name[CHIPDEST_NAME_LEN];
 };
 
 // ================ data declarations ================
@@ -254,6 +289,11 @@ extern u_short mychaddr[];
 // @@@@ move to respective module
 extern int udpsock, udp6sock;
 
+#if CHAOS_IP
+extern int chipdest_len;
+extern struct chipdest chipdest[CHIPDEST_MAX];
+#endif
+
 // ================ function declarations ================
 
 void send_chaos_pkt(u_char *pkt, int len);
@@ -264,7 +304,13 @@ char *rt_typename(u_char type);
 void htons_buf(u_short *ibuf, u_short *obuf, int len);
 void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
 void ch_dumpkt(u_char *ucp, int cnt);
+void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);
+char *ip46_ntoa(struct sockaddr *sa, char *buf, int buflen);
+
+#if CHAOS_IP
+int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
+#endif
 
 unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
 void ch_11_puts(unsigned char *out, unsigned char *in);

@@ -5,6 +5,7 @@ This program is a bridge between Chaosnet implementations. It supports
 - Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator, see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see http://www.unlambda.com/cadr/) 
 - Chaos-over-TLS (see below)
+- Chaos-over-IP (using IP protocol 16, cf https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml)
 
 ## See also
 - [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
@@ -20,16 +21,19 @@ You can configure the bridge to connect subnets and/or individual hosts.
 
 Use cases could be
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
-  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS
+  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS or -over-IP
   link between them). 
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
-  with others using usim (use a Chaos-over-UDP or -over-TLS link between them).
+  with others using usim (use a Chaos-over-UDP or -over-TLS or
+  -over-IP link between them). 
+- connecting remote Chaosnet-over-IP networks, e.g. in case you run a
+  [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
 - connecting ITSes running on klh10 - rather than configuring your
   klh10 to handle all other chudp hosts and iptables to forward chudp
   pkts over the tun interface, keep routing in the bridge
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
-- and interconnecting these three, of course!
+- and interconnecting these, of course!
 
 For more info on the Global Chaosnet, see https://aosnet.ch.
 
@@ -38,14 +42,14 @@ For more info on the Global Chaosnet, see https://aosnet.ch.
 ### Chaos-over-UDP
 
 Chaosnet packets are encapsulated in UDP packets, using a four-byte
-header (version=1, function=1, 0, 0), and with a ["hardware
-trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols)
+header (version=1, function=1, 0, 0), and with a "hardware
+trailer" (cf [Section 2.5 of MIT AI Memo 628](https://lm-3.github.io/amber.html#Hardware-Protocols))
 containing the destination and source addresses and an [Internet
 Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
 ["little-endian"
 order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
 i.e. with the least significant byte of a 16-bit word before the most
-significant byte. (I'm really sorry about this, and might invent
+significant byte. (I'm really sorry about this, and might develop
 version 2 of the protocol with the only change being big-endian byte
 order.)
 
@@ -74,7 +78,7 @@ the bridge) since the named socket of the server is constant.
 
 ### Chaos-over-Ethernet
 
-Chaosnet packets are sent using Ethernet protocol
+Chaosnet packets are sent using the standard Ethernet protocol
 [0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
 No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
 628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the
@@ -86,6 +90,24 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 - Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
 
 Currently only one Ethernet interface is supported.
+
+### Chaos-over-IP
+
+Chaosnet packets are sent in IP/IPv6 packets, using the standard
+[IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
+Packets are sent in "big-endian" order, with a ["hardware
+trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
+
+Chaosnet addresses are mapped to IP/IPv6 addresses either
+individually, or for a whole subnet (see
+[configuration](CONFIGURATION.md)).
+
+Chaosnet addresses where the host byte is 0xFF cannot be used with
+subnet mappings on IPv4, since they map to the broadcast address. 
+Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
+Yet Implemented.
+
+Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` (on Mac, using `port`).
 
 ### Chaos-over-TLS
 
@@ -108,7 +130,8 @@ TLS is asymmetric, in the sense that one end is the server which the
 clients connect to. The implementation is not yet tested for cbridges
 which have both roles, but might work. :-) 
 (My preliminary impression is that it is faster than CHUDP!)
-Needs libssl-dev to compile.
+
+Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`.
 
 ## Routing basics
 
@@ -132,11 +155,7 @@ macOS, using ctrl-T in bash), that signal does the same.
 
 - [ ] validate configuration (at least warn about crazy things, subnet-specific address on each link, multiple links/routes to same dest))
 - [ ] improve logging (avoid mixing output from different threads, improve granularity e.g. to only log "significant" events, "levels" and "facilities" a'la LambdaDelta)
-- [ ] rewrite BPF part (Chaos-over-Ethernet) using libpcap (for portability, simplicity, and perhaps Chaos-over-IP)
-- [ ] add support for Chaos-over-IP (encapsulating using [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
-  used by the [pdp10x FPGA implementation](http://www.fpgaretrocomputing.org/pdp10x/)). See also  "[Cisco's
-  implementation of Chaosnet](https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm)", with the same type of mapping
-  (But the IP address mapping is crazy^W very limited, and if you just want encapsulation, use UDP? Yes, but interoperability...)
+- [ ] rewrite BPF part (Chaos-over-Ethernet) using libpcap (for portability and simplicity)
 - [ ] invent version 2 of CHUDP to send packets in network order, like all the others, and thus avoid swapping/copying data all over (except for version 1 of CHUDP)
 - [ ] detect unexpected traffic (e.g. traffic from a known subnet coming on a different link)
 - [ ] make Open Genera use tap instead of tun, to allow Chaosnet (quite different project, but for Chaos interoperability)

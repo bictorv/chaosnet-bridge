@@ -16,6 +16,44 @@
 
 #include "cbridge.h"
 
+unsigned int
+ch_checksum(const unsigned char *addr, int count)
+{
+  /* RFC1071 */
+  /* Compute Internet Checksum for "count" bytes
+   *         beginning at location "addr".
+   */
+  register long sum = 0;
+
+  while( count > 1 )  {
+    /*  This is the inner loop */
+    sum += *(addr)<<8 | *(addr+1);
+    addr += 2;
+    count -= 2;
+  }
+
+  /*  Add left-over byte, if any */
+  if( count > 0 )
+    sum += * (unsigned char *) addr;
+
+  /*  Fold 32-bit sum to 16 bits */
+  while (sum>>16)
+    sum = (sum & 0xffff) + (sum >> 16);
+
+  return (~sum) & 0xffff;
+}
+
+char *
+ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
+{
+  if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ?
+		(void *)&((struct sockaddr_in *)sa)->sin_addr :
+		(void *)&((struct sockaddr_in6 *)sa)->sin6_addr,
+		buf, buflen) == NULL)
+    strerror_r(errno,buf,buflen);
+  return buf;
+}
+
 // **** Debug stuff
 char *
 ch_opcode_name(int op)
