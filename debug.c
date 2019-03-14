@@ -43,6 +43,17 @@ ch_checksum(const unsigned char *addr, int count)
   return (~sum) & 0xffff;
 }
 
+char *
+ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
+{
+  if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ?
+		(void *)&((struct sockaddr_in *)sa)->sin_addr :
+		(void *)&((struct sockaddr_in6 *)sa)->sin6_addr,
+		buf, buflen) == NULL)
+    strerror_r(errno,buf,buflen);
+  return buf;
+}
+
 // **** Debug stuff
 char *
 ch_opcode_name(int op)

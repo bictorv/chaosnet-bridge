@@ -306,6 +306,11 @@ void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
 void ch_dumpkt(u_char *ucp, int cnt);
 void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);
+char *ip46_ntoa(struct sockaddr *sa, char *buf, int buflen);
+
+#if CHAOS_IP
+int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
+#endif
 
 unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
 void ch_11_puts(unsigned char *out, unsigned char *in);

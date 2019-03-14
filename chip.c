@@ -18,13 +18,14 @@
 // See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 
 // TODO:
-// - implement IPv6 broadcast - "more advanced" than IPv4
+// - implement IPv6 multicast (instead of broadcast)
+// - for IPv6, consider how to do subnet mapping properly/in a modern way
 
 #include "cbridge.h"
 
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
-
+#include <ifaddrs.h>
 
 int chip_dynamic = 0;
 
@@ -41,15 +42,8 @@ print_chipdest_config()
   char ip[INET6_ADDRSTRLEN];
   printf("CHIP config: %d routes\n", chipdest_len);
   for (i = 0; i < chipdest_len; i++) {
-    if (inet_ntop(chipdest[i].chip_sa.chip_saddr.sa_family,
-		  (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET
-		   ? (void *)&chipdest[i].chip_sa.chip_sin.sin_addr
-		   : (void *)&chipdest[i].chip_sa.chip_sin6.sin6_addr), ip, sizeof(ip))
-	== NULL)
-      strerror_r(errno, ip, sizeof(ip));
-    //    char *ip = inet_ntoa(chipdest[i].chip_sa.chip_sin.sin_addr);
     printf(" dest %#o, host %s (%s)\n",
-	   chipdest[i].chip_addr, ip,
+	   chipdest[i].chip_addr, ip46_ntoa(&chipdest[i].chip_sa.chip_saddr, ip, sizeof(ip)),
 	   chipdest[i].chip_name);
   }
 }
@@ -82,6 +76,107 @@ void
 print_config_chip()
 {
   printf("CHIP: dynamic %s\n", chip_dynamic ? "on" : "off");
+}
+
+// Given an address (typically with 0 last octet), search for a matching address on our interfaces, and return its last octet
+// Used for checking/defaulting "myaddr" parameter of config entries.
+// If no matching interface is found, 0 is returned.
+static int
+last_addr_octet_on_net(struct sockaddr *sa)
+{
+  struct sockaddr_in *mysin = (struct sockaddr_in *)sa;
+  struct sockaddr_in6 *mysin6 = (struct sockaddr_in6 *)sa;
+  struct ifaddrs *ifp, *ifp0;
+  int octet = 0;
+  char ipaddr[INET6_ADDRSTRLEN];
+
+  if (getifaddrs(&ifp0) < 0) {
+    perror("getifaddrs");
+    return 0;
+  }
+  if (debug) fprintf(stderr,"Looking for interface matching subnet address %s\n",
+		     ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
+  ifp = ifp0;
+  while (ifp && (octet == 0)) {
+    // if (debug) fprintf(stderr,"Checking interface %s, address %s\n", ifp->ifa_name, ip46_ntoa(ifp->ifa_addr, ipaddr, sizeof(ipaddr)));
+    if ((sa->sa_family == AF_INET) && (ifp->ifa_addr->sa_family == AF_INET)) {
+      struct sockaddr_in *sin = (struct sockaddr_in *)ifp->ifa_addr;
+      u_int mask = ntohl(((struct sockaddr_in *)(ifp->ifa_netmask))->sin_addr.s_addr);
+      if ((ntohl(mysin->sin_addr.s_addr) & mask) == (ntohl(sin->sin_addr.s_addr) & mask)) {
+	if (debug)
+	  fprintf(stderr,"Found matching IP interface %s with address %s\n",
+		  ifp->ifa_name, ip46_ntoa(ifp->ifa_addr, ipaddr, sizeof(ipaddr)));
+	octet = ntohl(sin->sin_addr.s_addr) & 0xff;
+      }
+    } else if ((sa->sa_family == AF_INET6) && (ifp->ifa_addr->sa_family == AF_INET6)) {
+      struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifp->ifa_addr;
+      // @@@@ should use ifa_netmask
+      if (memcmp(&mysin6->sin6_addr, &sin6->sin6_addr, sizeof(struct in6_addr)-1) == 0) {
+	if (debug)
+	  fprintf(stderr,"Found matching IPv6 interface %s with address %s\n",
+		  ifp->ifa_name, ip46_ntoa(ifp->ifa_addr, ipaddr, sizeof(ipaddr)));
+	octet = sin6->sin6_addr.s6_addr[15];
+      }
+    }
+    ifp = ifp->ifa_next;
+  }
+  freeifaddrs(ifp0);
+  return octet;
+}
+
+int
+validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr)
+{
+  if (subnetp) {
+    // check that we have an IP address on that net
+    char ipaddr[INET6_ADDRSTRLEN];
+    int octet = last_addr_octet_on_net(&cd->chip_sa.chip_saddr);
+    if (octet == 0) {
+      fprintf(stderr,"CHIP subnet mapping with no matching local IP address: %s\n",
+	      ip46_ntoa(&cd->chip_sa.chip_saddr, ipaddr, sizeof(ipaddr)));
+      // fail validation
+      return -1;
+    } 
+    // validate myaddr parameter and fix it
+    if ((rt->rt_myaddr != ((cd->chip_addr << 8) | octet))) {
+      // needs fixing
+      if (rt->rt_myaddr != 0) // only complain if it has been explicitly set
+	fprintf(stderr,"CHIP subnet mapping for subnet %o has bad \"myaddr\" parameter %o, fixing it (should be %o)\n",
+		cd->chip_addr, rt->rt_myaddr,
+		(cd->chip_addr << 8) | octet);
+      else
+	fprintf(stderr,"CHIP subnet mapping for subnet %o missing \"myaddr\", should be %o (fixing it)\n",
+		cd->chip_addr, (cd->chip_addr << 8) | octet);
+      // fix this too
+      if ((nchaddr > 0) && (mychaddr[nchaddr-1] == rt->rt_myaddr))
+	mychaddr[nchaddr-1] = (cd->chip_addr << 8) | octet;
+      rt->rt_myaddr = (cd->chip_addr << 8) | octet;
+    }
+
+    // check that the IP address is not complete
+    if (cd->chip_sa.chip_sin.sin_family == AF_INET) {
+      if ((ntohl(cd->chip_sa.chip_sin.sin_addr.s_addr) & 0xff) != 0) {
+	fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IP with last octet 0, fixing it for you\n",
+		cd->chip_addr, inet_ntoa(cd->chip_sa.chip_sin.sin_addr));
+	cd->chip_sa.chip_sin.sin_addr.s_addr &= htonl(0xffffff00);
+	// also fix this, for reparsing.
+	sprintf(cd->chip_name, "%s",
+		inet_ntoa(cd->chip_sa.chip_sin.sin_addr));
+      }
+    } else if (cd->chip_sa.chip_sin.sin_family == AF_INET6) {
+      fprintf(stderr,"Warning: subnet mapping for IPv6 will not handle RUT broadcasts\n");
+      if (cd->chip_sa.chip_sin6.sin6_addr.s6_addr[15] != 0) {
+	char ip6[INET6_ADDRSTRLEN];
+	if (inet_ntop(AF_INET6, &cd->chip_sa.chip_sin6.sin6_addr, ip6, sizeof(ip6)) == NULL)
+	  strerror_r(errno, ip6, sizeof(ip6));
+	fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IPv6 with last octet 0, fixing it for you\n",
+		cd->chip_addr, ip6);
+	cd->chip_sa.chip_sin6.sin6_addr.s6_addr[15] = 0;
+      }
+    }
+  }
+  // all ok
+  return 0;
 }
 
 // @@@@ copy-paste of reparse_chudp_names, modularize?
@@ -131,16 +226,91 @@ void reparse_chip_names()
 void
 init_chaos_ip()
 {
+  int one = 1;
   if ((ip_sock = socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
     perror("socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)");
     exit(1);
-  } else if (debug)
-    fprintf(stderr,"CHIP: IPv4 socket is %d\n", ip_sock);
+  } 
+  // need to be able to use broadcast, for subnet mappings
+  if (setsockopt(ip_sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)) < 0)
+    perror("setsockopt(ipv4, SO_BROADCAST)");
   if ((ip6_sock = socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
     perror("socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)");
     exit(1);
-  } else if (debug)
-    fprintf(stderr,"CHIP: IPv6 socket is %d\n", ip6_sock);
+  } 
+}
+
+static int
+find_in_chipdest(u_short srcaddr, struct sockaddr *sa)
+{
+  char ipaddr[INET6_ADDRSTRLEN];
+  int i;
+  struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+  struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
+  sa_family_t ipfam = sa->sa_family;
+
+  for (i = 0; i < chipdest_len; i++) {
+    if (chipdest[i].chip_addr == srcaddr) {
+      // found Chaos address match: does IP match?
+      if ((chipdest[i].chip_sa.chip_saddr.sa_family == ipfam)
+	  && (((ipfam == AF_INET) &&
+	       (memcmp(&sin->sin_addr, &chipdest[i].chip_sa.chip_sin.sin_addr, sizeof(struct in_addr)) == 0))
+	      ||
+	      ((ipfam == AF_INET6) &&
+	       (memcmp(&sin6->sin6_addr, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(struct in6_addr)) == 0)))) {
+	// found it
+	return 1;
+      } else {
+	// spoofed packet?
+	if (1 || verbose || debug) {
+	  fprintf(stderr,"%%%% CHIP: possible Chaos address %#o spoofing in pkt received from %s\n",
+		  srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
+	  // @@@@ drop it?
+	  return 0;
+	}
+	break;
+      }
+    } else if (((chipdest[i].chip_addr & 0xff00) == 0) &&
+	       // (chip_addr is just the subnet, cf parse_link_config)
+	       ((chipdest[i].chip_addr & 0xff) == (srcaddr & 0xff00)>>8)) {
+      // found Chaos subnet match: does IP match?
+      // Check that the "hardware trailer" matches the IP header
+      // This needs only be the case for subnet-mapped addresses
+      if (((ipfam == AF_INET) &&
+	   ((ntohl(sin->sin_addr.s_addr) & 0xffffff00) == ntohl(chipdest[i].chip_sa.chip_sin.sin_addr.s_addr)))
+	  ||
+	  ((ipfam == AF_INET6) &&
+	   // check first 15 bytes
+	   (memcmp(&sin6->sin6_addr, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(struct in6_addr)-1) == 0))) {
+	// all-but-last octets match,
+	// now see if last octet also matches
+	if (((ipfam == AF_INET) &&
+	     ((ntohl(sin->sin_addr.s_addr) & 0xff) != (srcaddr & 0xff)))
+	    ||
+	    ((ipfam == AF_INET6) &&
+	     ((sin6->sin6_addr.s6_addr[15]) != (srcaddr & 0xff)))) {
+	  if (1 || debug || verbose) {
+	    fprintf(stderr,"%%%% CHIP subnet: Chaos trailer sender address %#o doesn't match sender IP %s\n",
+		    srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
+	    // @@@@ drop packet?
+	    return 0;
+	  }
+	}
+	return 1;
+      } else {
+	// spoofed packet?
+	if (1 || verbose || debug) {
+	  fprintf(stderr,"%%%% CHIP subnet %#o: possible Chaos address %#o spoofing in pkt received from %s\n",
+		  chipdest[i].chip_addr, srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
+	  // @@@@ drop it?
+	  return 0;
+	}
+	break;
+      }
+    }
+  }
+  // not found
+  return 0;
 }
 
 static void
@@ -162,7 +332,7 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
     PTUNLOCK(chipdest_lock);
 
     // see if there is a host route for this, otherwise add it
-    // @@@@ break this out to separate fn
+    // @@@@ break this out to separate fn, used also for CHUDP and TLS
     if (*rttbl_host_len < RTTBL_HOST_MAX) {
       int i, found = 0;
       for (i = 0; i < *rttbl_host_len; i++) {
@@ -196,14 +366,16 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
   }
 }
 
-void 
-chudp_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen) {
+static void 
+chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen)
+{
   u_short srcaddr;		/* chaos source */
   struct sockaddr_in *sin = (struct sockaddr_in *)sa;
   struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
   struct in_addr ip_src;	/* ip source */
   struct in6_addr ip6_src;	/* ipv6 source */
   struct chaos_header *ch = (struct chaos_header *)chdata;
+  char ipaddr[INET6_ADDRSTRLEN];
 
   // Get it in host order
   ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
@@ -215,10 +387,14 @@ chudp_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int sale
 
   // check Chaos trailer (incl checksum)
   if (chlen < xlen) {
-    fprintf(stderr,"CHIP: short packet received from %#o, no room for hw trailer: chaos len %d (nbytes %d) (expected %d)\n",
-	    ch_srcaddr(ch),
+    fprintf(stderr,"CHIP: short packet (%s) received from %#o (%s), no room for hw trailer: chaos len %d (nbytes %d) (expected %d)\n",
+	    ch_opcode_name(ch_opcode(ch)),
+	    ch_srcaddr(ch), ip46_ntoa(sa, ipaddr, sizeof(ipaddr)),
 	    chlen, ch_nbytes(ch), xlen);
-    if (debug) ch_dumpkt(chdata, chlen);
+    if (debug) {
+      dumppkt_raw(chdata, chlen);
+      ch_dumpkt(chdata, chlen);
+    }
     PTLOCK(linktab_lock);
     linktab[srcaddr>>8].pkt_badlen++;
     PTUNLOCK(linktab_lock);
@@ -233,46 +409,32 @@ chudp_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int sale
   srcaddr = ntohs(tr->ch_hw_srcaddr);
   int cks = ch_checksum(chdata, chlen);
   if (cks != 0) {
-    char ipaddr[INET6_ADDRSTRLEN];
-    if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr,
-		  ipaddr, sizeof(ipaddr)) == NULL)
-      strerror_r(errno,ipaddr,sizeof(ipaddr));
-    fprintf(stderr,"CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ipaddr);
+    fprintf(stderr,"CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
     PTLOCK(linktab_lock);
     linktab[srcaddr>>8].pkt_crcerr++;
     PTUNLOCK(linktab_lock);
     return;
   }
 
-  // look up source in CHIP table, verify it exists, maybe add
-  int i, found = 0;
-  sa_family_t ipfam = sa->sa_family;
-  for (i = 0; (i < chipdest_len) && !found; i++) {
-    if ((chipdest[i].chip_sa.chip_saddr.sa_family == ipfam)
-	&& (((ipfam == AF_INET) &&
-	     (memcmp(&sin->sin_addr, &chipdest[i].chip_sa.chip_sin.sin_addr, sizeof(struct in_addr)) == 0))
-	    ||
-	    ((ipfam == AF_INET6) &&
-	     (memcmp(&sin6->sin6_addr, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(struct in6_addr)) == 0)))) {
-      found = 1;
-      break;
-    }
+  if (is_mychaddr(srcaddr)) {
+    if (debug) fprintf(stderr,"CHIP: received pkt from myself, dropping it\n");
+    return;
   }
 
+  // look up source in CHIP table, verify it exists, maybe add
+  int found = find_in_chipdest(srcaddr, sa);
+
   if (verbose || debug || !found) {
-    char ipaddr[INET6_ADDRSTRLEN];
-    if (inet_ntop(sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr,
-		  ipaddr, sizeof(ipaddr)) == NULL)
-      strerror_r(errno,ipaddr,sizeof(ipaddr));
     if (verbose || debug) fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
-				  ipaddr, srcaddr, chlen, ch_srcaddr(ch));
+				  ip46_ntoa(sa, ipaddr, sizeof(ipaddr)), srcaddr, chlen, ch_srcaddr(ch));
     if (debug) ch_dumpkt(chdata, chlen);
     if (!found) {
       if (!chip_dynamic) {
-	fprintf(stderr,"%%%% CHIP pkt received from unknown source %s - dropping it\n", ipaddr);
+	fprintf(stderr,"%%%% CHIP pkt received from unknown source %s (Chaos hw %#o) - dropping it\n", ip46_ntoa(sa, ipaddr, sizeof(ipaddr)), srcaddr);
 	return;
       } else {
-	if (verbose || debug) fprintf(stderr,"%%%% CHIP adding dest %#o at %s\n", srcaddr, ipaddr);
+	if (verbose || debug)
+	  fprintf(stderr,"%%%% CHIP adding dest %#o at %s\n", srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
 	add_chip_dest(srcaddr, sa->sa_family, sa->sa_family == AF_INET ? (void *)&sin->sin_addr : (void *)&sin6->sin6_addr);
       }
     }
@@ -310,7 +472,52 @@ chip_input(void *v)
     else if (sval > 0) {
       if (FD_ISSET(ip_sock, &rfd)) {
 	if (debug) fprintf(stderr,"CHIP: receiving from IPv4 socket\n");
+#if 0
+	// #### when receiving a broadcast message, the IPv4 header is included, otherwise not.
 	len = recvfrom(ip_sock, &data, sizeof(data), 0, (struct sockaddr *) &sa, &salen);
+	if (debug) {
+	  fprintf(stderr,"CHIP: received %d bytes\n", len);
+	  dumppkt_raw(data, len);
+	}
+	// Heuristics (note: network order)
+	if ((data[0] == 0x45) &&  /* version + IHL */
+	    (data[9] == 16)) {	/* chaosnet */
+	  if (debug) fprintf(stderr,"CHIP: IP header detected, skipping it\n");
+	  len -= 20;
+	  memcpy(&data[0], &data[20], len);
+	}
+#else
+	u_char hdr[sizeof(struct ip)];  /* #### only works if no IP options */
+	struct msghdr msg;
+	struct iovec iov[2];
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_iov = (struct iovec *)&iov;
+	msg.msg_iovlen = 2;
+	msg.msg_name = &sa;
+	msg.msg_namelen = salen;
+	iov[0].iov_base = &hdr;
+	iov[0].iov_len = sizeof(hdr);
+	iov[1].iov_base = &data;
+	iov[1].iov_len = sizeof(data);
+	len = recvmsg(ip_sock, &msg, 0);
+	if (len > 0){
+	  if (debug) {
+	    fprintf(stderr,"CHIP: received %d bytes\n", len);
+	    fprintf(stderr,"CHIP: hdr %zu bytes\n",iov[0].iov_len);
+	    dumppkt_raw(hdr, iov[0].iov_len);
+	    fprintf(stderr,"CHIP: data %zu bytes\n", iov[1].iov_len);
+	    dumppkt_raw(data, len - iov[0].iov_len);
+	  }
+	  len -= iov[0].iov_len;
+	  // so check if there are header options
+	  // @@@@ could mess around and skip options...
+	  if (hdr[0] != 0x45) {	/* Expect IP version 4, IP header length 5 words */
+	    fprintf(stderr,"%%%% CHIP: bad V+IHL %#x for IP pkt from %s, dropping\n",
+		    hdr[0], inet_ntoa(((struct sockaddr_in *)&sa)->sin_addr));
+	    len = 0;
+	  }
+	}
+#endif
       } else if (FD_ISSET(ip6_sock, &rfd)) {
 	if (debug) fprintf(stderr,"CHIP: receiving from IPv6 socket\n");
 	len = recvfrom(ip6_sock, &data, sizeof(data), 0, (struct sockaddr *) &sa, &salen);
@@ -328,7 +535,7 @@ chip_input(void *v)
     }
     if (debug) fprintf(stderr,"CHIP: received %d bytes\n", len);
     if (len > 0) {
-      chudp_input_handle_data((u_char *)&data, len, (struct sockaddr *)&sa, salen);
+      chip_input_handle_data((u_char *)&data, len, (struct sockaddr *)&sa, salen);
     }
   }
 }
@@ -356,9 +563,7 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
 
   if (debug) {
     char ip6[INET6_ADDRSTRLEN];
-    if (inet_ntop(AF_INET6, &sout->sin6_addr, ip6, sizeof(ip6)) == NULL)
-      strerror_r(errno, ip6, sizeof(ip6));
-    fprintf(stderr,"CHIP: About to send IPv6 pkt to %s\n", ip6);
+    fprintf(stderr,"CHIP: About to send IPv6 pkt to %s\n", ip46_ntoa((struct sockaddr *)sout, ip6, sizeof(ip6)));
     dumppkt_raw(pkt, pklen);
   }
   c = sendto(ip6_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in6));
@@ -371,6 +576,13 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
 static void 
 chip_send_pkt(struct sockaddr *sout, u_char *pkt, int pklen)
 {
+  if (debug) {
+    fprintf(stderr,"CHIP: Sending Chaos pkt len %d\n", pklen);
+    ch_dumpkt(pkt, pklen);
+  }
+  // Swap back to network order
+  htons_buf((u_short *)pkt, (u_short *)pkt, pklen);
+
   switch (sout->sa_family) {
   case AF_INET:
     chip_send_pkt_ipv4((struct sockaddr_in *)sout, pkt, pklen);
@@ -383,7 +595,7 @@ chip_send_pkt(struct sockaddr *sout, u_char *pkt, int pklen)
   }
 }
 
-int
+static int
 try_forward_individual_dest(struct chroute *rt, u_short dchad, u_char *data, int dlen)
 {
   int i;
@@ -408,7 +620,7 @@ try_forward_individual_dest(struct chroute *rt, u_short dchad, u_char *data, int
   return 0;
 }
 
-int
+static int
 try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dlen)
 {
   int i;
@@ -417,13 +629,15 @@ try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dle
   // IPv6: same (and still _last_ octet).
   for (i = 0; i < chipdest_len; i++) {
     if (
-	/* dest is a subnet, and it matches our dest */
+	/* CHIP dest is a subnet, and it matches our dest */
 	// (chip_addr is just the subnet, cf parse_link_config)
-	(((chipdest[i].chip_addr & 0xff00) == 0) &&
-	 ((chipdest[i].chip_addr & 0xff) == (dchad & 0xff00)>>8))
+	((dchad != 0) &&
+	 ((chipdest[i].chip_addr & 0xff00) == 0) &&
+	 ((chipdest[i].chip_addr << 8) == (dchad & 0xff00)))
 	||
-	/* dest is broadcast */
-	(((rt->rt_dest & 0xff) == 0) &&  /* dest is broadcast */
+	/* dest is broadcast, look for the route's subnet */
+	((dchad == 0) &&
+	 ((rt->rt_dest & 0xff) == 0) &&  /* route dest is broadcast */
 	 ((chipdest[i].chip_addr & 0xff00) == 0) &&  /* this is a subnet dest */
 	 ((chipdest[i].chip_addr << 8) == (rt->rt_dest & 0xff00)))  /* and it matches */
 	) {
@@ -446,7 +660,7 @@ try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dle
 	chip_send_pkt((struct sockaddr *)&dip, data, dlen);
       } else if (chipdest[i].chip_sa.chip_saddr.sa_family == AF_INET6) {
 	if (dchad == 0) {
-	  // @@@@ fixme
+	  // @@@@ fixme?
 	  if (verbose || debug) fprintf(stderr,"%%%% CHIP: broadcast to IPv6 not implemented yet\n");
 	  // found a route, although couldn't use it
 	  return 1;
@@ -456,12 +670,8 @@ try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dle
 	dip.sin6_addr.s6_addr[15] = (dchad & 0xff);
 	if (debug) {
 	  char ipaddr[INET6_ADDRSTRLEN];
-	  if (inet_ntop(AF_INET6,
-			&dip.sin6_addr,
-			ipaddr, sizeof(ipaddr)) == NULL)
-	    strerror_r(errno,ipaddr,sizeof(ipaddr));
 	  fprintf(stderr,"CHIP: subnet link %#o to dest %#o gives IPv6 %s\n",
-		  chipdest[i].chip_addr, dchad, ipaddr);
+		  chipdest[i].chip_addr, dchad, ip46_ntoa((struct sockaddr *)&dip, ipaddr, sizeof(ipaddr)));
 	}
 	chip_send_pkt((struct sockaddr *)&dip, data, dlen);
       } else {
@@ -485,9 +695,9 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
 {
   int i, found = 0;
 
-  // Swap back to network order
-  htons_buf((u_short *)data, (u_short *)data, dlen);
-
+  if (rt->rt_type == RT_BRIDGE)
+    // the bridge is on IP, but the dest might not be
+    dchad = rt->rt_braddr;
   // look up in chipdest, send using libnet
   PTLOCK(chipdest_lock);
   if (!try_forward_individual_dest(rt, dchad, data, dlen)) {

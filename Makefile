@@ -23,7 +23,7 @@ OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o c
 # -lssl and -lcrypto are needed only for TLS.
 # -lresolv needed only for dns.o
 cbridge: $(OBJS) chaosd.h cbridge-chaos.h chudp.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -lpthread -lssl -lcrypto -lresolv -lnet -lpcap
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -lpthread -lssl -lcrypto -lresolv
 
 cbridge.o: cbridge.c cbridge.h cbridge-chaos.h 
 	$(CC) -c $(CFLAGS) -o $@ $<
