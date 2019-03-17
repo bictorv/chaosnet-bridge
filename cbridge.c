@@ -36,8 +36,9 @@
 
 // TODO
 
-// when "other end" changes transport (e.g. from CHUDP to CHIP, or to TLS),
-// may need to make sure the routing table is properly updated.
+// #### clean up routing table issues
+
+// clean up malloced datastructures (inheritance from inter-process shared memory in klh10)
 
 // logging:
 // - lock to avoid mixed output from different threads
@@ -67,8 +68,6 @@
 // - e.g. source addr 3150 from link with addr 3160 (which has another link)
 // - or traffic from a defined subnet arriving on a different link
 // firewall??
-
-// Separate datastructures for links and routes, simplifying things.
 
 // add parameters for various constants (arp age limit, reparsing interval...)
 
@@ -466,7 +465,10 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 	rttbl_net[rsub].rt_type = RT_BRIDGE; // type;
 	rttbl_net[rsub].rt_cost = (rcost + cost);  /* add the cost to go to that bridge */
 	// Subnet routes via CHUDP/TLS must be indirect (look up bridge host too)
-	rttbl_net[rsub].rt_link = (linktype == LINK_CHUDP ? LINK_INDIRECT : (linktype == LINK_TLS ? LINK_INDIRECT : linktype));
+	if ((linktype == LINK_CHUDP) ||  (linktype == LINK_TLS) || (linktype == LINK_IP))
+	  rttbl_net[rsub].rt_link = LINK_INDIRECT;
+	else
+	  rttbl_net[rsub].rt_link = linktype;
 	rttbl_net[rsub].rt_braddr = src;
 	rttbl_net[rsub].rt_dest = src & 0xff00;
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
@@ -540,8 +542,12 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 		  dchad);
 	  return NULL;
 	}
-      } else
+      } else {
+	struct chroute *rt = &rttbl_host[i];
+	if (debug) fprintf(stderr,"Found direct route %d to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", i, dchad,
+			   rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
 	return &rttbl_host[i];
+      }
     }
   }
   if (only_host) return NULL;	// avoid non-well-founded recursion
@@ -561,8 +567,7 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 	// this one. Drop it.
 	return NULL;
       else if (rttbl_net[sub].rt_braddr != 0) {
-
-	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 1, also_nopath);
+	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 0, also_nopath);
 	if (res == NULL) {
 	  fprintf(stderr,"Warning: find route: Indirect link to host %#o on subnet %#o found, but no route to its bridge %#o\n",
 		  dchad, sub, rttbl_net[sub].rt_braddr);
@@ -574,8 +579,12 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 		sub);
 	return NULL;
       }
-    } else
+    } else {
+      struct chroute *rt = &rttbl_net[sub];
+      if (debug) fprintf(stderr,"Found subnet %d route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", sub, dchad,
+			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
       return &rttbl_net[sub];
+    }
   }
   return NULL;
 }
@@ -897,12 +906,12 @@ void send_chaos_pkt(u_char *pkt, int len)
   if (ch_srcaddr(cha) == 0)
     set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
-  if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (%s) dest %#o %s bridge %#o\n",
+  if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (pkt dest %#o) %s dest %#o %s bridge %#o myaddr %#o\n",
 		       ch_opcode_name(ch_opcode(cha)),
-		       ch_srcaddr(cha),
+		       ch_srcaddr(cha), dchad,
 		       ch_destaddr(cha),
 		       rt_linkname(rt->rt_link),
-		       rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr
+		       rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr
 		       );
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest>>8].pkt_out++;
@@ -912,9 +921,72 @@ void send_chaos_pkt(u_char *pkt, int len)
 }
 
 
-// **** Main program
+// **** Config parsing
 
-int parse_route_config() 
+static int
+parse_route_params(struct chroute *rt, u_short addr)
+{
+  char *tok;
+  u_short sval;
+
+  rt->rt_type = RT_FIXED;	/* manually configured, probably fixed? */
+  rt->rt_link = LINK_INDIRECT;	/* i.e. look up route to bridge */
+  rt->rt_cost = RTCOST_ETHER;	/* default */
+
+  while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
+    if (strcasecmp(tok, "myaddr") == 0) {
+      tok = strtok(NULL," \t\r\n");
+      if (sscanf(tok,"%ho",&sval) != 1) {
+	fprintf(stderr,"bad octal myaddr value %s\n", tok);
+	return -1;
+      }
+      rt->rt_myaddr = sval;
+      if (nchaddr < NCHADDR)
+	mychaddr[nchaddr++] = sval;
+      else
+	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
+		NCHADDR);
+    } else if (strcasecmp(tok, "type") == 0) {
+      tok = strtok(NULL," \t\r\n");
+      if (strcasecmp(tok, "direct") == 0) {
+	rt->rt_type = RT_DIRECT;
+	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_DIRECT;
+      }
+      else if (strcasecmp(tok,"fixed") == 0) {
+	rt->rt_type = RT_FIXED;
+	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
+      }
+      else if (strcasecmp(tok,"bridge") == 0) {
+	rt->rt_type = RT_BRIDGE;
+	rt->rt_cost_updated = time(NULL);
+	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
+      }
+      else {
+	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
+	return -1;
+      }
+    } else if (strcasecmp(tok, "cost") == 0) {
+      tok = strtok(NULL," \t\r\n");
+      if (strcasecmp(tok, "direct") == 0)
+	rt->rt_cost = RTCOST_DIRECT;
+      else if (strcasecmp(tok, "ether") == 0)
+	rt->rt_cost = RTCOST_ETHER;
+      else if (strcasecmp(tok, "asynch") == 0)
+	rt->rt_cost = RTCOST_ASYNCH;
+      else {
+	fprintf(stderr,"bad cost %s for link to %#o\n", tok, addr);
+	return -1;
+      }
+    } else {
+      fprintf(stderr,"bad keyword %s for link to %#o\n", tok, addr);
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int
+parse_route_config() 
 {
   // route host|subnet x bridge y [cost c type t]
   u_short addr, sval;
@@ -966,299 +1038,17 @@ int parse_route_config()
     return -1;
   }
   rt->rt_braddr = sval;
-  rt->rt_type = RT_FIXED;	/* manually configured, probably fixed? */
-  rt->rt_link = LINK_INDIRECT;	/* i.e. look up route to bridge */
 
-  while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
-    if (strcasecmp(tok, "myaddr") == 0) {
-      tok = strtok(NULL," \t\r\n");
-      if (sscanf(tok,"%ho",&sval) != 1) {
-	fprintf(stderr,"bad octal myaddr value %s\n", tok);
-	return -1;
-      }
-      rt->rt_myaddr = sval;
-      if (nchaddr < NCHADDR)
-	mychaddr[nchaddr++] = sval;
-      else
-	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
-		NCHADDR);
-    } else if (strcasecmp(tok, "type") == 0) {
-      tok = strtok(NULL," \t\r\n");
-      if (strcasecmp(tok, "direct") == 0) {
-	rt->rt_type = RT_DIRECT;
-	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_DIRECT;
-      }
-      else if (strcasecmp(tok,"fixed") == 0) {
-	rt->rt_type = RT_FIXED;
-	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
-      }
-      else if (strcasecmp(tok,"bridge") == 0) {
-	rt->rt_type = RT_BRIDGE;
-	rt->rt_cost_updated = time(NULL);
-	if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
-      }
-      else {
-	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
-	return -1;
-      }
-    } else if (strcasecmp(tok, "cost") == 0) {
-      tok = strtok(NULL," \t\r\n");
-      if (strcasecmp(tok, "direct") == 0)
-	rt->rt_cost = RTCOST_DIRECT;
-      else if (strcasecmp(tok, "ether") == 0)
-	rt->rt_cost = RTCOST_ETHER;
-      else if (strcasecmp(tok, "asynch") == 0)
-	rt->rt_cost = RTCOST_ASYNCH;
-      else {
-	fprintf(stderr,"bad cost %s for link to %#o\n", tok, addr);
-	return -1;
-      }
-    } else {
-      fprintf(stderr,"bad keyword %s for link to %#o\n", tok, addr);
-      return -1;
-    }
-  }
-  if (rt->rt_cost == 0) rt->rt_cost = RTCOST_ETHER;
+  if (parse_route_params(rt, addr) < 0)
+    return -1;
   return 0;
 }
 
-int parse_link_config()
+static int
+parse_link_args(struct chroute *rt, u_short addr)
 {
-  // link ether|unix|chudp|tls ... host|subnet y [type t cost c]
-  u_short addr, subnetp, sval;
-  struct addrinfo *he, hints;
-  struct sockaddr_in *s;
-  struct sockaddr_in6 *s6;
-  struct chroute rte;
-  struct chroute *rt = &rte;
-  char *tok = strtok(NULL," \t\r\n");
-
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = PF_UNSPEC;
-  hints.ai_flags = AI_ADDRCONFIG;
-
-  memset(rt, 0, sizeof(rte));
-  if (tok == NULL) {
-    fprintf(stderr,"bad link config: no parameters\n");
-    return -1;
-  }
-  if (strcasecmp(tok, "ether") == 0) {
-    do_ether = 1;
-    // one day, parse interface name
-    rt->rt_link = LINK_ETHER;
-    rt->rt_type = RT_DIRECT;
-    rt->rt_cost = RTCOST_DIRECT;
-  } else if (strcasecmp(tok, "unix") == 0) {
-    do_unix = 1;
-    rt->rt_link = LINK_UNIXSOCK;
-    rt->rt_type = RT_DIRECT;
-    rt->rt_cost = RTCOST_DIRECT;
-  } else if (strcasecmp(tok, "chudp") == 0) {
-    int res;
-
-    rt->rt_link = LINK_CHUDP;
-    rt->rt_type = RT_FIXED;
-    rt->rt_cost = RTCOST_ASYNCH;
-    rt->rt_cost_updated = time(NULL);
-
-    tok = strtok(NULL," \t\r\n");
-    u_short port;
-    char *sep = index(tok, ':');
-    if (sep == NULL)
-      port = CHUDP_PORT;
-    else
-      port = atoi((char *)sep+1);
-    if (sep) *sep = '\0';
-    if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
-      // chudpdest[*chudpdest_len].chu_addr = (subnet_p ? rt->rt_braddr : addr);
-      chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_family = he->ai_family;
-      chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_port = htons(port);
-      if (he->ai_family == AF_INET) {
-	do_udp = 1;
-	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
-      } else if (he->ai_family == AF_INET6) {
-	do_udp6 = 1;
-	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-	memcpy(&chudpdest[*chudpdest_len].chu_sa.chu_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
-      } else {
-	fprintf(stderr,"error parsing chudp host %s: unknown address family %d\n",
-		tok, he->ai_family);
-	return -1;
-      }
-      memcpy(&chudpdest[*chudpdest_len].chu_name, tok, CHUDPDEST_NAME_LEN);
-      (*chudpdest_len)++;
-      if (sep) *sep = ':';
-    } else {
-      if (sep) *sep = ':';
-      fprintf(stderr,"bad chudp arg %s: %s (%d)\n", tok,
-	      gai_strerror(res), res);
-      return -1;
-    }
-#if CHAOS_TLS
-  } else if (strcasecmp(tok, "tls") == 0) {
-    // similar to chudp case, should generalize code
-    int res;
-
-    rt->rt_link = LINK_TLS;
-    rt->rt_type = RT_FIXED;
-    rt->rt_cost = RTCOST_ASYNCH;
-    rt->rt_cost_updated = time(NULL);
-
-    tok = strtok(NULL," \t\r\n");
-    u_short port;
-    char *sep = index(tok, ':');
-    if (sep == NULL)
-      port = CHAOS_TLS_PORT;
-    else
-      port = atoi((char *)sep+1);
-    if (sep) *sep = '\0';
-    // @@@@ look at do_tls_ipv6 to select hints family?
-    if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
-      tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_family = he->ai_family;
-      tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_port = htons(port);
-      if (he->ai_family == AF_INET) {
-	do_tls = 1;
-	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	memcpy(&tlsdest[*tlsdest_len].tls_sa.tls_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
-      } else if (he->ai_family == AF_INET6) {
-	do_tls = 1;
-	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-	memcpy(&tlsdest[*tlsdest_len].tls_sa.tls_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
-      } else {
-	fprintf(stderr,"error parsing tls host %s: unknown address family %d\n",
-		tok, he->ai_family);
-	return -1;
-      }
-      memcpy(&tlsdest[*tlsdest_len].tls_name, tok, TLSDEST_NAME_LEN);
-      (*tlsdest_len)++;
-      if (sep) *sep = ':';
-    } else {
-      if (sep) *sep = ':';
-      fprintf(stderr,"bad tls arg %s: %s (%d)\n", tok,
-	      gai_strerror(res), res);
-      return -1;
-    }
-#endif
-#if CHAOS_IP
-  } else if (strcasecmp(tok, "chip") == 0) {
-    // similar to chudp case, should generalize code
-    int res;
-
-    rt->rt_link = LINK_IP;
-    rt->rt_type = RT_FIXED;
-    rt->rt_cost = RTCOST_ASYNCH;
-    rt->rt_cost_updated = time(NULL);
-
-    tok = strtok(NULL," \t\r\n");
-    if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
-      chipdest[chipdest_len].chip_sa.chip_sin.sin_family = he->ai_family;
-      if (he->ai_family == AF_INET) {
-	do_chip = 1;
-	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-	memcpy(&chipdest[chipdest_len].chip_sa.chip_sin.sin_addr, (u_char *)&s->sin_addr, sizeof(struct in_addr));
-      } else if (he->ai_family == AF_INET6) {
-	do_chip = 1;
-	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-	memcpy(&chipdest[chipdest_len].chip_sa.chip_sin6.sin6_addr, (u_char *)&s->sin6_addr, sizeof(struct in6_addr));
-      } else {
-	fprintf(stderr,"error parsing chip host %s: unknown address family %d\n",
-		tok, he->ai_family);
-	return -1;
-      }
-      memcpy(&chipdest[chipdest_len].chip_name, tok, CHIPDEST_NAME_LEN);
-      // filled it all in, update length
-      chipdest_len++;
-    } else {
-      fprintf(stderr,"bad chip arg %s: %s (%d)\n", tok,
-	      gai_strerror(res), res);
-      return -1;
-    }
-#endif
-  }
-  // host|subnet y type t cost c
-  tok = strtok(NULL," \t\r\n");
-  if (strcasecmp(tok,"host") == 0) 
-    subnetp = 0;
-  else if (strcasecmp(tok, "subnet") == 0) 
-    subnetp = 1;
-  else {
-    fprintf(stderr,"bad link keyword %s\n", tok);
-    return -1;
-  }
-  tok = strtok(NULL, " \t\r\n");
-  if (tok == NULL) {
-    fprintf(stderr,"bad link config: no addr\n");
-    return -1;
-  }
-  if (sscanf(tok,"%ho",&addr) != 1) {
-    fprintf(stderr,"bad octal value %s\n", tok);
-    return -1;
-  }
-  if (subnetp)
-    rt->rt_dest = addr<<8;
-  else
-    rt->rt_dest = addr;
-  if (rt->rt_link == LINK_CHUDP) {
-    chudpdest[*chudpdest_len - 1].chu_addr = addr;
-    if (subnetp) {
-      fprintf(stderr,"Error: CHUDP links must be to hosts, not subnets.\n"
-	      "Change\n"
-	      " link chudp %s:%d subnet %o\n"
-	      "to\n"
-	      " link chudp %s:%d host NN\n"
-	      " route subnet %o bridge NN\n"
-	      "where NN is the actual chudp host\n",
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
-	      addr,
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
-	      addr);
-      return -1;
-    }
-  }
-#if CHAOS_TLS
-  if (rt->rt_link == LINK_TLS) {
-    tlsdest[*tlsdest_len - 1].tls_addr = addr;
-    if (subnetp) {
-      fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
-	      "Change\n"
-	      " link tls %s:%d subnet %o\n"
-	      "to\n"
-	      " link tls %s:%d host NN\n"
-	      " route subnet %o bridge NN\n"
-	      "where NN is the actual tls host\n",
-	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
-	      addr,
-	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
-	      addr);
-      return -1;
-    }
-  }
-#endif // CHAOS_TLS
-#if CHAOS_IP
-  if (rt->rt_link == LINK_IP) {
-    // for subnetp, check that the IP address is not complete
-    if (subnetp) {
-      if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET) {
-	if ((ntohl(chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr.s_addr) & 0xff) != 0) {
-	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IP with last octet 0, fixing it for you\n",
-		  addr, inet_ntoa(chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr));
-	  chipdest[chipdest_len-1].chip_sa.chip_sin.sin_addr.s_addr &= htonl(0xffffff00);
-	}
-      } else if (chipdest[chipdest_len-1].chip_sa.chip_sin.sin_family == AF_INET6) {
-	if (chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr.s6_addr[15] != 0) {
-	  char ip6[INET6_ADDRSTRLEN];
-	  if (inet_ntop(AF_INET6, &chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr, ip6, sizeof(ip6)) == NULL)
-	    strerror_r(errno, ip6, sizeof(ip6));
-	  fprintf(stderr,"CHIP subnet %#o link maps to %s but should have IPv6 with last octet 0, fixing it for you\n",
-		  addr, ip6);
-	  chipdest[chipdest_len-1].chip_sa.chip_sin6.sin6_addr.s6_addr[15] = 0;
-	}
-      }
-    }
-    chipdest[chipdest_len - 1].chip_addr = addr;
-  }
-#endif // CHAOS_IP
+  u_short sval;
+  char *tok;
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
@@ -1309,6 +1099,205 @@ int parse_link_config()
       return -1;
     }
   }
+  // all ok
+  return 0;
+}
+
+static int
+parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr, int nameptr_len)
+{
+  char *tok;
+  int res;
+  u_short port = default_port;
+  char *sep = NULL;
+  struct addrinfo *he, hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = PF_UNSPEC;
+  hints.ai_flags = AI_ADDRCONFIG;
+
+  tok = strtok(NULL," \t\r\n");
+  if (default_port > 0) {
+    sep = rindex(tok, ':');
+    if ((sep != NULL) && (strlen(sep) > 1)) {
+      port = atoi((char *)sep+1);
+      // for getaddrinfo
+      *sep = '\0';
+    }
+  }
+
+  if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
+    sa->sa_family = he->ai_family;
+    if (he->ai_family == AF_INET) {
+      struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+      struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+      sin->sin_port = port;
+      memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
+    } else if (he->ai_family == AF_INET6) {
+      struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+      struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
+      sin->sin6_port = port;
+      memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
+    } else {
+      fprintf(stderr,"error parsing %s host %s: unknown address family %d\n",
+	      type, tok, he->ai_family);
+      return -1;
+    }
+    memcpy(&nameptr, tok, nameptr_len);
+  } else {
+    if (sep != NULL)
+      *sep = ':';		/* put colon back for error messages */
+    fprintf(stderr,"bad %s arg %s: %s (%d)\n",
+	    type, tok, gai_strerror(res), res);
+    return -1;
+  }
+  // all ok
+  return 0;
+}
+
+
+static int
+parse_link_config()
+{
+  // link ether|unix|chudp|tls ... host|subnet y [type t cost c]
+  u_short addr, subnetp;
+  struct chroute rte;
+  struct chroute *rt = &rte;
+  char *tok = strtok(NULL," \t\r\n");
+
+  memset(rt, 0, sizeof(rte));
+  if (tok == NULL) {
+    fprintf(stderr,"bad link config: no parameters\n");
+    return -1;
+  }
+  if (strcasecmp(tok, "ether") == 0) {
+    do_ether = 1;
+    // one day, parse interface name
+    rt->rt_link = LINK_ETHER;
+    rt->rt_type = RT_DIRECT;
+    rt->rt_cost = RTCOST_DIRECT;
+  } else if (strcasecmp(tok, "unix") == 0) {
+    do_unix = 1;
+    rt->rt_link = LINK_UNIXSOCK;
+    rt->rt_type = RT_DIRECT;
+    rt->rt_cost = RTCOST_DIRECT;
+
+  } else if (strcasecmp(tok, "chudp") == 0) {
+    rt->rt_link = LINK_CHUDP;
+    rt->rt_type = RT_FIXED;
+    rt->rt_cost = RTCOST_ASYNCH;
+    rt->rt_cost_updated = time(NULL);
+
+    if (parse_ip_params("chudp", &chudpdest[*chudpdest_len].chu_sa.chu_saddr, CHUDP_PORT,
+			chudpdest[*chudpdest_len].chu_name, CHUDPDEST_NAME_LEN) < 0)
+      return -1;
+    if (chudpdest[*chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET)
+      do_udp = 1;
+    else if (chudpdest[*chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET6)
+      do_udp6 = 1;
+    (*chudpdest_len)++;
+
+#if CHAOS_TLS
+  } else if (strcasecmp(tok, "tls") == 0) {
+    rt->rt_link = LINK_TLS;
+    rt->rt_type = RT_FIXED;
+    rt->rt_cost = RTCOST_ASYNCH;
+    rt->rt_cost_updated = time(NULL);
+
+    if (parse_ip_params("tls", &tlsdest[*tlsdest_len].tls_sa.tls_saddr, CHAOS_TLS_PORT,
+			tlsdest[*tlsdest_len].tls_name, TLSDEST_NAME_LEN) < 0)
+      return -1;
+    do_tls = 1;
+    (*tlsdest_len)++;
+#endif // CHAOS_TLS
+
+#if CHAOS_IP
+  } else if (strcasecmp(tok, "chip") == 0) {
+    rt->rt_link = LINK_IP;
+    rt->rt_type = RT_FIXED;
+    rt->rt_cost = RTCOST_ASYNCH;
+    rt->rt_cost_updated = time(NULL);
+
+    if (parse_ip_params("chip", &chipdest[chipdest_len].chip_sa.chip_saddr, 0,
+			(char *)&chipdest[chipdest_len].chip_name, CHIPDEST_NAME_LEN) < 0)
+      return -1;
+    do_chip = 1;
+    chipdest_len++;
+  }
+#endif
+
+  // host|subnet y type t cost c
+  tok = strtok(NULL," \t\r\n");
+  if (strcasecmp(tok,"host") == 0) 
+    subnetp = 0;
+  else if (strcasecmp(tok, "subnet") == 0) 
+    subnetp = 1;
+  else {
+    fprintf(stderr,"bad link keyword %s\n", tok);
+    return -1;
+  }
+  tok = strtok(NULL, " \t\r\n");
+  if (tok == NULL) {
+    fprintf(stderr,"bad link config: no addr\n");
+    return -1;
+  }
+  if (sscanf(tok,"%ho",&addr) != 1) {
+    fprintf(stderr,"bad octal value %s\n", tok);
+    return -1;
+  }
+  if (subnetp)
+    rt->rt_dest = addr<<8;
+  else
+    rt->rt_dest = addr;
+
+  if (parse_link_args(rt, addr) < 0)
+    return -1;
+
+  if (rt->rt_link == LINK_CHUDP) {
+    chudpdest[*chudpdest_len - 1].chu_addr = addr;
+    if (subnetp) {
+      fprintf(stderr,"Error: CHUDP links must be to hosts, not subnets.\n"
+	      "Change\n"
+	      " link chudp %s:%d subnet %o\n"
+	      "to\n"
+	      " link chudp %s:%d host NN\n"
+	      " route subnet %o bridge NN\n"
+	      "where NN is the actual chudp host\n",
+	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
+	      addr,
+	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
+	      addr);
+      return -1;
+    }
+  }
+#if CHAOS_TLS
+  if (rt->rt_link == LINK_TLS) {
+    tlsdest[*tlsdest_len - 1].tls_addr = addr;
+    if (subnetp) {
+      fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
+	      "Change\n"
+	      " link tls %s:%d subnet %o\n"
+	      "to\n"
+	      " link tls %s:%d host NN\n"
+	      " route subnet %o bridge NN\n"
+	      "where NN is the actual tls host\n",
+	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      addr,
+	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      addr);
+      return -1;
+    }
+  }
+#endif // CHAOS_TLS
+#if CHAOS_IP
+  if (rt->rt_link == LINK_IP) {
+    chipdest[chipdest_len - 1].chip_addr = addr;
+    if (validate_chip_entry(&chipdest[chipdest_len - 1], rt, subnetp, nchaddr) < 0) {
+      chipdest_len--; // forget invalid chipdest
+      return -1;
+    }
+  }
+#endif // CHAOS_IP
+
   // @@@@ check if mychaddr has an entry for the subnet of the newly defined link
   struct chroute *rrt;
   if (subnetp)
@@ -1319,7 +1308,8 @@ int parse_link_config()
   return 0;
 }
 
-int parse_config_line(char *line)
+static int
+parse_config_line(char *line)
 {
   char *tok = NULL;
   tok = strtok(line," \t\r\n");
@@ -1427,7 +1417,7 @@ int parse_config_line(char *line)
 #endif
 #if CHAOS_IP
   else if (strcasecmp(tok,"chip") == 0) {
-    // this is pointless until chip is "dynamic", but...
+    // this is pointless unless chip is "dynamic", but...
     do_chip = 1;
     return parse_chip_config_line();
   }
@@ -1454,7 +1444,8 @@ int parse_config_line(char *line)
   }
 }
 
-void parse_config(char *cfile)
+static void
+parse_config(char *cfile)
 {
   // Obtain configuration
   FILE *config = fopen(cfile,"r");
@@ -1474,6 +1465,8 @@ void parse_config(char *cfile)
     }
   }
 }
+
+// **** Main program
 
 // Print stats on SIGINFO/SIGUSR1
 void
