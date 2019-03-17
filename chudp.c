@@ -20,28 +20,16 @@
 
 extern int chudp_dynamic, chudp_port;
 
-static pthread_mutex_t chudp_lock;
+static pthread_mutex_t chudp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* **** CHUDP protocol functions **** */
-
-void init_chudpdest()
-{
-  if (pthread_mutex_init(&chudp_lock, NULL) != 0)
-    perror("pthread_mutex_init(chudp_lock)");
-  if ((chudpdest = malloc(sizeof(struct chudest)*CHUDPDEST_MAX)) == NULL)
-    perror("malloc(chudpdest)");
-  if ((chudpdest_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(chudpdest_len)");
-  memset((char *)chudpdest, 0, sizeof(struct chudest)*CHUDPDEST_MAX);
-  *chudpdest_len = 0;
-}
 
 void print_chudp_config()
 {
   int i;
   char ip[INET6_ADDRSTRLEN];
-  printf("CHUDP config: %d routes\n", *chudpdest_len);
-  for (i = 0; i < *chudpdest_len; i++) {
+  printf("CHUDP config: %d routes\n", chudpdest_len);
+  for (i = 0; i < chudpdest_len; i++) {
     if (inet_ntop(chudpdest[i].chu_sa.chu_saddr.sa_family,
 		  (chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET
 		   ? (void *)&chudpdest[i].chu_sa.chu_sin.sin_addr
@@ -70,7 +58,7 @@ void reparse_chudp_names()
 
   // @@@@ also reparse TLS hosts?
   PTLOCK(chudp_lock);
-  for (i = 0; i < *chudpdest_len; i++) {
+  for (i = 0; i < chudpdest_len; i++) {
     if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
 	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
 	&& (inet_pton(AF_INET6, chudpdest[i].chu_name, &in6) == 0))  /* and not an explicit ipv6 addr */
@@ -196,21 +184,21 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
 static void
 add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
 {
-  if (*chudpdest_len < CHUDPDEST_MAX) {
+  if (chudpdest_len < CHUDPDEST_MAX) {
     if (verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
     PTLOCK(chudp_lock);
     /* clear any non-specified fields */
-    memset(&chudpdest[*chudpdest_len], 0, sizeof(struct chudest));
-    chudpdest[*chudpdest_len].chu_addr = srcaddr;
-    memcpy(&chudpdest[*chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
-    (*chudpdest_len)++;
+    memset(&chudpdest[chudpdest_len], 0, sizeof(struct chudest));
+    chudpdest[chudpdest_len].chu_addr = srcaddr;
+    memcpy(&chudpdest[chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
+    chudpdest_len++;
     if (verbose) print_chudp_config();
     PTUNLOCK(chudp_lock);
 
     // see if there is a host route for this, otherwise add it
-    if (*rttbl_host_len < RTTBL_HOST_MAX) {
+    if (rttbl_host_len < RTTBL_HOST_MAX) {
       int i, found = 0;
-      for (i = 0; i < *rttbl_host_len; i++) {
+      for (i = 0; i < rttbl_host_len; i++) {
 	if (rttbl_host[i].rt_dest == srcaddr) {
 	  found = 1;
 	  break;
@@ -218,13 +206,13 @@ add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
       }
       if (!found) {
 	PTLOCK(rttbl_lock);
-	if (*rttbl_host_len < RTTBL_HOST_MAX) { // double check
+	if (rttbl_host_len < RTTBL_HOST_MAX) { // double check
 	  // Add a host route (as if "link chudp [host] host [srcaddr]" was given)	    
-	  rttbl_host[(*rttbl_host_len)].rt_dest = srcaddr;
-	  rttbl_host[(*rttbl_host_len)].rt_type = RT_FIXED;
-	  rttbl_host[(*rttbl_host_len)].rt_cost = RTCOST_ASYNCH;
-	  rttbl_host[(*rttbl_host_len)].rt_link = LINK_CHUDP;
-	  (*rttbl_host_len)++;
+	  rttbl_host[rttbl_host_len].rt_dest = srcaddr;
+	  rttbl_host[rttbl_host_len].rt_type = RT_FIXED;
+	  rttbl_host[rttbl_host_len].rt_cost = RTCOST_ASYNCH;
+	  rttbl_host[rttbl_host_len].rt_link = LINK_CHUDP;
+	  rttbl_host_len++;
 	  if (verbose) print_routing_table();
 	}
 	PTUNLOCK(rttbl_lock);
@@ -282,8 +270,8 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 #endif
 
   PTLOCK(chudp_lock);
-  if (debug) fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, *chudpdest_len);
-  for (i = 0; i < *chudpdest_len; i++) {
+  if (debug) fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, chudpdest_len);
+  for (i = 0; i < chudpdest_len; i++) {
     if ((chudpdest[i].chu_sa.chu_saddr.sa_family == sin.sin6_family)
 	&& (chudpdest[i].chu_sa.chu_sin.sin_port == sin.sin6_port)
 	&& (((chudpdest[i].chu_sa.chu_saddr.sa_family == AF_INET) &&
@@ -427,7 +415,7 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   }
 
   PTLOCK(chudp_lock);
-  for (i = 0; (i < *chudpdest_len) && !found; i++) {
+  for (i = 0; (i < chudpdest_len) && !found; i++) {
     if (
 #if 0
 	dchad == 0		/* broadcast: goes on all links */
@@ -448,6 +436,7 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
 	chudp_send_pkt(udpsock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
       else
 	chudp_send_pkt(udp6sock, &chudpdest[i].chu_sa.chu_saddr, (u_char *)&chubuf, dlen);
+      break;
     }
   }
   PTUNLOCK(chudp_lock);

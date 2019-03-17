@@ -202,15 +202,10 @@ void print_tlsdest_config()
   int i;
   char ip[INET6_ADDRSTRLEN];
   PTLOCK(tlsdest_lock);
-  printf("TLS destination config: %d links\n", *tlsdest_len);
-  for (i = 0; i < *tlsdest_len; i++) {
+  printf("TLS destination config: %d links\n", tlsdest_len);
+  for (i = 0; i < tlsdest_len; i++) {
     if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
-      if (inet_ntop(tlsdest[i].tls_sa.tls_saddr.sa_family,
-		    (tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
-		     ? (void *)&tlsdest[i].tls_sa.tls_sin.sin_addr
-		     : (void *)&tlsdest[i].tls_sa.tls_sin6.sin6_addr), ip, sizeof(ip))
-	  == NULL)
-	strerror_r(errno, ip, sizeof(ip));
+      ip46_ntoa(&tlsdest[i].tls_sa.tls_saddr, ip, sizeof(ip));
     } else
       strcpy(ip, "[none]");
     printf(" dest %#o, name %s, ",
@@ -218,7 +213,10 @@ void print_tlsdest_config()
 	   tlsdest[i].tls_name);
     if (tlsdest[i].tls_serverp) printf("(server) ");
     printf("host %s port %d\n",
-	   ip, ntohs(tlsdest[i].tls_sa.tls_sin.sin_port));
+	   ip,
+	   ntohs((tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
+		  ? tlsdest[i].tls_sa.tls_sin.sin_port
+		  : tlsdest[i].tls_sa.tls_sin6.sin6_port)));
   }
   PTUNLOCK(tlsdest_lock);
 }
@@ -237,18 +235,18 @@ add_tls_route(int tindex, u_short srcaddr)
     srcrt->rt_type = RT_FIXED;
     srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
   } else {
-    if (*rttbl_host_len < RTTBL_HOST_MAX) {
+    if (rttbl_host_len < RTTBL_HOST_MAX) {
       // make a routing entry for host srcaddr through tls link at tlsindex
       // "link tls [tlsdest stuff] host [srcaddr]
-      rttbl_host[*rttbl_host_len].rt_dest = srcaddr;
-      rttbl_host[*rttbl_host_len].rt_braddr = 0;  /* direct, not through a bridge */
-      rttbl_host[*rttbl_host_len].rt_myaddr = tls_myaddr;  /* if 0, the main address is used */
-      rttbl_host[*rttbl_host_len].rt_type = RT_FIXED;
-      rttbl_host[*rttbl_host_len].rt_link = LINK_TLS;
-      rttbl_host[*rttbl_host_len].rt_cost = RTCOST_ASYNCH;
-      rttbl_host[*rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
-      srcrt = &rttbl_host[*rttbl_host_len];
-      (*rttbl_host_len)++;
+      rttbl_host[rttbl_host_len].rt_dest = srcaddr;
+      rttbl_host[rttbl_host_len].rt_braddr = 0;  /* direct, not through a bridge */
+      rttbl_host[rttbl_host_len].rt_myaddr = tls_myaddr;  /* if 0, the main address is used */
+      rttbl_host[rttbl_host_len].rt_type = RT_FIXED;
+      rttbl_host[rttbl_host_len].rt_link = LINK_TLS;
+      rttbl_host[rttbl_host_len].rt_cost = RTCOST_ASYNCH;
+      rttbl_host[rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+      srcrt = &rttbl_host[rttbl_host_len];
+      rttbl_host_len++;
       if (verbose) print_routing_table();
     } else
       fprintf(stderr,"%%%% host route table full (adding TLS for %#o), increase RTTBL_HOST_MAX!\n", srcaddr);
@@ -324,7 +322,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
   PTLOCK(tlsdest_lock);
   // look for name in tlsdest and reuse entry if it is closed
   int i;
-  for (i = 0; i < *tlsdest_len; i++) {
+  for (i = 0; i < tlsdest_len; i++) {
     if ((tlsdest[i].tls_name[0] != '\0') && tlsdest[i].tls_serverp && (strncmp(tlsdest[i].tls_name, (char *)name, TLSDEST_NAME_LEN) == 0)) {
       td = &tlsdest[i];
       break;
@@ -339,33 +337,32 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     memcpy((void *)&td->tls_sa.tls_saddr, sa, sa_len);
   } else {
     // crete a new entry
-    if (*tlsdest_len >= TLSDEST_MAX) {
+    if (tlsdest_len >= TLSDEST_MAX) {
       PTUNLOCK(tlsdest_lock);
       fprintf(stderr,"%%%% tlsdest is full! Increase TLSDEST_MAX\n");
       return;
     }
     if (tls_debug) {
       char ip6[INET6_ADDRSTRLEN];
-      if (inet_ntop(sa->sa_family,
-		    (sa->sa_family == AF_INET ?
-		     (void *)&((struct sockaddr_in *)sa)->sin_addr :
-		     (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
-		    ip6, sizeof(ip6)) == NULL)
-	strerror_r(errno,ip6,sizeof(ip6));
-      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o\n", name, ip6, ntohs(((struct sockaddr_in *)sa)->sin_port), chaddr);
+      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o\n", name,
+	      ip46_ntoa(sa, ip6, sizeof(ip6)),
+	      ntohs((sa->sa_family == AF_INET
+		     ? ((struct sockaddr_in *)sa)->sin_port
+		     : ((struct sockaddr_in6 *)sa)->sin6_port)),
+	      chaddr);
     }
 
-    memset(&tlsdest[*tlsdest_len], 0, sizeof(struct tls_dest));
+    memset(&tlsdest[tlsdest_len], 0, sizeof(struct tls_dest));
     // get sockaddr
-    memcpy(&tlsdest[*tlsdest_len].tls_sa, sa, sa_len);
+    memcpy(&tlsdest[tlsdest_len].tls_sa, sa, sa_len);
     if (name != NULL)
-      strncpy((char *)&tlsdest[*tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
-    tlsdest[*tlsdest_len].tls_serverp = 1;
-    tlsdest[*tlsdest_len].tls_sock = sock;
-    tlsdest[*tlsdest_len].tls_ssl = ssl;
-    tlsdest[*tlsdest_len].tls_addr = chaddr;
+      strncpy((char *)&tlsdest[tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
+    tlsdest[tlsdest_len].tls_serverp = 1;
+    tlsdest[tlsdest_len].tls_sock = sock;
+    tlsdest[tlsdest_len].tls_ssl = ssl;
+    tlsdest[tlsdest_len].tls_addr = chaddr;
 
-    (*tlsdest_len)++;
+    tlsdest_len++;
   }
   PTUNLOCK(tlsdest_lock);
   if (verbose) print_tlsdest_config();
@@ -398,13 +395,10 @@ static int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
   // @@@@ log stuff about the connection?
   if (tls_debug) {
     char ip6[INET6_ADDRSTRLEN];
-    if (inet_ntop(sa->sa_family,
-		  (sa->sa_family == AF_INET ?
-		   (void *)&((struct sockaddr_in *)sa)->sin_addr :
-		   (void *)&((struct sockaddr_in6 *)sa)->sin6_addr),
-		  ip6, sizeof(ip6)) == NULL)
-      strerror_r(errno,ip6,sizeof(ip6));
-    fprintf(stderr,"TCP accept connection from %s port %d\n", ip6, ntohs(((struct sockaddr_in *)sa)->sin_port));
+    fprintf(stderr,"TCP accept connection from %s port %d\n", ip46_ntoa(sa, ip6, sizeof(ip6)),
+	    ntohs((sa->sa_family == AF_INET
+		   ? ((struct sockaddr_in *)sa)->sin_port
+		   : ((struct sockaddr_in6 *)sa)->sin6_port)));
   }
   return fd;
 }
@@ -472,11 +466,10 @@ static int tcp_client_connect(struct sockaddr *sin)
 
     if (tls_debug) {
       char ip[INET6_ADDRSTRLEN];
-      if (inet_ntop(sin->sa_family,
-		    (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
-		    ip, sizeof(ip)) == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
+      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip46_ntoa(sin, ip, sizeof(ip)),
+	      ntohs((sin->sa_family == AF_INET
+		     ? ((struct sockaddr_in *)sin)->sin_port
+		     : ((struct sockaddr_in6 *)sin)->sin6_port)));
     }
 
     if (connect(sock, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
@@ -503,11 +496,10 @@ static int tcp_client_connect(struct sockaddr *sin)
   // log stuff about the connection
   if (tls_debug) {
     char ip[INET6_ADDRSTRLEN];
-    if (inet_ntop(sin->sa_family,
-		  (sin->sa_family == AF_INET ? (void *)&((struct sockaddr_in *)sin)->sin_addr : (void *)&((struct sockaddr_in6 *)sin)->sin6_addr),
-		  ip, sizeof(ip)) == NULL)
-      strerror_r(errno, ip, sizeof(ip));
-    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip, ntohs(((struct sockaddr_in *)sin)->sin_port));
+    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip46_ntoa(sin, ip, sizeof(ip)),
+	    ntohs((sin->sa_family == AF_INET
+		   ? ((struct sockaddr_in *)sin)->sin_port
+		   : ((struct sockaddr_in6 *)sin)->sin6_port)));
   }
   return sock;  
 }
@@ -531,12 +523,11 @@ void *tls_connector(void *arg)
     // @@@@ re-parse tlsdest?
     if (tls_debug) {
       char ip[INET6_ADDRSTRLEN];
-      if (inet_ntop(td->tls_sa.tls_saddr.sa_family,
-		    (td->tls_sa.tls_saddr.sa_family == AF_INET ?
-		     (void *)&(td->tls_sa.tls_sin.sin_addr) : (void *)&(td->tls_sa.tls_sin6.sin6_addr)),
-		    ip, sizeof(ip)) == NULL)
-	strerror_r(errno, ip, sizeof(ip));
-      fprintf(stderr,"TLS client: connecting to %s port %d\n", ip, ntohs(td->tls_sa.tls_sin.sin_port));
+      fprintf(stderr,"TLS client: connecting to %s port %d\n",
+	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)),
+	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
+		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
+		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
     }
     // connect to server
     int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
@@ -1011,7 +1002,7 @@ void * tls_input(void *v)
     PTLOCK(tlsdest_lock);
     // collect all tls_sock:ets
     maxfd = -1;
-    for (i = 0; i < *tlsdest_len; i++) {
+    for (i = 0; i < tlsdest_len; i++) {
       if (tlsdest[i].tls_sock > 0) {
 	FD_SET(tlsdest[i].tls_sock, &rfd);
 	maxfd = (maxfd > tlsdest[i].tls_sock ? maxfd : tlsdest[i].tls_sock);
@@ -1042,7 +1033,7 @@ void * tls_input(void *v)
 	  tindex = -1;		/* don't know tlsdest index */
 	  // find tlsdest index
 	  PTLOCK(tlsdest_lock);
-	  for (i = 0; i < *tlsdest_len; i++) {
+	  for (i = 0; i < tlsdest_len; i++) {
 	    if (tlsdest[i].tls_sock == j) {
 	      tindex = i;
 	      break;
@@ -1129,7 +1120,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 
   struct tls_dest *td = NULL;
   PTLOCK(tlsdest_lock);
-  for (i = 0; i < *tlsdest_len; i++) {
+  for (i = 0; i < tlsdest_len; i++) {
     if (
 	/* direct link to destination */
 	(tlsdest[i].tls_addr == dchad)

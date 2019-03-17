@@ -16,6 +16,9 @@
 
 #include "cbridge.h"
 
+// TODO
+// rewrite using pcap (replace BPF) - then implement multiple interfaces?
+
 extern char ifname[128];
 
 /* **** Chaos-over-Ethernet functions **** */
@@ -25,7 +28,7 @@ static int chfd = 0, arpfd = 0;
 static u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
 static u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
 
-static pthread_mutex_t charp_lock;
+static pthread_mutex_t charp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #if !ETHER_BPF
 static int ifix;		/* ethernet interface index */
@@ -33,8 +36,8 @@ static int ifix;		/* ethernet interface index */
 
 
 // Chaos ARP table
-static struct charp_ent *charp_list;	/* shared mem alloc */
-static int *charp_len;			/* cf CHARP_MAX */
+static struct charp_ent charp_list[CHARP_MAX];
+static int charp_len = 0;			/* cf CHARP_MAX */
 
 // Find the ethernet address of the configured interface (ifname)
 static void get_my_ea() {
@@ -700,25 +703,14 @@ get_packet (int if_fd, u_char *buf, int buflen)
 }
 
 /* **** Chaosnet ARP functions **** */
-void init_arp_table()
-{
-  if (pthread_mutex_init(&charp_lock, NULL) != 0)
-    perror("pthread_mutex_init(charp_lock)");
-  if ((charp_list = malloc(sizeof(struct charp_ent)*CHARP_MAX)) == NULL)
-    perror("malloc(charp_list)");
-  if ((charp_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(charp_len)");
-  memset((char *)charp_list, 0, sizeof(struct charp_ent)*CHARP_MAX);
-  *charp_len = 0;
-}
 
 void print_arp_table()
 {
   int i;
-  if (*charp_len > 0) {
+  if (charp_len > 0) {
     printf("Chaos ARP table:\n"
 	   "Chaos\tEther\t\t\tAge (s)\n");
-    for (i = 0; i < *charp_len; i++)
+    for (i = 0; i < charp_len; i++)
       printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu\n",
 	     charp_list[i].charp_chaddr,
 	     charp_list[i].charp_eaddr[0],
@@ -734,14 +726,14 @@ void print_arp_table()
 static u_char *find_arp_entry(u_short daddr)
 {
   int i;
-  if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, *charp_len);
+  if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, charp_len);
   if (is_mychaddr(daddr)) {	// #### maybe also look for rt_myaddr matches...
     fprintf(stderr,"#### Looking up ARP for my own address, BUG!\n");
     return NULL;
   }
   
   PTLOCK(charp_lock);
-  for (i = 0; i < *charp_len; i++)
+  for (i = 0; i < charp_len; i++)
     if (charp_list[i].charp_chaddr == daddr) {
       if ((charp_list[i].charp_age != 0)
 	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
@@ -763,7 +755,7 @@ static u_short find_ether_chaos_address() {
   int i;
   u_short ech = 0;
   PTLOCK(rttbl_lock);
-  for (i = 0; i < *rttbl_host_len; i++) {
+  for (i = 0; i < rttbl_host_len; i++) {
     if (rttbl_host[i].rt_link == LINK_ETHER) {
       ech = rttbl_host[i].rt_myaddr;
       break;
@@ -878,7 +870,7 @@ static void handle_arp_input(u_char *data, int dlen)
   /* Now see if we should add this to our Chaos ARP list */
   PTLOCK(charp_lock);
   int i, found = 0;
-  for (i = 0; i < *charp_len; i++)
+  for (i = 0; i < charp_len; i++)
     if (charp_list[i].charp_chaddr == schad) {
       found = 1;
       charp_list[i].charp_age = time(NULL);  // update age
@@ -896,11 +888,11 @@ static void handle_arp_input(u_char *data, int dlen)
       break;
     }
   /* It's not in the list already, is there room? */
-  if (!found && *charp_len < CHARP_MAX) {
+  if (!found && charp_len < CHARP_MAX) {
     if (verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
-    charp_list[*charp_len].charp_chaddr = schad;
-    charp_list[*charp_len].charp_age = time(NULL);
-    memcpy(&charp_list[(*charp_len)++].charp_eaddr, sead, ETHER_ADDR_LEN);
+    charp_list[charp_len].charp_chaddr = schad;
+    charp_list[charp_len].charp_age = time(NULL);
+    memcpy(&charp_list[charp_len++].charp_eaddr, sead, ETHER_ADDR_LEN);
     if (verbose) print_arp_table();
   }
   PTUNLOCK(charp_lock);

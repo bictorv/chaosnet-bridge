@@ -333,9 +333,9 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
 
     // see if there is a host route for this, otherwise add it
     // @@@@ break this out to separate fn, used also for CHUDP and TLS
-    if (*rttbl_host_len < RTTBL_HOST_MAX) {
+    if (rttbl_host_len < RTTBL_HOST_MAX) {
       int i, found = 0;
-      for (i = 0; i < *rttbl_host_len; i++) {
+      for (i = 0; i < rttbl_host_len; i++) {
 	if (rttbl_host[i].rt_dest == srcaddr) {
 	  // @@@@ check it's the intended link type
 	  found = 1;
@@ -344,13 +344,13 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
       }
       if (!found) {
 	PTLOCK(rttbl_lock);
-	if (*rttbl_host_len < RTTBL_HOST_MAX) { // double check
+	if (rttbl_host_len < RTTBL_HOST_MAX) { // double check
 	  // Add a host route (as if "link chip [host] host [srcaddr]" was given)	    
-	  rttbl_host[(*rttbl_host_len)].rt_dest = srcaddr;
-	  rttbl_host[(*rttbl_host_len)].rt_type = RT_FIXED;
-	  rttbl_host[(*rttbl_host_len)].rt_cost = RTCOST_ASYNCH;
-	  rttbl_host[(*rttbl_host_len)].rt_link = LINK_IP;
-	  (*rttbl_host_len)++;
+	  rttbl_host[rttbl_host_len].rt_dest = srcaddr;
+	  rttbl_host[rttbl_host_len].rt_type = RT_FIXED;
+	  rttbl_host[rttbl_host_len].rt_cost = RTCOST_ASYNCH;
+	  rttbl_host[rttbl_host_len].rt_link = LINK_IP;
+	  rttbl_host_len++;
 	  if (verbose) print_routing_table();
 	}
 	PTUNLOCK(rttbl_lock);

@@ -36,7 +36,7 @@ static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 struct __res_state chres;
 
 // consumer/producer lock and semaphores
-static pthread_mutex_t dns_lock;
+static pthread_mutex_t dns_lock = PTHREAD_MUTEX_INITIALIZER;
 static sem_t dns_thread_writer, *dns_thread_writerp;
 static sem_t dns_thread_reader, *dns_thread_readerp;
 
@@ -51,9 +51,9 @@ struct chaos_dns_req {
   int reqlen;			/* and its length */
 };
 // circular buffer, len CHREQ_MAX
-static struct chaos_dns_req *chreq;
-static int *chreq_wix;			/* write index */
-static int *chreq_rix;			/* read index */
+static struct chaos_dns_req chreq[CHREQ_MAX];
+static int chreq_wix = 0;			/* write index */
+static int chreq_rix = 0;			/* read index */
 
 // not thread safe: extern int h_errno;
 
@@ -70,7 +70,7 @@ dns_responder(u_char *rfc, int len)
   if (sem_trywait(dns_thread_writerp) < 0) {
     if (errno == EAGAIN) {
       // no room for request - don't hang, let other end resend request
-      if (trace_dns) fprintf(stderr,"DNS: no room for request, dropping it (wix %d)\n", *chreq_wix);
+      if (trace_dns) fprintf(stderr,"DNS: no room for request, dropping it (wix %d)\n", chreq_wix);
       return;
     } else {
       perror("sem_trywait(dns responder)");
@@ -81,7 +81,7 @@ dns_responder(u_char *rfc, int len)
   PTLOCK(dns_lock);
   // fill in data
   struct chaos_header *ch = (struct chaos_header *)rfc;
-  struct chaos_dns_req *q = &chreq[*chreq_wix];
+  struct chaos_dns_req *q = &chreq[chreq_wix];
   int qlen = ch_nbytes(ch)-4; // 4 = "DNS "
   q->srcaddr = ch_srcaddr(ch);
   q->srcindex = ch_srcindex(ch);
@@ -97,8 +97,8 @@ dns_responder(u_char *rfc, int len)
   q->req = req;
   q->reqlen = qlen;
   // update index for next RFC to come
-  if (trace_dns) fprintf(stderr,"DNS: added request at wix %d\n", *chreq_wix);
-  *chreq_wix = ((*chreq_wix)+1) % CHREQ_MAX;
+  if (trace_dns) fprintf(stderr,"DNS: added request at wix %d\n", chreq_wix);
+  chreq_wix = ((chreq_wix)+1) % CHREQ_MAX;
   PTUNLOCK(dns_lock);
 
   // tell forwarder to get going
@@ -219,14 +219,14 @@ dns_forwarder_thread(void *v)
     }
 
     PTLOCK(dns_lock);
-    struct chaos_dns_req *q = &chreq[*chreq_rix];
+    struct chaos_dns_req *q = &chreq[chreq_rix];
     if ((q->reqlen == 0) || (q->req == NULL)) {
-      fprintf(stderr,"%% DNS: reading request at rix %d but it is NULL!\n", *chreq_rix);
+      fprintf(stderr,"%% DNS: reading request at rix %d but it is NULL!\n", chreq_rix);
       PTUNLOCK(dns_lock);
       continue;
     }
     if (trace_dns) {
-      fprintf(stderr,"DNS: reading request at rix %d\n", *chreq_rix);
+      fprintf(stderr,"DNS: reading request at rix %d\n", chreq_rix);
       if (verbose) {
 	fprintf(stderr,"DNS request from Chaos %#o, len %d:\n", q->srcaddr, q->reqlen);
 	dns_describe_packet(q->req, q->reqlen);
@@ -267,7 +267,7 @@ dns_forwarder_thread(void *v)
       }
 
       // update the index for next round
-      *chreq_rix = ((*chreq_rix)+1) % CHREQ_MAX;
+      chreq_rix = ((chreq_rix)+1) % CHREQ_MAX;
 
       // create the ANS pkt
       memset(ans,0,sizeof(ans));
@@ -462,22 +462,6 @@ init_chaos_dns(int do_forwarding)
     dns_thread_readerp = &dns_thread_reader;
     dns_thread_writerp = &dns_thread_writer;
 #endif
-
-    // allocate shared structure
-    if ((chreq = malloc(sizeof(struct chaos_dns_req)*CHREQ_MAX)) == NULL) {
-      perror("malloc(chreq)");
-      exit(1);
-    }
-    if ((chreq_wix = malloc(sizeof(chreq_wix))) == NULL) {
-      perror("malloc(chreq_wix)");
-      exit(1);
-    }
-    if ((chreq_rix = malloc(sizeof(chreq_rix))) == NULL) {
-      perror("malloc(chreq_rix)");
-      exit(1);
-    }
-    memset((char *)chreq, 0, sizeof(struct chaos_dns_req)*CHREQ_MAX);
-    *chreq_wix = *chreq_rix = 0;
   }
 
   // initialize resolver library
@@ -561,16 +545,14 @@ print_config_dns()
     printf(", addr %s\n", inet_ntoa(statp->nsaddr_list[0].sin_addr));
   }
 
-  if (chreq != NULL) {
-    int i;
-    PTLOCK(dns_lock);
-    printf(" DNS request queue:\n  i\tsrc\tsix\tlen\n");
-    for (i = 0; i < CHREQ_MAX; i++) {
-      if (chreq[i].reqlen > 0)
-	printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
-    }
-    PTUNLOCK(dns_lock);
+  int i;
+  PTLOCK(dns_lock);
+  printf(" DNS request queue:\n  i\tsrc\tsix\tlen\n");
+  for (i = 0; i < CHREQ_MAX; i++) {
+    if (chreq[i].reqlen > 0)
+      printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
   }
+  PTUNLOCK(dns_lock);
 }
 
 // **** for debugging

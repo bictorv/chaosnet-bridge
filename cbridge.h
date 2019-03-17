@@ -227,16 +227,6 @@ struct charp_ent {
 // See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 #  define IPPROTO_CHAOS 16	/* Chaos */
 #endif
-#ifndef ETHER_MTU
-#  define ETHER_MTU 1500	/* Max # data bytes in ethernet pkt */
-#endif
-// #ifndef IP_HEADER_SIZE
-// // #define IP_HEADER_SIZE (sizeof(struct ip))
-// #  define IP_HEADER_SIZE 20
-// #endif
-#ifndef ETHER_HEADER_SIZE
-#  define ETHER_HEADER_SIZE 14 /* # bytes in header (2 addrs plus type) */
-#endif
 
 #define CHIPDEST_MAX 64
 #define CHIPDEST_NAME_LEN 128
@@ -259,27 +249,27 @@ extern int verbose, debug, stats;
 extern pthread_mutex_t rttbl_lock, linktab_lock;
 
 // Route table, indexed by subnet
-extern struct chroute *rttbl_net;
+extern struct chroute rttbl_net[];
 // and for individual hosts, simple array, where rt_braddr is the dest
-extern struct chroute *rttbl_host;
-extern int *rttbl_host_len;
+extern struct chroute rttbl_host[];
+extern int rttbl_host_len;
 
 // CHUDP link configurations
-extern struct chudest *chudpdest;	/* shared mem allocation */
-extern int *chudpdest_len;	/* cf CHUDPDEST_MAX */
+extern struct chudest chudpdest[];
+extern int chudpdest_len;	/* cf CHUDPDEST_MAX */
 
 // for LASTCN: array indexed first by net, then by host. Second level dynamically allocated.
-extern struct hostat **hosttab;
+extern struct hostat *hosttab[];
 extern pthread_mutex_t hosttab_lock;
 
 // for STATUS: simple array indexed by subnet, updated for send/receives on routes with direct link
-extern struct linkstat *linktab;
+extern struct linkstat linktab[];
 
 #if CHAOS_TLS
 // TLS link configuration
 extern pthread_mutex_t tlsdest_lock;	/* for locking tlsdest */
-extern struct tls_dest *tlsdest;	/* table of tls_dest entries */
-extern int *tlsdest_len;	/* cf TLSDEST_MAX */
+extern struct tls_dest tlsdest[];	/* table of tls_dest entries */
+extern int tlsdest_len;	/* cf TLSDEST_MAX */
 #endif
 
 // array of my chaosnet addresses, first element is the default

@@ -38,8 +38,6 @@
 
 // #### clean up routing table issues
 
-// clean up malloced datastructures (inheritance from inter-process shared memory in klh10)
-
 // logging:
 // - lock to avoid mixed output from different threads
 // -- need two output fns, one assuming a lock is held, one with built-in locking.
@@ -60,7 +58,6 @@
 // - bite the bullet and implement stream server - externally - but then perhaps in ITS?
 // - or invent a HOSTTB connectionless protocol
 
-// rewrite using pcap (replace BPF) - then implement multiple interfaces?
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
 // - make sure thois host has a subnet-specific chaos addr on all defined links
@@ -105,23 +102,24 @@ void print_arp_table();
 
 
 // Route table, indexed by subnet
-struct chroute *rttbl_net;
+struct chroute rttbl_net[256];
 // and for individual hosts, simple array, where rt_braddr is the dest
-struct chroute *rttbl_host;
-int *rttbl_host_len;
+struct chroute rttbl_host[RTTBL_HOST_MAX];
+int rttbl_host_len = 0;
 
 // array indexed first by net, then by host. Second level dynamically allocated.
-struct hostat **hosttab;
-pthread_mutex_t hosttab_lock;
+struct hostat *hosttab[256];
+pthread_mutex_t hosttab_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // simple array indexed by subnet, updated for send/receives on routes with direct link
-struct linkstat *linktab;
+struct linkstat linktab[256];
 
-pthread_mutex_t rttbl_lock, linktab_lock;
+pthread_mutex_t rttbl_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t linktab_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // @@@@ move configuration of this, and then move declaration
-struct chudest *chudpdest;	/* shared mem allocation */
-int *chudpdest_len;
+struct chudest chudpdest[CHUDPDEST_MAX];
+int chudpdest_len = 0;
 
 #if CHAOS_TLS
 
@@ -135,9 +133,9 @@ int tls_server_port = 42042;
 int do_tls = 0, do_tls_server = 0;
 int do_tls_ipv6 = 0;
 
-pthread_mutex_t tlsdest_lock;	/* for locking tlsdest */
-struct tls_dest *tlsdest;	/* table of tls_dest entries */
-int *tlsdest_len;
+pthread_mutex_t tlsdest_lock = PTHREAD_MUTEX_INITIALIZER;	/* for locking tlsdest */
+struct tls_dest tlsdest[TLSDEST_MAX];	/* table of tls_dest entries */
+int tlsdest_len = 0;
 
 #endif // CHAOS_TLS
 
@@ -177,11 +175,6 @@ void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct
 void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
-
-// shared memory datastructures and locks
-void init_chudpdest(void);
-void init_arp_table(void);
-
 
 // contacts
 void handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
@@ -231,30 +224,6 @@ int is_mychaddr(u_short addr)
   return 0;
 }
 
-void init_rttbl()
-{
-  if (pthread_mutex_init(&rttbl_lock, NULL) != 0)
-    perror("pthread_mutex_init(rttbl_lock)");
-  if ((rttbl_net = malloc(sizeof(struct chroute)*0xff)) == NULL)
-    perror("malloc(rttbl_net)");
-  if ((rttbl_host = malloc(sizeof(struct chroute)*RTTBL_HOST_MAX)) == NULL)
-    perror("malloc(rttbl_host)");
-  if ((rttbl_host_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(rttbl_host_len)");
-  memset((char *)rttbl_net, 0, sizeof(struct chroute)*0xff);
-  memset((char *)rttbl_host, 0, sizeof(struct chroute)*RTTBL_HOST_MAX);
-  *rttbl_host_len = 0;
-}
-
-void init_linktab()
-{
-  if (pthread_mutex_init(&linktab_lock, NULL) != 0)
-    perror("pthread_mutex_init(linktab_lock)");
-  if ((linktab = malloc(sizeof(struct linkstat)*256)) == NULL)
-    perror("malloc(linktab)");
-  memset((char *)linktab, 0, sizeof(struct linkstat)*256);
-}
-
 void print_link_stats() 
 {
   int i;
@@ -270,16 +239,6 @@ void print_link_stats()
     }
   }
   PTUNLOCK(linktab_lock);
-}
-
-void init_hosttab()
-{
-  if (pthread_mutex_init(&hosttab_lock, NULL) != 0)
-    perror("pthread_mutex_init(hosttab_lock)");
-  // 256 networks
-  if ((hosttab = malloc(sizeof(struct hostat *)*256)) == NULL)
-    perror("malloc(hosttab)");
-  memset((char *)hosttab, 0, sizeof(struct hostat *)*256);
 }
 
 // call this with hosttab_lock held
@@ -318,21 +277,6 @@ void print_host_stats()
   PTUNLOCK(hosttab_lock);
 }
 
-#if CHAOS_TLS
-void init_tlsdest()
-{
-  if (pthread_mutex_init(&tlsdest_lock, NULL) != 0)
-    perror("pthread_mutex_init(tlsdest_lock)");
-  if ((tlsdest = malloc(sizeof(struct chudest)*TLSDEST_MAX)) == NULL)
-    perror("malloc(tlsdest)");
-  if ((tlsdest_len = malloc(sizeof(int))) == NULL)
-    perror("malloc(tlsdest_len)");
-  memset((char *)tlsdest, 0, sizeof(struct chudest)*TLSDEST_MAX);
-  *tlsdest_len = 0;
-}
-
-#endif
-
 char *rt_linkname(u_char linktype)
 {
   switch (linktype) {
@@ -365,9 +309,9 @@ void
 print_routing_table() {
   int i;
   fprintf(stderr,"Routing tables follow:\n");
-  if (*rttbl_host_len > 0) {
+  if (rttbl_host_len > 0) {
     fprintf(stderr,"Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
-    for (i = 0; i < *rttbl_host_len; i++)
+    for (i = 0; i < rttbl_host_len; i++)
       if (rttbl_host[i].rt_link != LINK_NOLINK)
 	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
 		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
@@ -522,7 +466,7 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
   }
 
   /* Check host routing table first */
-  for (i = 0; i < *rttbl_host_len; i++) {
+  for (i = 0; i < rttbl_host_len; i++) {
     if ((also_nopath || rttbl_host[i].rt_type != RT_NOPATH)
 	&& rttbl_host[i].rt_dest == dchad
 	// Check the cost, too.
@@ -872,7 +816,7 @@ rut_sender(void *v)
 	}
       }
     /* And to all individual hosts */
-    for (i = 0; i < *rttbl_host_len; i++) {
+    for (i = 0; i < rttbl_host_len; i++) {
       if (rttbl_host[i].rt_link != LINK_INDIRECT) {
 	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
 			     rttbl_host[i].rt_braddr, rttbl_host[i].rt_dest,
@@ -1015,7 +959,7 @@ parse_route_config()
     rt = &rttbl_net[addr];
     rt->rt_dest = addr<<8;
   } else {
-    rt = &rttbl_host[(*rttbl_host_len)++];
+    rt = &rttbl_host[rttbl_host_len++];
     // #### should handle errors better and discard allocated rttbl_host entry
     rt->rt_dest = addr;
   }
@@ -1130,19 +1074,19 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
     if (he->ai_family == AF_INET) {
       struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
       struct sockaddr_in *sin = (struct sockaddr_in *)sa;
-      sin->sin_port = port;
+      sin->sin_port = htons(port);
       memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
     } else if (he->ai_family == AF_INET6) {
       struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
       struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
-      sin->sin6_port = port;
+      sin->sin6_port = htons(port);
       memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
     } else {
       fprintf(stderr,"error parsing %s host %s: unknown address family %d\n",
 	      type, tok, he->ai_family);
       return -1;
     }
-    memcpy(&nameptr, tok, nameptr_len);
+    strncpy(nameptr, tok, nameptr_len);
   } else {
     if (sep != NULL)
       *sep = ':';		/* put colon back for error messages */
@@ -1150,6 +1094,7 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
 	    type, tok, gai_strerror(res), res);
     return -1;
   }
+  
   // all ok
   return 0;
 }
@@ -1187,14 +1132,14 @@ parse_link_config()
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 
-    if (parse_ip_params("chudp", &chudpdest[*chudpdest_len].chu_sa.chu_saddr, CHUDP_PORT,
-			chudpdest[*chudpdest_len].chu_name, CHUDPDEST_NAME_LEN) < 0)
+    if (parse_ip_params("chudp", &chudpdest[chudpdest_len].chu_sa.chu_saddr, CHUDP_PORT,
+			(char *)&chudpdest[chudpdest_len].chu_name, CHUDPDEST_NAME_LEN) < 0)
       return -1;
-    if (chudpdest[*chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET)
+    if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET)
       do_udp = 1;
-    else if (chudpdest[*chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET6)
+    else if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET6)
       do_udp6 = 1;
-    (*chudpdest_len)++;
+    chudpdest_len++;
 
 #if CHAOS_TLS
   } else if (strcasecmp(tok, "tls") == 0) {
@@ -1203,11 +1148,11 @@ parse_link_config()
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 
-    if (parse_ip_params("tls", &tlsdest[*tlsdest_len].tls_sa.tls_saddr, CHAOS_TLS_PORT,
-			tlsdest[*tlsdest_len].tls_name, TLSDEST_NAME_LEN) < 0)
+    if (parse_ip_params("tls", &tlsdest[tlsdest_len].tls_sa.tls_saddr, CHAOS_TLS_PORT,
+			(char *)&tlsdest[tlsdest_len].tls_name, TLSDEST_NAME_LEN) < 0)
       return -1;
     do_tls = 1;
-    (*tlsdest_len)++;
+    tlsdest_len++;
 #endif // CHAOS_TLS
 
 #if CHAOS_IP
@@ -1253,7 +1198,7 @@ parse_link_config()
     return -1;
 
   if (rt->rt_link == LINK_CHUDP) {
-    chudpdest[*chudpdest_len - 1].chu_addr = addr;
+    chudpdest[chudpdest_len - 1].chu_addr = addr;
     if (subnetp) {
       fprintf(stderr,"Error: CHUDP links must be to hosts, not subnets.\n"
 	      "Change\n"
@@ -1262,16 +1207,16 @@ parse_link_config()
 	      " link chudp %s:%d host NN\n"
 	      " route subnet %o bridge NN\n"
 	      "where NN is the actual chudp host\n",
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
+	      chudpdest[chudpdest_len -1].chu_name, ntohs(chudpdest[chudpdest_len -1].chu_sa.chu_sin.sin_port),
 	      addr,
-	      chudpdest[*chudpdest_len -1].chu_name, ntohs(chudpdest[*chudpdest_len -1].chu_sa.chu_sin.sin_port),
+	      chudpdest[chudpdest_len -1].chu_name, ntohs(chudpdest[chudpdest_len -1].chu_sa.chu_sin.sin_port),
 	      addr);
       return -1;
     }
   }
 #if CHAOS_TLS
   if (rt->rt_link == LINK_TLS) {
-    tlsdest[*tlsdest_len - 1].tls_addr = addr;
+    tlsdest[tlsdest_len - 1].tls_addr = addr;
     if (subnetp) {
       fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
 	      "Change\n"
@@ -1280,9 +1225,9 @@ parse_link_config()
 	      " link tls %s:%d host NN\n"
 	      " route subnet %o bridge NN\n"
 	      "where NN is the actual tls host\n",
-	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      tlsdest[tlsdest_len -1].tls_name, ntohs(tlsdest[tlsdest_len -1].tls_sa.tls_sin.sin_port),
 	      addr,
-	      tlsdest[*tlsdest_len -1].tls_name, ntohs(tlsdest[*tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      tlsdest[tlsdest_len -1].tls_name, ntohs(tlsdest[tlsdest_len -1].tls_sa.tls_sin.sin_port),
 	      addr);
       return -1;
     }
@@ -1303,7 +1248,7 @@ parse_link_config()
   if (subnetp)
     rrt = &rttbl_net[addr];
   else
-    rrt = &rttbl_host[(*rttbl_host_len)++];
+    rrt = &rttbl_host[rttbl_host_len++];
   memcpy(rrt, rt, sizeof(struct chroute));
   return 0;
 }
@@ -1531,18 +1476,6 @@ main(int argc, char *argv[])
   char cfile[256] = "cbridge.conf";
   extern char *optarg;
 
-  // Init shared mem data structures
-  init_rttbl();
-  init_chudpdest();
-#if CHAOS_TLS
-  init_tlsdest();
-#endif
-#if CHAOS_ETHERP
-  init_arp_table();
-#endif
-  init_linktab();
-  init_hosttab();
-
   // parse args
   while ((c = getopt(argc, argv, "c:vdst")) != -1) {
     switch (c) {
@@ -1738,7 +1671,7 @@ main(int argc, char *argv[])
       exit(1);
     }
     int i;
-    for (i = 0; i < *tlsdest_len; i++) {
+    for (i = 0; i < tlsdest_len; i++) {
       if (!tlsdest[i].tls_serverp) {
 	if (verbose) fprintf(stderr,"Starting thread for TLS client connector %d\n", i);
 	if (pthread_create(&threads[ti++], NULL, &tls_connector, &tlsdest[i]) < 0) {

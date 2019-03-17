@@ -174,7 +174,7 @@ void * unix_input(void *v)
 
   u_char us_subnet = 0;		/* unix socket subnet */
   int i;
-  for (i = 0; i < *rttbl_host_len; i++) {
+  for (i = 0; i < rttbl_host_len; i++) {
     if (rttbl_host[i].rt_link == LINK_UNIXSOCK) {
       us_subnet = rttbl_host[i].rt_dest >> 8;
       break;
