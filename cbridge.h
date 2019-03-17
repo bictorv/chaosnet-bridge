@@ -291,6 +291,8 @@ int is_mychaddr(u_short addr);
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);
 
+struct chroute *add_to_routing_table(u_short dest, u_short braddr, u_short myaddr, int type, int link, int cost);
+
 void htons_buf(u_short *ibuf, u_short *obuf, int len);
 void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
 void ch_dumpkt(u_char *ucp, int cnt);

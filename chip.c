@@ -344,15 +344,8 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
       }
       if (!found) {
 	PTLOCK(rttbl_lock);
-	if (rttbl_host_len < RTTBL_HOST_MAX) { // double check
-	  // Add a host route (as if "link chip [host] host [srcaddr]" was given)	    
-	  rttbl_host[rttbl_host_len].rt_dest = srcaddr;
-	  rttbl_host[rttbl_host_len].rt_type = RT_FIXED;
-	  rttbl_host[rttbl_host_len].rt_cost = RTCOST_ASYNCH;
-	  rttbl_host[rttbl_host_len].rt_link = LINK_IP;
-	  rttbl_host_len++;
-	  if (verbose) print_routing_table();
-	}
+	// Add a host route (as if "link chip [host] host [srcaddr]" was given)	    
+	add_to_routing_table(srcaddr, 0, 0, RT_FIXED, RTCOST_ASYNCH, LINK_IP);
 	PTUNLOCK(rttbl_lock);
       }
     } else {

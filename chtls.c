@@ -235,21 +235,8 @@ add_tls_route(int tindex, u_short srcaddr)
     srcrt->rt_type = RT_FIXED;
     srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
   } else {
-    if (rttbl_host_len < RTTBL_HOST_MAX) {
-      // make a routing entry for host srcaddr through tls link at tlsindex
-      // "link tls [tlsdest stuff] host [srcaddr]
-      rttbl_host[rttbl_host_len].rt_dest = srcaddr;
-      rttbl_host[rttbl_host_len].rt_braddr = 0;  /* direct, not through a bridge */
-      rttbl_host[rttbl_host_len].rt_myaddr = tls_myaddr;  /* if 0, the main address is used */
-      rttbl_host[rttbl_host_len].rt_type = RT_FIXED;
-      rttbl_host[rttbl_host_len].rt_link = LINK_TLS;
-      rttbl_host[rttbl_host_len].rt_cost = RTCOST_ASYNCH;
-      rttbl_host[rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
-      srcrt = &rttbl_host[rttbl_host_len];
-      rttbl_host_len++;
-      if (verbose) print_routing_table();
-    } else
-      fprintf(stderr,"%%%% host route table full (adding TLS for %#o), increase RTTBL_HOST_MAX!\n", srcaddr);
+    // make a routing entry for host srcaddr through tls link at tlsindex
+    srcrt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_FIXED, LINK_TLS, RTCOST_ASYNCH);
   }
   PTUNLOCK(rttbl_lock);
   PTLOCK(tlsdest_lock);
@@ -371,17 +358,17 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 }
 
 // TCP low-level things
-static int tcp_server_accept(int sock, struct sockaddr *saddr, u_int *sa_len)
+static int tcp_server_accept(int sock, struct sockaddr_storage *saddr, u_int *sa_len)
 {
-  struct sockaddr caddr;
+  struct sockaddr_storage caddr;
   int fd;
-  u_int clen = sizeof(struct sockaddr);
+  u_int clen = sizeof(caddr);
   u_int *slen = &clen;
-  struct sockaddr *sa = &caddr;
+  struct sockaddr *sa = (struct sockaddr *)&caddr;
 
   if ((saddr != NULL) && (*sa_len != 0)) {
     // fill in sockaddr
-    sa = saddr;
+    sa = (struct sockaddr *)saddr;
     slen = sa_len;
   }
 
@@ -912,8 +899,8 @@ tls_server(void *v)
   tls_configure_context(ctx);
 
   while (1) {
-    struct sockaddr caddr;
-    u_int clen = sizeof(struct sockaddr);
+    struct sockaddr_storage caddr;
+    u_int clen = sizeof(caddr);
     int tsock;
 
     if ((tsock = tcp_server_accept(tls_tcp_ursock, &caddr, &clen)) < 0) {
@@ -971,7 +958,7 @@ tls_server(void *v)
 	}
 #endif
 	// create tlsdest, fill in stuff
-	add_server_tlsdest(client_cn, tsock, ssl, &caddr, clen, client_chaddr);
+	add_server_tlsdest(client_cn, tsock, ssl, (struct sockaddr *)&caddr, clen, client_chaddr);
     } else {
       // no cert
       if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");

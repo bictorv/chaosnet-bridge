@@ -306,7 +306,8 @@ char *rt_typename(u_char type)
 }
 
 void
-print_routing_table() {
+print_routing_table()
+{
   int i;
   fprintf(stderr,"Routing tables follow:\n");
   if (rttbl_host_len > 0) {
@@ -330,6 +331,28 @@ print_routing_table() {
 	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
+struct chroute *
+add_to_routing_table(u_short dest, u_short braddr, u_short myaddr, int type, int link, int cost)
+{
+  // !!!! call this with rttbl_lock already locked
+  struct chroute *r = NULL;
+  // make a routing entry for host dest through braddr using myaddr, route type, link type, cost
+  if (rttbl_host_len < RTTBL_HOST_MAX) {
+    rttbl_host[rttbl_host_len].rt_dest = dest;
+    rttbl_host[rttbl_host_len].rt_braddr = braddr;  /* direct, not through a bridge */
+    rttbl_host[rttbl_host_len].rt_myaddr = myaddr;  /* if 0, the main address is used */
+    rttbl_host[rttbl_host_len].rt_type = type;
+    rttbl_host[rttbl_host_len].rt_link = link;
+    rttbl_host[rttbl_host_len].rt_cost = cost;
+    rttbl_host[rttbl_host_len].rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+    r = &rttbl_host[rttbl_host_len];
+    rttbl_host_len++;
+    if (verbose) print_routing_table();
+  } else
+    fprintf(stderr,"%%%% host route table full (adding %s for %#o), increase RTTBL_HOST_MAX!\n",
+	    rt_linkname(link), dest);
+  return r;
+}
 
 void *
 reparse_link_host_names_thread(void *v)
