@@ -55,3 +55,9 @@ where 3xxx is the Chaosnet address on subnet 6 which you got from Björn.
 Restart `cbridge` and check that/if it works. Let Björn know!
 
 (Of course you also need to configure your local Chaosnet.)
+
+## How Björn creates your cert
+
+Mostly so I remember (see also https://jamielinux.com/docs/openssl-certificate-authority/sign-server-and-client-certificates.html):
+
+    openssl ca -config ../intermediate-ca.cnf -extensions usr_cert -days 375 -notext -md sha256 -in your.csr.pem -out certs/your.cert.pem

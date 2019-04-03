@@ -96,9 +96,11 @@ enum { RT_NOPATH=0,		/* @@@@ where is this from? */
 };
 // Link implementation types
 enum { LINK_NOLINK=0,
-       LINK_ETHER,		/* Chaos-over-Ethernet */
        LINK_UNIXSOCK,		/* Chaos-over-Unix sockets ("chaosd") */
        LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
+#if CHAOS_ETHERP
+       LINK_ETHER,		/* Chaos-over-Ethernet */
+#endif
 #if CHAOS_TLS
        LINK_TLS,		/* Chaos-over-TLS */
 #endif
@@ -159,17 +161,18 @@ struct hostat {
 #define CHUDPDEST_MAX 64
 #define CHUDPDEST_NAME_LEN 128
 struct chudest {
+  u_short chu_addr;		/* chaos address (or subnet) */
+  char chu_name[CHUDPDEST_NAME_LEN]; /* name given in config, to reparse */
   union {
     struct sockaddr chu_saddr;	/* generic sockaddr */
     struct sockaddr_in chu_sin;	/* IP addr */
     struct sockaddr_in6 chu_sin6;  /* IPv6 addr */
   } chu_sa;
-  u_short chu_addr;		/* chaos address (or subnet) */
-  char chu_name[CHUDPDEST_NAME_LEN]; /* name given in config, to reparse perhaps */
 };
 
 // ================ TLS ================
 
+#if CHAOS_TLS
 #define TLSDEST_MAX 32
 // max length of a CN
 #define TLSDEST_NAME_LEN 128
@@ -197,7 +200,10 @@ struct tls_dest {
 // timeout in select (and if no open connections)
 #define TLS_INPUT_RETRY_TIMEOUT 1
 
+#endif // CHAOS_TLS
+
 // ================ Ether ================
+#if CHAOS_ETHERP
 // ARP stuff
 #ifndef ETHERTYPE_CHAOS
 # define ETHERTYPE_CHAOS 0x0804
@@ -217,12 +223,14 @@ struct tls_dest {
 #define CHARP_MAX 16
 #define CHARP_MAX_AGE (60*5)	// ARP cache limit
 struct charp_ent {
-  u_char charp_eaddr[ETHER_ADDR_LEN];
   u_short charp_chaddr;
+  u_char charp_eaddr[ETHER_ADDR_LEN];
   time_t charp_age;
 };
+#endif // CHAOS_ETHERP
 
 // ================ IP ================
+#if CHAOS_IP
 #ifndef IPPROTO_CHAOS
 // See https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 #  define IPPROTO_CHAOS 16	/* Chaos */
@@ -231,14 +239,15 @@ struct charp_ent {
 #define CHIPDEST_MAX 64
 #define CHIPDEST_NAME_LEN 128
 struct chipdest {
+  u_short chip_addr;		/* chaos address or subnet */
+  char chip_name[CHIPDEST_NAME_LEN];
   union {
     struct sockaddr chip_saddr;
     struct sockaddr_in chip_sin;	/* IPv4 addr */
     struct sockaddr_in6 chip_sin6;
   } chip_sa;
-  u_short chip_addr;		/* chaos address or subnet */
-  char chip_name[CHIPDEST_NAME_LEN];
 };
+#endif // CHAOS_IP
 
 // ================ data declarations ================
 
@@ -300,13 +309,13 @@ void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);
 char *ip46_ntoa(struct sockaddr *sa, char *buf, int buflen);
 
-#if CHAOS_IP
-int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
-#endif
-
 unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
 void ch_11_puts(unsigned char *out, unsigned char *in);
 char *ch_opcode_name(int op);
+
+#if CHAOS_IP
+int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
+#endif
 
 // @@@@ move to respective module
 void print_routing_table(void);

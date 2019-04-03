@@ -188,6 +188,7 @@ void * unix_input(void *v)
 	close(unixsock);
       unixsock = -1;		// avoid using it until it's reopened
       if (verbose) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
+      // @@@@ progressive backoff, like in chtls?
       sleep(5);			/* wait a bit to let chaosd restart */
       unixsock = u_connect_to_server();
     } else {
