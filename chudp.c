@@ -196,25 +196,26 @@ add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
     PTUNLOCK(chudp_lock);
 
     // see if there is a host route for this, otherwise add it
-    if (rttbl_host_len < RTTBL_HOST_MAX) {
-      int i, found = 0;
-      for (i = 0; i < rttbl_host_len; i++) {
-	if (rttbl_host[i].rt_dest == srcaddr) {
-	  found = 1;
-	  break;
-	}
+    PTLOCK(rttbl_lock);
+    struct chroute *rt = find_in_routing_table(srcaddr, 1, 1);
+    if (rt != NULL) {
+      // old route exists
+      if (debug) fprintf(stderr,"CHUDP: Old %s route to %#o found (type %s), updating to CHUDP Dynamic\n",
+			 rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));
+#if CHAOS_TLS
+      if (rt->rt_link == LINK_TLS) {
+	close_tls_route(rt);
       }
-      if (!found) {
-	PTLOCK(rttbl_lock);
-	// Add a host route (as if "link chudp [host] host [srcaddr]" was given)	    
-	add_to_routing_table(srcaddr, 0, 0, RT_FIXED, RTCOST_ASYNCH, LINK_CHUDP);
-	PTUNLOCK(rttbl_lock);
-      }
+#endif
+      rt->rt_link = LINK_CHUDP;
+      rt->rt_type = RT_DYNAMIC;
+      rt->rt_cost = RT_ASYNCH;
+      rt->rt_cost_updated = time(NULL);
     } else {
-      if (stats || verbose) fprintf(stderr,"%%%% Host routing table full, not adding new route.\n");
-      // and the chudp dest is useless, really.
-      return;
+      // Add a host route
+      add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_CHUDP, RTCOST_ASYNCH);
     }
+    PTUNLOCK(rttbl_lock);
   } else {
     if (stats || verbose) fprintf(stderr,"%%%% CHUDP table full, not adding new destination.\n");
     return;
@@ -284,11 +285,9 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	  if ((rt != NULL) && (rt->rt_dest == srcaddr)) { // it's on another link!
 	    if (verbose) fprintf(stderr,"CHUDP host %#o is on another link than where it came from (%#o), rejecting/dropping\n",
 				 srcaddr, chudpdest[i].chu_addr);
-#if COLLECT_STATS
 	    PTLOCK(linktab_lock);
 	    linktab[(chudpdest[i].chu_addr)>>8].pkt_rejected++;
 	    PTUNLOCK(linktab_lock);
-#endif
 	    PTUNLOCK(chudp_lock);
 	    return 0;
 	  }
@@ -340,11 +339,9 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 #endif
   if ((cks = ch_checksum(&buf[CHUDP_HEADERSIZE],cnt-CHUDP_HEADERSIZE)) != 0) {
     if (verbose) fprintf(stderr,"[Bad checksum %#x (CHUDP)]\n",cks);
-#if COLLECT_STATS
-      PTLOCK(linktab_lock);
-      linktab[srcaddr>>8].pkt_crcerr++;
-      PTUNLOCK(linktab_lock);
-#endif
+    PTLOCK(linktab_lock);
+    linktab[srcaddr>>8].pkt_crcerr++;
+    PTUNLOCK(linktab_lock);
     return 0;
   }
 
@@ -375,7 +372,6 @@ void * chudp_input(void *v)
 	srcaddr = ch_srcaddr(ch);
       struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
       forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			srcrt != NULL ? srcrt->rt_type : RT_BRIDGE,
 			srcrt != NULL ? srcrt->rt_cost : RTCOST_ASYNCH,
 			(u_char *)ch, len, LINK_CHUDP);
     } else

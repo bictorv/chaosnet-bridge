@@ -289,7 +289,6 @@ char *rt_linkname(u_char linktype)
   case LINK_IP: return "CHIP";
 #endif
   case LINK_ETHER: return "Ether";
-  case LINK_INDIRECT: return "Indir";
   default: return "Unknown?";
   }
 }
@@ -298,9 +297,8 @@ char *rt_typename(u_char type)
 {
   switch (type) {
   case RT_NOPATH: return "NoPath";
-  case RT_DIRECT: return "Direct";
-  case RT_FIXED: return "Fixed";
-  case RT_BRIDGE: return "Bridge";
+  case RT_STATIC: return "Static";
+  case RT_DYNAMIC: return "Dynamic";
   default: return "Unknown?";
   }
 }
@@ -337,9 +335,11 @@ add_to_routing_table(u_short dest, u_short braddr, u_short myaddr, int type, int
   // !!!! call this with rttbl_lock already locked
   struct chroute *r = NULL;
   // make a routing entry for host dest through braddr using myaddr, route type, link type, cost
+  // @@@@ perhaps validate data?
   if (rttbl_host_len < RTTBL_HOST_MAX) {
     rttbl_host[rttbl_host_len].rt_dest = dest;
     rttbl_host[rttbl_host_len].rt_braddr = braddr;  /* direct, not through a bridge */
+    // @@@@ find a "myaddr" entry for the subnet of the bridge
     rttbl_host[rttbl_host_len].rt_myaddr = myaddr;  /* if 0, the main address is used */
     rttbl_host[rttbl_host_len].rt_type = type;
     rttbl_host[rttbl_host_len].rt_link = link;
@@ -370,7 +370,7 @@ reparse_link_host_names_thread(void *v)
 // Look at an incoming RUT pkt given a connection type and a cost, 
 // and update our routing table if appropriate. 
 void
-peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
+peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 {
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short src, pksrc = ch_srcaddr(cha);
@@ -407,36 +407,34 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
     for (i = 0; i < pkdlen; i += 4) {
       rsub = WORD16(&data[i]);	/* subnet nr */
       rcost = WORD16(&data[i+2]);  /* cost from that bridge */
-      if (rttbl_net[rsub].rt_type == RT_DIRECT && (verbose||debug) )
+      if (rttbl_net[rsub].rt_type == RT_STATIC && (verbose||debug) )
 	fprintf(stderr,"DEBUG: Received RUT info for subnet %#o from host %#o.\n"
-		" We have DIRECT connction to that subnet - "
+		" We have a STATIC route to that subnet - "
 		" bug in network structure or sender's software?\n",
 		rsub, src);
       if ((rttbl_net[rsub].rt_type == RT_NOPATH)  /* we have no path currently */
 	  /* we had a higher (or equal, to update age) cost */
 	  || ((rttbl_net[rsub].rt_cost >= (rcost + cost))
-	      /* but don't update if we're directly connected already */
-	      && (rttbl_net[rsub].rt_type != RT_DIRECT))
+	      /* but don't update if we have a static route */
+	      && (rttbl_net[rsub].rt_type != RT_STATIC))
 	  ) {
 	if (rttbl_net[rsub].rt_type == RT_NOPATH) {
 	  if (verbose) fprintf(stderr," Adding new route to %#o type %d cost %d via %#o\n",
-			       rsub, type, (rcost + cost), src);
+			       rsub, RT_DYNAMIC, (rcost + cost), src);
 	} else if ((rcost + cost) != rttbl_net[rsub].rt_cost) {
 	  if (verbose) fprintf(stderr," Updating cost for route to %#o type %d cost %d -> %d via %#o\n",
-			       rsub, type, rttbl_net[rsub].rt_cost, (rcost + cost), src);
+			       rsub, RT_DYNAMIC, rttbl_net[rsub].rt_cost, (rcost + cost), src);
 	} else
 	  if (verbose) fprintf(stderr," Updating age for route to %#o type %d cost %d via %#o\n",
-			       rsub, type, rttbl_net[rsub].rt_cost, src);
+			       rsub, RT_DYNAMIC, rttbl_net[rsub].rt_cost, src);
 	rttbl_updated = 1;
 	PTLOCK(rttbl_lock);
-	rttbl_net[rsub].rt_type = RT_BRIDGE; // type;
+	rttbl_net[rsub].rt_type = RT_DYNAMIC; // type;
 	rttbl_net[rsub].rt_cost = (rcost + cost);  /* add the cost to go to that bridge */
-	// Subnet routes via CHUDP/TLS must be indirect (look up bridge host too)
-	if ((linktype == LINK_CHUDP) ||  (linktype == LINK_TLS) || (linktype == LINK_IP))
-	  rttbl_net[rsub].rt_link = LINK_INDIRECT;
-	else
-	  rttbl_net[rsub].rt_link = linktype;
+	rttbl_net[rsub].rt_link = linktype;
+	// Note the bridge: the sender of the RUT pkt
 	rttbl_net[rsub].rt_braddr = src;
+	// Note it's a subnet route
 	rttbl_net[rsub].rt_dest = src & 0xff00;
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
 	PTUNLOCK(rttbl_lock);
@@ -449,16 +447,14 @@ peek_routing(u_char *pkt, int pklen, int type, int cost, u_short linktype)
 void 
 update_route_costs()
 {
-  // update the cost of all non-direct, non-fixed routes by their age,
+  // update the cost of all dynamic routes by their age,
   // according to AIM 628 p15.
   int i;
   u_int costinc;
 
   PTLOCK(rttbl_lock);
   for (i = 0; i < 256; i++) {
-    if ((rttbl_net[i].rt_type != RT_NOPATH) &&
-	(rttbl_net[i].rt_type != RT_DIRECT) &&
-	(rttbl_net[i].rt_type != RT_FIXED)) {
+    if (rttbl_net[i].rt_type == RT_DYNAMIC) {
       /* Age by 1 every 4 seconds, max limit, but not fir direct or asynch (cf AIM 628 p15) */
       costinc = (time(NULL) - rttbl_net[i].rt_cost_updated)/4;
       if (debug) fprintf(stderr,"RUT to %d, cost %d => %d\n",i,
@@ -490,69 +486,43 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 
   /* Check host routing table first */
   for (i = 0; i < rttbl_host_len; i++) {
-    if ((also_nopath || rttbl_host[i].rt_type != RT_NOPATH)
-	&& rttbl_host[i].rt_dest == dchad
-	// Check the cost, too.
-	&& rttbl_host[i].rt_cost < RTCOST_HIGH) {
-      if (rttbl_host[i].rt_link == LINK_INDIRECT) {
-	// #### validate config once instead of every time, and simply return the recursive call here
-	if (rttbl_host[i].rt_braddr != 0) {
-	  struct chroute *res = find_in_routing_table(rttbl_host[i].rt_braddr, 0, also_nopath);
-	  if (res == NULL) {
-	    fprintf(stderr,"Warning: find route: Indirect link to %#o found, but no route to its bridge %#o\n",
-		    dchad, rttbl_host[i].rt_braddr);
-	    print_routing_table();
-	  }
-	  return res;
-	} else {
-	  fprintf(stderr,"Warning: find route: Indirect link to %#o found, but no bridge address given!\n",
-		  dchad);
-	  return NULL;
-	}
-      } else {
-	struct chroute *rt = &rttbl_host[i];
-	if (debug) fprintf(stderr,"Found direct route %d to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", i, dchad,
-			   rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
-	return &rttbl_host[i];
-      }
+    if ((rttbl_host[i].rt_dest == dchad)
+	&& 
+	(also_nopath ||		/* look for old routes */
+	 ((rttbl_host[i].rt_type != RT_NOPATH)
+	  && 
+	  // Check the cost, too.
+	  (rttbl_host[i].rt_cost < RTCOST_HIGH)))) {
+      struct chroute *rt = &rttbl_host[i];
+      if (debug) fprintf(stderr,"Found host route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", dchad,
+			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
+      return rt;
     }
   }
-  if (only_host) return NULL;	// avoid non-well-founded recursion
-
+  if (only_host) return NULL;
+  
   /* Then check subnet routing table */
   u_short sub = (dchad>>8)&0xff;
-  if ((also_nopath || rttbl_net[sub].rt_type != RT_NOPATH)
+  if ((rttbl_net[sub].rt_type != RT_NOPATH)
       // Check the cost, too.
-      && rttbl_net[sub].rt_cost < RTCOST_HIGH) {
-    if (rttbl_net[sub].rt_link == LINK_INDIRECT) {
-      // #### validate config once instead of every time, and simply return the recursive call here
-      if (is_mychaddr(rttbl_net[sub].rt_braddr)
-	  // this case would be stupid
-	  || (rttbl_net[sub].rt_braddr == rttbl_net[sub].rt_myaddr))
+      && (rttbl_net[sub].rt_cost < RTCOST_HIGH)) {
+    struct chroute *rt = &rttbl_net[sub];
+    if (rttbl_net[sub].rt_braddr != 0) {
+      if (is_mychaddr(rttbl_net[sub].rt_braddr))
 	// This is an announce-only route, when we have individual
 	// links to all hosts on the subnet - but apparently not to
 	// this one. Drop it.
 	return NULL;
-      else if (rttbl_net[sub].rt_braddr != 0) {
-	struct chroute *res = find_in_routing_table(rttbl_net[sub].rt_braddr, 0, also_nopath);
-	if (res == NULL) {
-	  fprintf(stderr,"Warning: find route: Indirect link to host %#o on subnet %#o found, but no route to its bridge %#o\n",
-		  dchad, sub, rttbl_net[sub].rt_braddr);
-	  print_routing_table();
-	}
-	return res;
-      } else {
-	fprintf(stderr,"Warning: find route: Indirect link to subnet %#o found, but no bridge address given!\n",
-		sub);
-	return NULL;
-      }
-    } else {
-      struct chroute *rt = &rttbl_net[sub];
-      if (debug) fprintf(stderr,"Found subnet %d route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", sub, dchad,
+      
+      if (debug) fprintf(stderr,"Found subnet %#o route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", sub, dchad,
 			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
       return &rttbl_net[sub];
+    } else {
+      fprintf(stderr,"Found subnet %#o route without bridge: %s dest %#o %s bridge %#o myaddr %#o\n", sub,
+	      rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
     }
   }
+  // no route found
   return NULL;
 }
 
@@ -625,7 +595,7 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     dlen += CHAOS_HW_TRAILERSIZE;  /* add trailer if needed */
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
   // HW dest is next-hop destination
-  tr->ch_hw_destaddr = rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch));
+  tr->ch_hw_destaddr = rt->rt_braddr > 0 ? htons(rt->rt_braddr) : (rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch)));
   // HW sender is me!
   tr->ch_hw_srcaddr = rt->rt_myaddr > 0 ? htons(rt->rt_myaddr) : htons(mychaddr[0]);
 
@@ -663,7 +633,7 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   }
 }
 
-void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen, u_char src_linktype) 
+void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
 {
   struct chaos_header *ch = (struct chaos_header *)data;
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
@@ -710,9 +680,9 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
   if (is_mychaddr(ch_srcaddr(ch)) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
     // Should not happen. Unless Unix sockets.
     if (src_linktype != LINK_UNIXSOCK) {
-      if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, type %s, link %s) \n",
+      if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, link %s) \n",
 			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
-			   rt_typename(type), rt_linkname(src_linktype));
+			   rt_linkname(src_linktype));
       if (debug) ch_dumpkt(data, dlen);
     }
     return;
@@ -726,7 +696,7 @@ void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen
     return;
   }
 
-  peek_routing(data, dlen, type, cost, src_linktype); /* check for RUT */
+  peek_routing(data, dlen, cost, src_linktype); /* check for RUT */
 
   // To me?
   if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
@@ -830,23 +800,25 @@ rut_sender(void *v)
 
   while (1) {
     /* Send to all subnets which are not through a bridge */
-    for (i = 0; i < 256; i++)
-      if ((rttbl_net[i].rt_type != RT_NOPATH) && (rttbl_net[i].rt_type != RT_BRIDGE)
-	  && (rttbl_net[i].rt_link != LINK_INDIRECT)) {
+    for (i = 0; i < 256; i++) {
+      struct chroute *rt = &rttbl_net[i];
+      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for net %#o\n", i);
 	if ((c = make_routing_table_pkt(i<<8, &pkt[0], sizeof(pkt))) > 0) {
-	  send_rut_pkt(&rttbl_net[i], pkt, c);
+	  send_rut_pkt(rt, pkt, c);
 	}
       }
+    }
     /* And to all individual hosts */
     for (i = 0; i < rttbl_host_len; i++) {
-      if (rttbl_host[i].rt_link != LINK_INDIRECT) {
+      struct chroute *rt = &rttbl_host[i];
+      if (RT_DIRECT(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
-			     rttbl_host[i].rt_braddr, rttbl_host[i].rt_dest,
-			     rttbl_host[i].rt_braddr == 0 ? rttbl_host[i].rt_dest : rttbl_host[i].rt_braddr);
-	if ((c = make_routing_table_pkt(rttbl_host[i].rt_braddr == 0 ? rttbl_host[i].rt_dest : rttbl_host[i].rt_braddr,
+			     rt->rt_braddr, rt->rt_dest,
+			     rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr);
+	if ((c = make_routing_table_pkt(rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr,
 					&pkt[0], sizeof(pkt))) > 0) {
-	  send_rut_pkt(&rttbl_host[i], pkt, c);
+	  send_rut_pkt(rt, pkt, c);
 	}
       }
     }
@@ -896,9 +868,18 @@ parse_route_params(struct chroute *rt, u_short addr)
   char *tok;
   u_short sval;
 
-  rt->rt_type = RT_FIXED;	/* manually configured, probably fixed? */
-  rt->rt_link = LINK_INDIRECT;	/* i.e. look up route to bridge */
+  rt->rt_type = RT_STATIC;	/* manually configured */
   rt->rt_cost = RTCOST_ETHER;	/* default */
+  rt->rt_link = LINK_NOLINK;
+
+  struct chroute *brt = find_in_routing_table(rt->rt_braddr, 1, 1);
+  if (brt != NULL) {
+    rt->rt_link = brt->brt_link;
+    rt->rt_cost = brt->brt_cost;
+  } else {
+    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown. Perhaps you should reorder your config?\n",
+	    rt->rt_dest);
+  }
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
@@ -913,6 +894,7 @@ parse_route_params(struct chroute *rt, u_short addr)
       else
 	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
 		NCHADDR);
+#if 0
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -932,6 +914,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
 	return -1;
       }
+#endif
     } else if (strcasecmp(tok, "cost") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0)
@@ -955,7 +938,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 static int
 parse_route_config() 
 {
-  // route host|subnet x bridge y [cost c type t]
+  // route host|subnet x bridge y [cost c]
   u_short addr, sval;
   struct chroute *rt;
   int subnetp = 0;
@@ -1030,6 +1013,7 @@ parse_link_args(struct chroute *rt, u_short addr)
       else
 	fprintf(stderr,"out of local chaos addresses, please increase NCHADDR from %d\n",
 		NCHADDR);
+#if 0
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -1049,6 +1033,7 @@ parse_link_args(struct chroute *rt, u_short addr)
 	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
 	return -1;
       }
+#endif
     } else if (strcasecmp(tok, "cost") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0)
@@ -1139,25 +1124,26 @@ parse_link_config()
   }
   if (strcasecmp(tok, "ether") == 0) {
     do_ether = 1;
-    // one day, parse interface name
+    // @@@@ one day, parse interface name
     rt->rt_link = LINK_ETHER;
-    rt->rt_type = RT_DIRECT;
+    rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_DIRECT;
   } else if (strcasecmp(tok, "unix") == 0) {
     do_unix = 1;
     rt->rt_link = LINK_UNIXSOCK;
-    rt->rt_type = RT_DIRECT;
+    rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_DIRECT;
 
   } else if (strcasecmp(tok, "chudp") == 0) {
     rt->rt_link = LINK_CHUDP;
-    rt->rt_type = RT_FIXED;
+    rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 
     if (parse_ip_params("chudp", &chudpdest[chudpdest_len].chu_sa.chu_saddr, CHUDP_PORT,
 			(char *)&chudpdest[chudpdest_len].chu_name, CHUDPDEST_NAME_LEN) < 0)
       return -1;
+    // @@@@ don't do it separately for ipv6/v4
     if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET)
       do_udp = 1;
     else if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET6)
@@ -1167,7 +1153,7 @@ parse_link_config()
 #if CHAOS_TLS
   } else if (strcasecmp(tok, "tls") == 0) {
     rt->rt_link = LINK_TLS;
-    rt->rt_type = RT_FIXED;
+    rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 
@@ -1181,7 +1167,7 @@ parse_link_config()
 #if CHAOS_IP
   } else if (strcasecmp(tok, "chip") == 0) {
     rt->rt_link = LINK_IP;
-    rt->rt_type = RT_FIXED;
+    rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 

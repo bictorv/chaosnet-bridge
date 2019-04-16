@@ -231,12 +231,16 @@ add_tls_route(int tindex, u_short srcaddr)
   srcrt = find_in_routing_table(srcaddr, 1, 1);
   if (srcrt != NULL) {
     // old route exists
-    if (tls_debug) fprintf(stderr,"TLS route to %#o found (type %s), updating to Fixed\n", srcaddr, rt_typename(srcrt->rt_type));
-    srcrt->rt_type = RT_FIXED;
-    srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+    if (tls_debug) fprintf(stderr,"TLS: Old %s route to %#o found (type %s), updating to TLS Dynamic\n",
+			   rt_linkname(srcrt->rt_link), srcaddr, rt_typename(srcrt->rt_type));
+    // @@@@ tear down any other link?
+    srcrt->rt_link = LINK_TLS;
+    srcrt->rt_type = RT_DYNAMIC;
+    srcrt->rt_cost = RT_ASYNCH;
+    srcrt->rt_cost_updated = time(NULL);
   } else {
     // make a routing entry for host srcaddr through tls link at tlsindex
-    srcrt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_FIXED, LINK_TLS, RTCOST_ASYNCH);
+    srcrt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
   }
   PTUNLOCK(rttbl_lock);
   PTLOCK(tlsdest_lock);
@@ -268,6 +272,29 @@ close_tlsdest(struct tls_dest *td)
     td->tls_sock = 0;
   }
   PTUNLOCK(tlsdest_lock);
+}
+
+void
+close_tls_route(struct chroute *rt) 
+{
+  int i;
+  struct tls_dest *td = NULL;
+  if ((rt->rt_link == LINK_TLS) && (rt->rt_type != RT_NOPATH)) {
+    PTLOCK(tlsdest_lock);
+    for (i = 0; i < tlsdest_len; i++) {
+      if (tlsdest[i].tls_addr == rt->rt_braddr) {
+	td = &tlsdest[i];
+	break;
+      }
+    }
+    PTUNLOCK(tlsdest_lock);
+    if (td != NULL) {
+      if (tls_debug) fprintf(stderr,"TLS: closing link to bridge addr %#o\n", rt->rt_braddr);
+      close_tlsdest(td);
+    } else if (tls_debug) fprintf(stderr,"%%%% TLS: can't find TLS link to bridge addr %#o to close\n", rt->rt_braddr);
+  } else
+    fprintf(stderr,"%%%% TLS: asked to close TLS link to bridge addr %#o which is link %s type %s\n", rt->rt_braddr,
+	    rt_linkname(rt->rt_link), rt_typename(rt->rt_type));
 }
 
 static void
@@ -649,7 +676,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
     // need to also disable network routes this is a bridge for
     int i;
     for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
+      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
     PTUNLOCK(rttbl_lock);
@@ -1083,7 +1110,6 @@ void * tls_input(void *v)
 
 	    // forward to destination
 	    forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			      srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 			      srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			      (u_char *)&data, len, LINK_TLS);  /* forward to appropriate links */
 	  } else {

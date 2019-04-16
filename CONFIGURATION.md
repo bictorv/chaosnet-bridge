@@ -44,7 +44,6 @@ See also the [example configurations](EXAMPLES.md).
 | Option | Description |
 | --- | --- |
 | `myaddr` *%o* | defines the address of this bridge on this link (e.g. its address on that subnet) |
-| `type` *t* | sets the type of link: direct, bridge, fixed. Default type for "route" configs is fixed. Default cost for direct=direct, bridge=ether, fixed=ether |
 | `cost` *c* | sets the cost of the route: direct, ether, asynch. [should support actual numbers too?] |
 
 ### LINKTYPE:
@@ -56,7 +55,7 @@ See also the [example configurations](EXAMPLES.md).
 | `tls` *host:port* | this is a Chaos-over-TLS link, client end, connecting to *host* (ip or name) at *port* (default 42042). Default type: fixed, cost: asynch. |
 | `chip` *addr* | this is a Chaos-over-IP link to *addr* (IPv4, IPv6, or hostname). Default type: fixed, cost: asynch. |
 
-Note that while links implicitly define a route to the subnet/host,
+Note that while links implicitly define a (static) route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;
 you need an additional route definition for the subnet.
 (See the MX-11 [example config](EXAMPLES.md).)
@@ -73,5 +72,6 @@ broadcast address.
 A `link` definition is automatically created when using "dynamic" chudp (or chip)
 and a chudp (or chip) pkt arrives from a new source.
 
-A `route` definition (of type "bridge") is automatically created when a
-Chaosnet routing (RUT) pkt is received, describing a new or better route to a subnet.
+A dynamic `route` definition is automatically created when a Chaosnet
+routing (RUT) pkt is received, describing a new or better route to a
+subnet.

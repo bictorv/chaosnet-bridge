@@ -333,26 +333,26 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
 
     // see if there is a host route for this, otherwise add it
     // @@@@ break this out to separate fn, used also for CHUDP and TLS
-    if (rttbl_host_len < RTTBL_HOST_MAX) {
-      int i, found = 0;
-      for (i = 0; i < rttbl_host_len; i++) {
-	if (rttbl_host[i].rt_dest == srcaddr) {
-	  // @@@@ check it's the intended link type
-	  found = 1;
-	  break;
-	}
+    PTLOCK(rttbl_lock);
+    struct chroute *rt = find_in_routing_table(srcaddr, 1, 1);
+    if (rt != NULL) {
+      // old route exists
+      if (debug) fprintf(stderr,"CHIP: Old %s route to %#o found (type %s), updating to CHIP Dynamic\n",
+			 rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));
+#if CHAOS_TLS
+      if (rt->rt_link == LINK_TLS) {
+	close_tls_route(rt);
       }
-      if (!found) {
-	PTLOCK(rttbl_lock);
-	// Add a host route (as if "link chip [host] host [srcaddr]" was given)	    
-	add_to_routing_table(srcaddr, 0, 0, RT_FIXED, RTCOST_ASYNCH, LINK_IP);
-	PTUNLOCK(rttbl_lock);
-      }
+#endif
+      rt->rt_link = LINK_IP;
+      rt->rt_type = RT_DYNAMIC;
+      rt->rt_cost = RT_ASYNCH;
+      rt->rt_cost_updated = time(NULL);
     } else {
-      if (stats || verbose) fprintf(stderr,"%%%% Host routing table full, not adding new route.\n");
-      // and the chip dest is useless, really.
-      return;
+      // Add a host route
+      add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_IP, RTCOST_ASYNCH);
     }
+    PTUNLOCK(rttbl_lock);
   } else {
     if (stats || verbose) fprintf(stderr,"%%%% CHIP table full, not adding new destination.\n");
     return;
@@ -436,7 +436,6 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   // Find source route, and dispatch the packet
   struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
   forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-		    srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 		    srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 		    chdata, chlen, LINK_IP);
 }
@@ -688,7 +687,7 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
 {
   int i, found = 0;
 
-  if (rt->rt_type == RT_BRIDGE)
+  if (RT_BRIDGED(rt))
     // the bridge is on IP, but the dest might not be
     dchad = rt->rt_braddr;
   // look up in chipdest, send using libnet

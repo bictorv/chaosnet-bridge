@@ -19,6 +19,7 @@
 // TODO
 // rewrite using pcap (replace BPF) - then implement multiple interfaces?
 
+// @@@@ replace by mapping from net to interface (name and fd and arpfd)
 extern char ifname[128];
 
 /* **** Chaos-over-Ethernet functions **** */
@@ -36,6 +37,7 @@ static int ifix;		/* ethernet interface index */
 
 
 // Chaos ARP table
+// @@@@ avoid ARP flooding, back off
 static struct charp_ent charp_list[CHARP_MAX];
 static int charp_len = 0;			/* cf CHARP_MAX */
 
@@ -855,9 +857,9 @@ static void handle_arp_input(u_char *data, int dlen)
     } else {
       if (debug) printf("ARP: Looking up %#o...\n",dchad);
       struct chroute *found = find_in_routing_table(dchad, 0, 0);
-      if (found != NULL && found->rt_dest == dchad
-	  && found->rt_link != LINK_ETHER && found->rt_type == RT_DIRECT) {
-	/* Only proxy for non-ether links, and not for indirect (bridge) routes */
+      if ((found != NULL) && (found->rt_dest == dchad)
+	  && (found->rt_link != LINK_ETHER) && !RT_BRIDGED(found)) {
+	/* Only proxy for non-ether links, and not for bridged routes */
 	if (verbose) {
 	  fprintf(stderr,"ARP: Sending proxy ARP reply for %#o to %#o\n", dchad, schad);
 	  // fprintf(stderr," route link %s, type %s\n", rt_linkname(found->rt_link), rt_typename(found->rt_type));
@@ -956,7 +958,6 @@ void * ether_input(void *v)
 	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE)
 	  len = ch_nbytes(cha)+CHAOS_HEADERSIZE;
 #else // what we would have done...
-#if COLLECT_STATS
 	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
 	  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	  // check for bogus/ignorable trailer or checksum.
@@ -985,7 +986,6 @@ void * ether_input(void *v)
 	    fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
 		    tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
 	}
-#endif // COLLECT_STATS
 #endif // 0
 	// check where it's coming from
 	u_short srcaddr;
@@ -998,7 +998,6 @@ void * ether_input(void *v)
 	  srcaddr = ch_srcaddr(cha);
 	struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
 	forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			  srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 			  srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			  (u_char *)&data, len, LINK_ETHER);  /* forward to appropriate links */
       }
@@ -1009,6 +1008,7 @@ void * ether_input(void *v)
 void
 forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
+  // @@@@ TODO: look for the right interface
   if (debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
   // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
   dlen -= CHAOS_HW_TRAILERSIZE;
@@ -1017,7 +1017,7 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
     if (debug) fprintf(stderr,"Forward: Broadcasting on ether from %#o\n", schad);
     send_packet(chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
   } else {
-    if (rt->rt_type == RT_BRIDGE)
+    if (RT_BRIDGED(rt))
       // the bridge is on Ether, but the dest might not be
       dchad = rt->rt_braddr;
     u_char *eaddr = find_arp_entry(dchad);

@@ -88,11 +88,11 @@
 
 // ==== Route/routing/link structures
 
-// Connection types, cf AIM 628 p14
-enum { RT_NOPATH=0,		/* @@@@ where is this from? */
-       RT_DIRECT,		/* Directly connected (cable etc) */
-       RT_FIXED,		/* Fixed (unvarying) bridge */
-       RT_BRIDGE,		/* Bridge (perhaps known via RUT packet) */
+// Connection types, cf AIM 628 p14, which states Direct, Fixed, and Bridged.
+// We have other ways of saying whether it's bridged or direct, but instead need this:
+enum { RT_NOPATH=0,
+       RT_STATIC,		/* Static route (from config file) */
+       RT_DYNAMIC,		/* Dynamic, from RUT pkt or "dynamic" CHUPD/CHIP/etc */
 };
 // Link implementation types
 enum { LINK_NOLINK=0,
@@ -107,7 +107,6 @@ enum { LINK_NOLINK=0,
 #if CHAOS_IP
        LINK_IP,			/* Chaos-over-IP */
 #endif
-       LINK_INDIRECT,		/* look up the bridge address */
 };
 
 // Routing costs, cf AIM 628 p15
@@ -126,7 +125,7 @@ enum { LINK_NOLINK=0,
 #define RTTBL_HOST_MAX 64
 // Route configuration entry
 struct chroute {
-  u_short rt_dest;		/* destination addr (subnet<<8 or host) - redundant for subnets */
+  u_short rt_dest;		/* destination addr (subnet<<8 or host) - NOT redundant for subnets, we might not know the index in rttbl_host */
   u_short rt_braddr;		/* bridge address */
   u_short rt_myaddr;		/* my specific address (on that subnet), or use mychaddr */
   u_char rt_type;		/* connection type */
@@ -134,6 +133,9 @@ struct chroute {
   u_short rt_cost;		/* cost */
   time_t rt_cost_updated;	/* cost last updated */
 };
+#define RT_BRIDGED(rt) (rt->rt_braddr != 0)
+#define RT_DIRECT(rt) (rt->rt_braddr == 0)
+#define RT_SUBNETP(rt) ((rt->rt_dest & 0xff) == 0)
 
 // STATUS protocol, MIT AIM 628.
 // Info on this host's direct connection to a subnet. 
@@ -313,6 +315,10 @@ unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
 void ch_11_puts(unsigned char *out, unsigned char *in);
 char *ch_opcode_name(int op);
 
+#if CHAOS_TLS
+void close_tls_route(struct chroute *rt);
+#endif
+
 #if CHAOS_IP
 int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
 #endif
@@ -324,7 +330,7 @@ void print_chudp_config(void);
 void print_arp_table(void);
 
 struct chroute *find_in_routing_table(u_short dchad, int only_host, int also_nopath);
-void forward_chaos_pkt(int src, u_char type, u_char cost, u_char *data, int dlen, u_char src_linktype);
+void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_linktype);
 
 #if CHAOS_DNS
 int dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len);
