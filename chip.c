@@ -346,7 +346,7 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
 #endif
       rt->rt_link = LINK_IP;
       rt->rt_type = RT_DYNAMIC;
-      rt->rt_cost = RT_ASYNCH;
+      rt->rt_cost = RTCOST_ASYNCH;
       rt->rt_cost_updated = time(NULL);
     } else {
       // Add a host route

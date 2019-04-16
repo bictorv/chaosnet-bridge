@@ -236,7 +236,7 @@ add_tls_route(int tindex, u_short srcaddr)
     // @@@@ tear down any other link?
     srcrt->rt_link = LINK_TLS;
     srcrt->rt_type = RT_DYNAMIC;
-    srcrt->rt_cost = RT_ASYNCH;
+    srcrt->rt_cost = RTCOST_ASYNCH;
     srcrt->rt_cost_updated = time(NULL);
   } else {
     // make a routing entry for host srcaddr through tls link at tlsindex

@@ -874,8 +874,8 @@ parse_route_params(struct chroute *rt, u_short addr)
 
   struct chroute *brt = find_in_routing_table(rt->rt_braddr, 1, 1);
   if (brt != NULL) {
-    rt->rt_link = brt->brt_link;
-    rt->rt_cost = brt->brt_cost;
+    rt->rt_link = brt->rt_link;
+    rt->rt_cost = brt->rt_cost;
   } else {
     fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown. Perhaps you should reorder your config?\n",
 	    rt->rt_dest);

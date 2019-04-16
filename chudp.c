@@ -209,7 +209,7 @@ add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
 #endif
       rt->rt_link = LINK_CHUDP;
       rt->rt_type = RT_DYNAMIC;
-      rt->rt_cost = RT_ASYNCH;
+      rt->rt_cost = RTCOST_ASYNCH;
       rt->rt_cost_updated = time(NULL);
     } else {
       // Add a host route
