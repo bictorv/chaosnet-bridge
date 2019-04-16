@@ -518,8 +518,11 @@ find_in_routing_table(u_short dchad, int only_host, int also_nopath)
 			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
       return &rttbl_net[sub];
     } else {
-      fprintf(stderr,"Found subnet %#o route without bridge: %s dest %#o %s bridge %#o myaddr %#o\n", sub,
-	      rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
+      // No bridge, so directly connected subnet route, e.g. Ether
+      if (debug) fprintf(stderr,"Found directly connected subnet %#o route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n",
+			 sub, dchad,
+			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
+      return &rttbl_net[sub];
     }
   }
   // no route found

@@ -643,7 +643,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
 	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
 	printf("\n");
       } else if (stats || verbose) {
-	printf("ARP %s for protocol %#x",
+	printf("ARP %s for protocol 0x%04x",
 	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
 	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
 		(arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
