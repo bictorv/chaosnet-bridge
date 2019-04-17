@@ -137,7 +137,10 @@ pthread_mutex_t tlsdest_lock = PTHREAD_MUTEX_INITIALIZER;	/* for locking tlsdest
 struct tls_dest tlsdest[TLSDEST_MAX];	/* table of tls_dest entries */
 int tlsdest_len = 0;
 
+int parse_tls_config_line(void);
 #endif // CHAOS_TLS
+
+int parse_chudp_config_line(void);
 
 #if CHAOS_IP
 int do_chip = 0;
@@ -164,7 +167,7 @@ char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STAT
 static int nchaddr = 0;
 u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int chudp_port = 42042;		// default UDP port
-u_char chudp_dynamic = 0;	// dynamically add CHUDP entries for new receptions
+int chudp_dynamic = 0; // dynamically add CHUDP entries for new receptions
 char ifname[128] = "eth0";	// default interface name
 int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
@@ -339,7 +342,21 @@ add_to_routing_table(u_short dest, u_short braddr, u_short myaddr, int type, int
   if (rttbl_host_len < RTTBL_HOST_MAX) {
     rttbl_host[rttbl_host_len].rt_dest = dest;
     rttbl_host[rttbl_host_len].rt_braddr = braddr;  /* direct, not through a bridge */
-    // @@@@ find a "myaddr" entry for the subnet of the bridge
+    // find a "myaddr" entry for the subnet of the bridge
+    if ((myaddr == 0) && (braddr != 0)) {
+      int i;
+      for (i = 0; i < nchaddr; i++) {
+	if ((mychaddr[i] & 0xff00) == (braddr & 0xff00)) {
+	  myaddr = mychaddr[i];
+	  if (verbose) fprintf(stderr,"%%%% Fill in myaddr %#o for new route to %#o via %#o (%s)\n",
+			       myaddr, dest, braddr, rt_linkname(link));
+	  break;
+	}
+      }
+      if (myaddr == 0)
+	fprintf(stderr,"%%%% Don't know my address for net %#o when adding route to %#o via %#o (%s)\n",
+		(braddr & 0xff00)>>8, dest, braddr, rt_linkname(link));
+    }
     rttbl_host[rttbl_host_len].rt_myaddr = myaddr;  /* if 0, the main address is used */
     rttbl_host[rttbl_host_len].rt_type = type;
     rttbl_host[rttbl_host_len].rt_link = link;
@@ -600,7 +617,22 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   // HW dest is next-hop destination
   tr->ch_hw_destaddr = rt->rt_braddr > 0 ? htons(rt->rt_braddr) : (rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch)));
   // HW sender is me!
-  tr->ch_hw_srcaddr = rt->rt_myaddr > 0 ? htons(rt->rt_myaddr) : htons(mychaddr[0]);
+  // Find proper mychaddr entry if none given
+  if (rt->rt_myaddr <= 0) {
+    // Should not happen, add_to_routing_table now tries to fill it in.
+    for (i = 0; i < nchaddr; i++) {
+      if ((mychaddr[i] & 0xff00) == (ntohs(tr->ch_hw_destaddr) & 0xff00)) {
+	tr->ch_hw_srcaddr = htons(mychaddr[i]);
+	break;
+      }
+    }
+    if (tr->ch_hw_srcaddr == 0) {
+      if (verbose) fprintf(stderr,"%%%% Can't find my address for net %#o, using default (%#o)\n",
+			   ntohs(tr->ch_hw_destaddr) & 0xff00, mychaddr[0]);
+      tr->ch_hw_srcaddr = htons(mychaddr[0]);  /* better than none? */
+    }
+  } else
+    tr->ch_hw_srcaddr = htons(rt->rt_myaddr);
 
   int cks = ch_checksum(data,dlen-2); /* Don't checksum the checksum field */
   tr->ch_hw_checksum = htons(cks);
@@ -879,8 +911,28 @@ parse_route_params(struct chroute *rt, u_short addr)
   if (brt != NULL) {
     rt->rt_link = brt->rt_link;
     rt->rt_cost = brt->rt_cost;
+  } else if (is_mychaddr(rt->rt_braddr) && RT_SUBNETP(rt)) {
+    // Announce-only route (for subnet with only host links)
+    // Find a link that matches the subnet, use its link type & cost
+    PTLOCK(rttbl_lock);
+    int i;
+    for (i = 0; i < rttbl_host_len; i++) {
+      if ((rttbl_host[i].rt_dest & 0xff00) == rt->rt_dest) {
+	rt->rt_link = rttbl_host[i].rt_link;
+	rt->rt_cost = rttbl_host[i].rt_cost;
+	rt->rt_cost_updated = time(NULL);
+	if (verbose) fprintf(stderr,"route to %#o: found matching link to %#o (%s cost %d)\n",
+			     rt->rt_dest, rttbl_host[i].rt_dest, rt_linkname(rt->rt_link), rt->rt_cost);
+	break;
+      }
+    }
+    PTUNLOCK(rttbl_lock);
+    if (rt->rt_link == LINK_NOLINK) {
+      fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n",
+	      rt->rt_dest);
+    }
   } else {
-    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown. Perhaps you should reorder your config?\n",
+    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown. Perhaps you need to reorder your config?\n",
 	    rt->rt_dest);
   }
 
@@ -1305,66 +1357,14 @@ parse_config_line(char *line)
     return 0;
   }
   else if (strcasecmp(tok, "chudp") == 0) {
-    tok = strtok(NULL, " \t\r\n");
-    chudp_port = atoi(tok);
     do_udp = 1;
-    // check for "dynamic" arg, for dynamic updates from new sources
-    ;
-    while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
-      if (strncmp(tok,"dynamic",sizeof("dynamic")) == 0)
-	chudp_dynamic = 1;
-      else if (strncmp(tok,"static",sizeof("static")) == 0)
-	chudp_dynamic = 0;
-      else if (strncmp(tok,"ipv6", sizeof("ipv6")) == 0)
-	do_udp6 = 1;
-      else {
-	fprintf(stderr,"bad chudp keyword %s\n", tok);
-	return -1;
-      }
-    }
-    if (verbose) printf("Using CHUDP port %d (%s)%s\n",chudp_port, chudp_dynamic ? "dynamic" : "static",
-			(do_udp6 ? ", listening to IPv6" : ""));
-    return 0;
+    return parse_chudp_config_line();
   }
 #if CHAOS_TLS
   // tls key keyfile cert certfile ca-chain ca-chain-cert-file [myaddr %o] [ server [ portnr ]]
   else if (strcasecmp(tok, "tls") == 0) {
-    while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
-      if (strncmp(tok,"key",sizeof("key")) == 0) {
-	tok = strtok(NULL, " \t\r\n");
-	if (tok == NULL) { fprintf(stderr,"tls: no key file specified\n"); return -1; }
-	strncpy(tls_key_file, tok, PATH_MAX);
-      } else if (strncmp(tok,"cert",sizeof("cert")) == 0) {
-	tok = strtok(NULL, " \t\r\n");
-	if (tok == NULL) { fprintf(stderr,"tls: no cert file specified\n"); return -1; }
-	strncpy(tls_cert_file, tok, PATH_MAX);
-      } else if (strncmp(tok,"ca-chain",sizeof("ca-chain")) == 0) {
-	tok = strtok(NULL, " \t\r\n");
-	if (tok == NULL) { fprintf(stderr,"tls: no ca-chain file specified\n"); return -1; }
-	strncpy(tls_ca_file, tok, PATH_MAX);
-      } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
-	tok = strtok(NULL, " \t\r\n");
-	if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
-	tls_myaddr = atoi(tok);
-      }
-      else if (strncmp(tok,"server",sizeof("server")) == 0) {
-	tok = strtok(NULL, " \t\r\n");
-	if (tok != NULL)
-	  tls_server_port = atoi(tok);
-	do_tls_server = 1;
-      } else if (strncmp(tok,"ipv6",sizeof("ipv6")) == 0) {
-	do_tls_ipv6 = 1;
-      } else {
-	fprintf(stderr,"bad tls keyword %s\n", tok);
-	return -1;
-      }
-    }
-    if (verbose) {
-      printf("Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
-      if (do_tls_server)
-	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6+IPv4" : "IPv4");
-    }
-    return 0;
+    do_tls = 1;
+    return parse_tls_config_line();
   }
 #endif // CHAOS_TLS
 #if CHAOS_DNS
