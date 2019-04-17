@@ -21,6 +21,7 @@ extern char tls_ca_file[];
 extern char tls_key_file[];
 extern char tls_cert_file[];
 extern int do_tls_ipv6;
+extern int do_tls_server;
 extern int tls_server_port;
 extern int tls_debug;
 
@@ -29,6 +30,58 @@ static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
 static void tls_inform_tcp_is_open(struct tls_dest *td);
 static void tls_wait_for_reconnect_signal(struct tls_dest *td);
+
+int
+parse_tls_config_line()
+{
+  char *tok = NULL;
+  while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
+    if (strncmp(tok,"key",sizeof("key")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no key file specified\n"); return -1; }
+      strncpy(tls_key_file, tok, PATH_MAX);
+    } else if (strncmp(tok,"cert",sizeof("cert")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no cert file specified\n"); return -1; }
+      strncpy(tls_cert_file, tok, PATH_MAX);
+    } else if (strncmp(tok,"ca-chain",sizeof("ca-chain")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no ca-chain file specified\n"); return -1; }
+      strncpy(tls_ca_file, tok, PATH_MAX);
+    } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
+      tls_myaddr = atoi(tok);
+    }
+    else if (strncmp(tok,"server",sizeof("server")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok != NULL)
+	tls_server_port = atoi(tok);
+      do_tls_server = 1;
+    } else if (strncmp(tok,"ipv6",sizeof("ipv6")) == 0) {
+      do_tls_ipv6 = 1;
+    } else if (strcasecmp(tok, "debug") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
+	tls_debug = 1;
+      else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0))
+	tls_debug = 0;
+      else {
+	fprintf(stderr,"tls: bad 'debug' arg %s specified\n", tok);
+	return -1;
+      }
+    } else {
+      fprintf(stderr,"bad tls keyword %s\n", tok);
+      return -1;
+    }
+  }
+  if (verbose) {
+    printf("Using TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+    if (do_tls_server)
+      printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6+IPv4" : "IPv4");
+  }
+  return 0;
+}
 
 // send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
 void
@@ -225,18 +278,27 @@ void print_tlsdest_config()
 static struct chroute *
 add_tls_route(int tindex, u_short srcaddr)
 {
-  struct chroute * srcrt = NULL;
+  struct chroute * rt = NULL;
   PTLOCK(rttbl_lock);
   // find any old entry (only host route, also nopath)
-  srcrt = find_in_routing_table(srcaddr, 1, 1);
-  if (srcrt != NULL) {
+  rt = find_in_routing_table(srcaddr, 1, 1);
+  if (rt != NULL) {
     // old route exists
-    if (tls_debug) fprintf(stderr,"TLS route to %#o found (type %s), updating to Fixed\n", srcaddr, rt_typename(srcrt->rt_type));
-    srcrt->rt_type = RT_FIXED;
-    srcrt->rt_cost_updated = time(NULL); // cost doesn't change but keep track of when it came up
+    if ((rt->rt_link != LINK_TLS) && (rt->rt_type != RT_STATIC)) {
+      if (tls_debug || debug)
+	fprintf(stderr,"TLS: Old %s route to %#o found (type %s), updating to TLS Dynamic\n",
+		rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));
+      rt->rt_link = LINK_TLS;
+      rt->rt_type = RT_DYNAMIC;
+      rt->rt_cost = RTCOST_ASYNCH;
+      rt->rt_cost_updated = time(NULL);
+    } else if ((rt->rt_type == RT_STATIC) && (tls_debug || debug)) {
+      fprintf(stderr,"TLS: not updating static route to %#o via %#o (%s)\n",
+	      srcaddr, rt->rt_braddr, rt_linkname(rt->rt_link));
+    }
   } else {
     // make a routing entry for host srcaddr through tls link at tlsindex
-    srcrt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_FIXED, LINK_TLS, RTCOST_ASYNCH);
+    rt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
   }
   PTUNLOCK(rttbl_lock);
   PTLOCK(tlsdest_lock);
@@ -246,7 +308,7 @@ add_tls_route(int tindex, u_short srcaddr)
   if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
   tlsdest[tindex].tls_addr = srcaddr;
   PTUNLOCK(tlsdest_lock);
-  return srcrt;
+  return rt;
 }
 
 static void
@@ -268,6 +330,29 @@ close_tlsdest(struct tls_dest *td)
     td->tls_sock = 0;
   }
   PTUNLOCK(tlsdest_lock);
+}
+
+void
+close_tls_route(struct chroute *rt) 
+{
+  int i;
+  struct tls_dest *td = NULL;
+  if ((rt->rt_link == LINK_TLS) && (rt->rt_type != RT_NOPATH)) {
+    PTLOCK(tlsdest_lock);
+    for (i = 0; i < tlsdest_len; i++) {
+      if (tlsdest[i].tls_addr == rt->rt_braddr) {
+	td = &tlsdest[i];
+	break;
+      }
+    }
+    PTUNLOCK(tlsdest_lock);
+    if (td != NULL) {
+      if (tls_debug) fprintf(stderr,"TLS: closing link to bridge addr %#o\n", rt->rt_braddr);
+      close_tlsdest(td);
+    } else if (tls_debug) fprintf(stderr,"%%%% TLS: can't find TLS link to bridge addr %#o to close\n", rt->rt_braddr);
+  } else
+    fprintf(stderr,"%%%% TLS: asked to close TLS link to bridge addr %#o which is link %s type %s\n", rt->rt_braddr,
+	    rt_linkname(rt->rt_link), rt_typename(rt->rt_type));
 }
 
 static void
@@ -531,7 +616,7 @@ void *tls_connector(void *arg)
     SSL_set_fd(ssl, tsock);
     int v = 0;
     if ((v = SSL_connect(ssl)) <= 0) {
-      fprintf(stderr,"%%%% Fatal error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
+      fprintf(stderr,"%%%% Error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
       int err = SSL_get_error(ssl, v);
       ERR_print_errors_fp(stderr);
       close(tsock);
@@ -649,7 +734,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
     // need to also disable network routes this is a bridge for
     int i;
     for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_INDIRECT) && (rttbl_net[i].rt_braddr == chaddr))
+      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
     PTUNLOCK(rttbl_lock);
@@ -1061,9 +1146,10 @@ void * tls_input(void *v)
 	    // find the route to where from
 	    struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
 
-	    if (srcrt == NULL) {
+	    if ((srcrt == NULL) || (srcrt->rt_link != LINK_TLS)) {
 	      // add route
-	      if (tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
+	      if ((srcrt == NULL) && tls_debug) fprintf(stderr,"TLS: No route found to source %#o for tlsdest %d - adding it\n", srcaddr, tindex);
+	      else if (tls_debug) fprintf(stderr,"TLS: Old route found to source %#o for tlsdest %d of type %s - updating it\n", srcaddr, tindex, rt_linkname(srcrt->rt_link));
 #if CHAOS_DNS
 	      if (tls_debug) {
 		u_char hname[256];  /* random size limit */
@@ -1083,7 +1169,6 @@ void * tls_input(void *v)
 
 	    // forward to destination
 	    forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			      srcrt != NULL ? srcrt->rt_type : RT_DIRECT,
 			      srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			      (u_char *)&data, len, LINK_TLS);  /* forward to appropriate links */
 	  } else {

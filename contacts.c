@@ -117,18 +117,16 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
 
   PTLOCK(rttbl_lock);
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
-    if (rttbl_net[sub].rt_type != RT_NOPATH) {
+    struct chroute *rt = &rttbl_net[sub];
+    if (rt->rt_type != RT_NOPATH) {
       // Method: if < 0400: interface number; otherwise next hop address
-      if ((rttbl_net[sub].rt_type == RT_DIRECT) || (is_mychaddr(rttbl_net[sub].rt_braddr))) {
+      if (RT_DIRECT(rt) || (is_mychaddr(rt->rt_braddr))) {
 	// interface nr - use link type
-	if (rttbl_net[sub].rt_link == LINK_INDIRECT)
-	  data[sub*2] = htons(LINK_CHUDP);  /* assume this */
-	else
-	  data[sub*2] = htons(rttbl_net[sub].rt_link);
+	data[sub*2] = htons(rt->rt_link);
       } else {
-	data[sub*2] = htons(rttbl_net[sub].rt_braddr);
+	data[sub*2] = htons(rt->rt_braddr);
       }
-      cost = rttbl_net[sub].rt_cost;
+      cost = rt->rt_cost;
       data[sub*2+1] = htons(cost);
       if (debug) fprintf(stderr," Adding routing for subnet %#o (meth %#o, cost %d)\n",
 			 sub, data[sub*2], cost);
