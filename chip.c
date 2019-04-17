@@ -332,8 +332,8 @@ add_chip_route(u_short srcaddr)
   PTLOCK(rttbl_lock);
   struct chroute *rt = find_in_routing_table(srcaddr, 1, 1);
   if (rt != NULL) {
-    // old route exists
-    if (rt->rt_link != LINK_IP) { 
+    // old route exists; don't overwrite static routes though
+    if ((rt->rt_link != LINK_IP) && (rt->rt_type != RT_STATIC)) { 
       if (chip_debug || debug)
 	fprintf(stderr,"CHIP: Old %s route to %#o found (type %s), updating to CHIP Dynamic\n",
 		rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));
@@ -346,6 +346,9 @@ add_chip_route(u_short srcaddr)
       rt->rt_type = RT_DYNAMIC;
       rt->rt_cost = RTCOST_ASYNCH;
       rt->rt_cost_updated = time(NULL);
+    } else if ((rt->rt_type == RT_STATIC) && (chip_debug || debug)) {
+      fprintf(stderr,"CHIP: not updating static route to %#o via %#o (%s)\n",
+	      srcaddr, rt->rt_braddr, rt_linkname(rt->rt_link));
     }
   } else {
     // Add a host route

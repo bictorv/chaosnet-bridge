@@ -278,21 +278,27 @@ void print_tlsdest_config()
 static struct chroute *
 add_tls_route(int tindex, u_short srcaddr)
 {
-  struct chroute * srcrt = NULL;
+  struct chroute * rt = NULL;
   PTLOCK(rttbl_lock);
   // find any old entry (only host route, also nopath)
-  srcrt = find_in_routing_table(srcaddr, 1, 1);
-  if (srcrt != NULL) {
+  rt = find_in_routing_table(srcaddr, 1, 1);
+  if (rt != NULL) {
     // old route exists
-    if (tls_debug) fprintf(stderr,"TLS: Old %s route to %#o found (type %s), updating to TLS Dynamic\n",
-			   rt_linkname(srcrt->rt_link), srcaddr, rt_typename(srcrt->rt_type));
-    srcrt->rt_link = LINK_TLS;
-    srcrt->rt_type = RT_DYNAMIC;
-    srcrt->rt_cost = RTCOST_ASYNCH;
-    srcrt->rt_cost_updated = time(NULL);
+    if ((rt->rt_link != LINK_TLS) && (rt->rt_type != RT_STATIC)) {
+      if (tls_debug || debug)
+	fprintf(stderr,"TLS: Old %s route to %#o found (type %s), updating to TLS Dynamic\n",
+		rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));
+      rt->rt_link = LINK_TLS;
+      rt->rt_type = RT_DYNAMIC;
+      rt->rt_cost = RTCOST_ASYNCH;
+      rt->rt_cost_updated = time(NULL);
+    } else if ((rt->rt_type == RT_STATIC) && (tls_debug || debug)) {
+      fprintf(stderr,"TLS: not updating static route to %#o via %#o (%s)\n",
+	      srcaddr, rt->rt_braddr, rt_linkname(rt->rt_link));
+    }
   } else {
     // make a routing entry for host srcaddr through tls link at tlsindex
-    srcrt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
+    rt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
   }
   PTUNLOCK(rttbl_lock);
   PTLOCK(tlsdest_lock);
@@ -302,7 +308,7 @@ add_tls_route(int tindex, u_short srcaddr)
   if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
   tlsdest[tindex].tls_addr = srcaddr;
   PTUNLOCK(tlsdest_lock);
-  return srcrt;
+  return rt;
 }
 
 static void

@@ -74,4 +74,7 @@ and a chudp (or chip) pkt arrives from a new source.
 
 A dynamic `route` definition is automatically created when a Chaosnet
 routing (RUT) pkt is received, describing a new or better route to a
-subnet.
+subnet. 
+Dynamic routes are also defined automatically by incoming TLS
+connections (to the server) and when using "dynamic" chudp/chip,
+unless there is an existing static route.
