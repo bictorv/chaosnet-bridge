@@ -1168,6 +1168,8 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
     if (dchad == 0) {		/* broadcast */
       if (chether_debug || debug) fprintf(stderr,"Forward: Broadcasting on ether %s from %#o\n", chethdest[i].cheth_ifname, schad);
       send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
+      done = 1;
+      // don't break, send to all interfaces
     } else {
       u_short idchad = dchad;
       if (RT_BRIDGED(rt))
