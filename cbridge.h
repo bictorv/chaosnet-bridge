@@ -238,6 +238,7 @@ struct chethdest {
   u_char cheth_ea[ETHER_ADDR_LEN]; /* ether address */
   int cheth_chfd;		/* Chaos pkt fd */
   int cheth_arpfd;		/* ARP pkt fd */
+  int cheth_ifix;		/* interface index */
 };
 
 #endif // CHAOS_ETHERP
