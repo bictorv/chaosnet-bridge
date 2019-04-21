@@ -17,31 +17,152 @@
 #include "cbridge.h"
 
 // TODO
-// rewrite using pcap (replace BPF) - then implement multiple interfaces?
-
-// @@@@ replace by mapping from net to interface (name and fd and arpfd)
-extern char ifname[128];
+// rewrite using pcap (replace BPF)
 
 /* **** Chaos-over-Ethernet functions **** */
 
-static int chfd = 0, arpfd = 0;
-
-static u_char myea[ETHER_ADDR_LEN];		/* My Ethernet address */
 static u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
 
+static int chether_debug = 0;
+
+// Ether interface table
+static int nchethdest = 0;
+static struct chethdest chethdest[CHETHDEST_MAX];
+
 static pthread_mutex_t charp_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#if !ETHER_BPF
-static int ifix;		/* ethernet interface index */
-#endif
-
+static pthread_mutex_t cheth_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Chaos ARP table
 // @@@@ avoid ARP flooding, back off
 static struct charp_ent charp_list[CHARP_MAX];
 static int charp_len = 0;			/* cf CHARP_MAX */
 
-// Find the ethernet address of the configured interface (ifname)
+static void get_my_ea(void);
+
+void
+print_config_ether() 
+{
+  int i, j;
+  if (nchethdest == 0) {
+    printf("Not using Ethernet\n");
+    return;
+  } else
+    printf("Configured %d ether links:\n", nchethdest);
+  if (chethdest[0].cheth_ea[0] == 0 && chethdest[0].cheth_ea[1] == 0) {
+    // Find it if needed
+    get_my_ea();
+  }
+  for (i = 0; i < nchethdest; i++) {
+    printf("Using Ethernet interface %s",
+	   chethdest[i].cheth_ifname);
+    if (chether_debug)
+      printf(" (interface index %d)", chethdest[i].cheth_ifix);
+    printf(", ether address ");
+    for (j = 0; j < ETHER_ADDR_LEN-1; j++)
+      printf("%02X:",chethdest[i].cheth_ea[j]);
+    printf("%02X\n",chethdest[i].cheth_ea[j]);
+    printf(" for %s %#o, my Chaos address %#o\n",
+	   (chethdest[i].cheth_addr & 0xff) == 0 ? "subnet" : "host",
+	   (chethdest[i].cheth_addr & 0xff) == 0 ? chethdest[i].cheth_addr >> 8 : chethdest[i].cheth_addr,
+	   chethdest[i].cheth_myaddr);
+    if (chether_debug)
+      printf(" ARP fd %d, Chaos fd %d", chethdest[i].cheth_arpfd, chethdest[i].cheth_chfd);
+    printf("\n");
+  }
+}
+
+int
+parse_ether_link_config()
+{
+  char *tok = NULL;
+
+  PTLOCK(cheth_lock);
+  // clear the entry we're creating
+  memset(&chethdest[nchethdest], 0, sizeof(struct chethdest));
+
+  tok = strtok(NULL, " \t\r\n");
+  if (tok != NULL) {
+    // if (chether_debug) fprintf(stderr,"ether link interface %d: %s\n", nchethdest, tok);
+    strncpy(chethdest[nchethdest].cheth_ifname, tok, IFNAMSIZ);
+  } else {
+    fprintf(stderr,"ether error: no interface name given\n");
+    PTUNLOCK(cheth_lock);
+    return -1;
+  }
+  nchethdest++;
+  PTUNLOCK(cheth_lock);
+  return 0;
+}
+
+int
+postparse_ether_link_config(struct chroute *rt)
+{
+  PTLOCK(cheth_lock);
+  struct chethdest *cd = &chethdest[nchethdest-1];
+  cd->cheth_myaddr = rt->rt_myaddr;
+  cd->cheth_addr = rt->rt_dest;
+  PTUNLOCK(cheth_lock);
+
+  if (cd->cheth_addr == 0) {
+    fprintf(stderr,"Config error: link ether ifname %s: no addr given\n", cd->cheth_ifname);
+    return -1;
+  } else if ((cd->cheth_addr & 0xff) != 0) {
+    // host address given
+    fprintf(stderr,"Config error: Ether links must be to subnets, not hosts.\n"
+	    "Change\n"
+	    " link ether %s host %o ...\n"
+	    "to\n"
+	    " link ether %s subnet %o ...\n",
+	    cd->cheth_ifname, cd->cheth_addr, cd->cheth_ifname, cd->cheth_addr>>8);
+    return -1;
+  }
+
+  if (cd->cheth_myaddr == 0) {
+    int i;
+    extern int nchaddr;
+    for (i = 0; i < nchaddr; i++)
+      if ((mychaddr[i] & 0xff00) == cd->cheth_addr) {
+	cd->cheth_myaddr = mychaddr[i];
+	if (chether_debug) fprintf(stderr,"defaulting myaddr for ether %s to %#o\n", cd->cheth_ifname, mychaddr[i]);
+	break;
+      }
+    if (cd->cheth_myaddr == 0) {
+      fprintf(stderr,"Config error: link ether %s: no myaddr given\n", cd->cheth_ifname);
+      return -1;
+    }
+  } else if ((cd->cheth_myaddr & 0xff00) != cd->cheth_addr) {
+    fprintf(stderr,"Config error: link ether %s: myaddr %o is on subnet %o, which doesn't match subnet %o specified\n",
+	    cd->cheth_ifname, cd->cheth_myaddr, cd->cheth_myaddr>>8, cd->cheth_addr>>8);
+    return -1;
+  }
+  add_mychaddr(cd->cheth_myaddr);
+  return 0;
+}
+
+int 
+parse_ether_config_line()
+{
+  char *tok = NULL;
+  while ((tok = strtok(NULL," \t\r\n")) != NULL) {
+    if (strcasecmp(tok,"debug") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0))
+	chether_debug = 1;
+      else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0))
+	chether_debug = 0;
+      else {
+	fprintf(stderr,"ether: bad 'debug' arg %s specified\n", tok);
+	return -1;
+      }
+    } else {
+      fprintf(stderr,"ether config keyword %s unknown (note: interface names now go in \"link\" config)\n", tok);
+      return -1;
+    }
+  }
+  return 0;
+}
+
+// Find the ethernet address of the configured interfaces
 static void get_my_ea() {
   struct ifaddrs *ifx, *ifs = NULL;
   if (getifaddrs(&ifs) < 0) {
@@ -53,21 +174,44 @@ static void get_my_ea() {
 #else
   struct sockaddr_ll *sll = NULL;
 #endif
+  int i, ngot = 0;
+  // int ifn = 0;
+  PTLOCK(cheth_lock);
   for (ifx = ifs; ifx != NULL; ifx = ifx->ifa_next) {
-    if (strcmp(ifx->ifa_name, ifname) == 0) {
-      if (ifx->ifa_addr != NULL) {
+    // ifn++;
+    for (i = 0; i < nchethdest; i++) {
+      if (strcmp(ifx->ifa_name, chethdest[i].cheth_ifname) == 0) {
+	if (ifx->ifa_flags & IFF_UP) {
+	  if (ifx->ifa_addr != NULL) {
+	    // if (chether_debug) fprintf(stderr,"got address of interface %s (dest %d, if %d)\n", chethdest[i].cheth_ifname, i, ifn);
+	    ngot++;
 #if ETHER_BPF
-	sdl = (struct sockaddr_dl *)ifx->ifa_addr;
-	memcpy(&myea, LLADDR(sdl), sdl->sdl_alen);
+	    sdl = (struct sockaddr_dl *)ifx->ifa_addr;
+	    if ((sdl->sdl_alen > 0) && (sdl->sdl_alen == ETHER_ADDR_LEN))
+	      memcpy(&chethdest[i].cheth_ea, LLADDR(sdl), sdl->sdl_alen);
+	    else if (chether_debug)
+	      fprintf(stderr,"DL address len for %s is %d, not copying\n", ifx->ifa_name, sdl->sdl_alen);
 #else
-	sll = (struct sockaddr_ll *)ifx->ifa_addr;
-	memcpy(&myea, sll->sll_addr, sll->sll_halen);
+	    sll = (struct sockaddr_ll *)ifx->ifa_addr;
+	    if ((sll->sll_halen > 0) && (sll->sll_halen == ETHER_ADDR_LEN))
+	      memcpy(&chethdest[i].cheth_ea, sll->sll_addr, sll->sll_halen);
+	    else if (chether_debug)
+	      fprintf(stderr,"LL address len for %s is %d, not copying\n", ifx->ifa_name, sll->sll_halen);
 #endif
+	  } else {
+	    fprintf(stderr,"ether interface %s has no address\n", ifx->ifa_name);
+	  }
+	} else if (chether_debug) {
+	  fprintf(stderr,"ether interface %s is not up\n", ifx->ifa_name);
+	}
       }
-      break;
     }
   }
+  PTUNLOCK(cheth_lock);
   freeifaddrs(ifs);
+  if (ngot < nchethdest)
+    fprintf(stderr,"Failed to get ether addresses for all interfaces! Got %d out of %d\n",
+	    ngot, nchethdest);
 }
 
 #if ETHER_BPF
@@ -135,7 +279,7 @@ struct bpf_insn bpf_jump(unsigned short code, bpf_u_int32 k,
 
 /* Get a PACKET/DGRAM socket for the specified ethernet type, on the specified interface */
 static int
-get_packet_socket(u_short ethtype, char *ifname)
+get_packet_socket(u_short ethtype, struct chethdest *cd)
 {
   int fd;
 #if ETHER_BPF
@@ -161,8 +305,8 @@ get_packet_socket(u_short ethtype, char *ifname)
     fprintf(stderr,"Last tried %s\n", bpfname);
     return -1;
   } else
-    if (debug) fprintf(stderr,"Opened BPF device %s successfully, fd %d\n",
-		       bpfname, fd);
+    if (chether_debug || debug) fprintf(stderr,"Opened BPF device %s successfully, fd %d\n",
+					bpfname, fd);
 
   // set max packet length (shorter for Chaos?). Must be set before interface is attached!
   x = BPF_MTU;
@@ -264,8 +408,8 @@ get_packet_socket(u_short ethtype, char *ifname)
   else {
     // For Ethernet pkts, also filter for our own address or broadcast,
     // in case someone else makes the interface promiscuous
-    u_short ea1 = (myea[0]<<8)|myea[1];
-    u_long ea2 = (((myea[2]<<8)|myea[3])<<8|myea[4])<<8 | myea[5];
+    u_short ea1 = ((cd->cheth_ea[0])<<8)|(cd->cheth_ea[1]);
+    u_long ea2 = ((((cd->cheth_ea[2])<<8)|(cd->cheth_ea[3]))<<8|(cd->cheth_ea[4]))<<8 | (cd->cheth_ea[5]);
     *p++ = BPFI_LD(PKBOFF_EDEST+2);	/* last word of Ether dest */
     *p++ = BPFI_CAME(ea2);
     *p++ = BPFI_SKIP(3); /* no match, skip forward and check for broadcast */
@@ -288,7 +432,7 @@ get_packet_socket(u_short ethtype, char *ifname)
     close(fd);
     return -1;
 #if 0 // debug
-  } else if (debug) {
+  } else if (chether_debug || debug) {
     fprintf(stderr,"BPF filter len %d:\n", pfp->bf_len);
     for (x = 0; x < pfp->bf_len; x++)
       fprintf(stderr," %d: 0x%04X %2d %2d 0x%0X\n",
@@ -302,19 +446,19 @@ get_packet_socket(u_short ethtype, char *ifname)
 
   // Attach to interface
   memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+  strncpy(ifr.ifr_name, cd->cheth_ifname, IFNAMSIZ);
   if (ioctl(fd, BIOCSETIF, (void *)&ifr) < 0) {
     perror("ioctl(BIOCSETIF)");
     close(fd);
     return -1;
   }
 
-  if (myea[0] == 0 && myea[1] == 0) {
+  if (cd->cheth_ea[0] == 0 && cd->cheth_ea[1] == 0) {
     // Find it if needed
     get_my_ea();
   }
-  if (myea[0] == 0 && myea[1] == 0) {
-    fprintf(stderr,"Cannot find MAC addr of interface %s\n", ifname);
+  if (cd->cheth_ea[0] == 0 && cd->cheth_ea[1] == 0) {
+    fprintf(stderr,"Cannot find MAC addr of interface %s\n", cd->cheth_ifname);
     close(fd);
     return -1;
   }    
@@ -336,26 +480,35 @@ get_packet_socket(u_short ethtype, char *ifname)
     return -1;
   }
   memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, strlen(ifname));
+  strncpy(ifr.ifr_name, cd->cheth_ifname, strlen(cd->cheth_ifname));
   if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
     perror("ioctl(SIOCGIFINDEX)");
     return -1;
   }
-  ifix = ifr.ifr_ifindex;
+  PTLOCK(cheth_lock);
+  cd->cheth_ifix = ifr.ifr_ifindex;
+  PTUNLOCK(cheth_lock);
 
-  if (0 && debug)
-    printf("ifindex %d\n", ifix);
+#if 0
+  if ((chether_debug || debug))
+    printf("ifname %s ifindex %d\n", cd->cheth_ifname, cd->cheth_ifix);
+#endif
 
   memset(&sll, 0, sizeof(sll));
   sll.sll_family = AF_PACKET;
   sll.sll_protocol = htons(ethtype);
-  sll.sll_ifindex = ifix;
+  sll.sll_ifindex = cd->cheth_ifix;
   if (bind(fd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
     perror("bind");
     return -1;
   }
+  // why not try this too
+  if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, cd->cheth_ifname, strlen(cd->cheth_ifname)+1) == -1)  {
+    perror("SO_BINDTODEVICE");
+    return -1;
+  }
   memset(&ifr, 0, sizeof(ifr));
-  strncpy(ifr.ifr_name, ifname, strlen(ifname));
+  strncpy(ifr.ifr_name, cd->cheth_ifname, strlen(cd->cheth_ifname));
   if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0 ) {
     perror("ioctl(SIOCGIFHWADDR)");
     return -1;
@@ -366,25 +519,29 @@ get_packet_socket(u_short ethtype, char *ifname)
     perror("ioctl");
     return -1;
   }
-  if (myea[0] == 0 && myea[1] == 0)
-    memcpy(&myea, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+#if 0
+  if (cd->cheth_ea[0] == 0 && cd->cheth_ea[1] == 0)
+    memcpy(&cd->cheth_ea, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+#endif
 
-  if (0 && debug) {
+#if 0
+  if ((chether_debug || debug)) {
     memset(&ifr, 0, sizeof(ifr));
-    ifr.ifr_ifindex = ifix;
+    ifr.ifr_ifindex = cd->cheth_ifix;
     if (ioctl(fd, SIOCGIFNAME, &ifr) < 0) {
       perror("ioctl(SIOCGIFNAME)");
       return -1;
     }
-    printf("ifname %s\n", ifr.ifr_name);
+    printf("if index %d ifname %s\n", cd->cheth_ifix, ifr.ifr_name);
   }
-#endif // ETHER_BPF
+#endif
+#endif // !ETHER_BPF
   return fd;
 }
 
 /* Send a packet of the specified type to the specified address  */
 static void
-send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *packet, int packetlen)
+send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *packet, int packetlen)
 {
   int cc;
 #if !ETHER_BPF
@@ -393,14 +550,14 @@ send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *p
   memset (&sa, 0, sizeof sa);
   sa.sll_family = AF_PACKET;
   sa.sll_protocol = htons(ethtype);
-  sa.sll_ifindex = ifix;
+  sa.sll_ifindex = cd->cheth_ifix;
   sa.sll_hatype = ARPHRD_ETHER;
   sa.sll_pkttype = PACKET_HOST;
   sa.sll_halen = addrlen;
   memcpy(&sa.sll_addr, addr, addrlen);
 #endif // !ETHER_BPF
 
-  if (verbose) {
+  if (chether_debug || verbose) {
     struct chaos_header *ch = (struct chaos_header *)packet;
     printf("Ether: Sending %s: %d bytes with protocol 0x%04x (%s) to address ",
 	   (ethtype == ETHERTYPE_CHAOS ? ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff) :
@@ -422,7 +579,7 @@ send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *p
   struct iovec iov[2];
   struct ether_header eh;
 
-  memcpy(&eh.ether_shost, &myea, ETHER_ADDR_LEN);
+  memcpy(&eh.ether_shost, &cd->cheth_ea, ETHER_ADDR_LEN);
   memcpy(&eh.ether_dhost, addr, ETHER_ADDR_LEN);
   eh.ether_type = htons(ethtype);
 
@@ -435,17 +592,40 @@ send_packet (int if_fd, u_short ethtype, u_char *addr, u_char addrlen, u_char *p
     fprintf(stderr,"send_packet: buf len %lu vs MTU %lu\n",
 	    packetlen+sizeof(struct ether_header), BPF_MTU);
   }
+  // @@@@ skip if_fd param
+  if (ethtype == ETHERTYPE_ARP) {
+    if (if_fd != cd->cheth_arpfd)
+      if (chether_debug) fprintf(stderr,"send_packet: bad if_fd %d given for ARP\n", if_fd);
+    if_fd = cd->cheth_arpfd;
+  } else if (ethtype == ETHERTYPE_CHAOS) {
+    if (if_fd != cd->cheth_chfd)
+      if (chether_debug) fprintf(stderr,"send_packet: bad if_fd %d given for Chaos\n", if_fd);
+    if_fd = cd->cheth_chfd;
+  } else
+    fprintf(stderr,"send_packet: Bad ether type %#x\n", ethtype);
   cc = writev(if_fd, iov, sizeof(iov)/sizeof(*iov));
   packetlen += sizeof(struct ether_header);  /* avoid complaints below */
 
 #else // not BPF
+  // @@@@ skip if_fd param
+  if (ethtype == ETHERTYPE_ARP) {
+    if (if_fd != cd->cheth_arpfd)
+      if (chether_debug) fprintf(stderr,"send_packet: bad if_fd %d given for ARP\n", if_fd);
+    if_fd = cd->cheth_arpfd;
+  } else if (ethtype == ETHERTYPE_CHAOS) {
+    if (if_fd != cd->cheth_chfd)
+      if (chether_debug) fprintf(stderr,"send_packet: bad if_fd %d given for Chaos\n", if_fd);
+    if_fd = cd->cheth_chfd;
+  } else
+    fprintf(stderr,"send_packet: Bad ether type %#x\n", ethtype);
   cc = sendto(if_fd, packet, packetlen, 0, (struct sockaddr *)&sa, sizeof(sa));
+  // if (chether_debug) fprintf(stderr,"send_packet: sent %d bytes of type 0x%04x (packet len %d) on fd %d\n", cc, ethtype, packetlen, if_fd);
 #endif // ETHER_BPF
 
   if (cc == packetlen)
     return;
   else if (cc >= 0) {
-    if (debug) fprintf(stderr,"send_packet sent only %d bytes\n", cc);
+    if (chether_debug || debug) fprintf(stderr,"send_packet sent only %d bytes\n", cc);
   } else
     {
       perror("send_packet");
@@ -461,8 +641,51 @@ unsigned int bpf_buf_length = 0;
 uint8_t ether_bpf_buf[BPF_MTU];
 #endif // ETHER_BPF
 
+static void
+describe_arp_pkt(u_char *buf) 
+{
+  int i;
+  struct arphdr *arp = (struct arphdr *)buf;
+
+  printf("ARP message:\n");
+  printf(" HW format %d (%s)\n",ntohs(arp->ar_hrd),
+	 (arp->ar_hrd == htons(ARPHRD_ETHER) ? "Ether" :
+	  (arp->ar_hrd == htons(ARPHRD_CHAOS) ? "Chaos" : "?")));
+  printf(" Protocol format 0x%04x (%s)\n",ntohs(arp->ar_pro),
+	 (arp->ar_pro == htons(ETHERTYPE_ARP) ? "ARP" :
+	  (arp->ar_pro == htons(ETHERTYPE_CHAOS) ? "Chaos" :
+	   (arp->ar_pro == htons(ETHERTYPE_IP) ? "IP" : "?"))));
+  printf(" HW addr len %d\n Proto addr len %d\n ARP command %d (%s)\n",
+	 arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op),
+	 arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
+	 (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
+	  (arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
+	   (arp->ar_op == htons(ARPOP_RREPLY) ? "Reverse reply" : "?"))));
+  printf(" Src HW addr: ");
+  for (i = 0; i < arp->ar_hln; i++)
+    printf("%02X ", buf[sizeof(struct arphdr)+i]);
+  printf("\n Src Protocol addr: ");
+  if (arp->ar_pro == htons(ETHERTYPE_CHAOS))
+    printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 |
+			 buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
+  else
+    for (i = 0; i < arp->ar_pln; i++)
+      printf("%#x ", buf[sizeof(struct arphdr)+arp->ar_hln+i]);
+  printf("\n Dst HW addr: ");
+  for (i = 0; i < arp->ar_hln; i++)
+    printf("%02X ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_pln+i]);
+  printf("\n Dst Protocol addr: ");
+  if (arp->ar_pro == htons(ETHERTYPE_CHAOS))
+    printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 |
+			 buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
+  else
+    for (i = 0; i < arp->ar_pln; i++)
+      printf("%#x ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
+  printf("\n");
+}
+
 static int
-get_packet (int if_fd, u_char *buf, int buflen)
+get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 {
   int i, rlen;
   u_short protocol;
@@ -475,15 +698,17 @@ get_packet (int if_fd, u_char *buf, int buflen)
   struct bpf_hdr *bpf_header;
 
   // #### gross hack, don't want to mess with the actual headers
-  if (if_fd == arpfd)
+  if (if_fd == cd->cheth_arpfd)
     protocol = ntohs(ETHERTYPE_ARP);
-  else if (if_fd == chfd)
+  else if (if_fd == cd->cheth_chfd)
     protocol = ntohs(ETHERTYPE_CHAOS);
-  else
-    protocol = -1;
+  else {
+    fprintf(stderr,"get_packet: bad FD\n");
+    exit(1);
+  }
 
 #if 0 //debug
-  if (debug) {
+  if (chether_debug || debug) {
     int avail;
     if (ioctl(if_fd, FIONREAD, (void *)&avail) < 0) {
       perror("ioctl(FIONREAD)");
@@ -499,7 +724,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
       if (errno != EAGAIN && errno != EWOULDBLOCK) {
 	perror("read BPF ether");
 #if 0 //debug
-	if (debug) {
+	if (chether_debug || debug) {
 	  fprintf(stderr,"failed reading fd %d (chfd %d, arpfd %d) buf %p buflen %d\n", if_fd, chfd, arpfd,
 		  buf, buflen);
 	  fprintf(stderr,"tried using buflen %d, configured for %lu\n",
@@ -508,8 +733,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
 #endif
 	exit(1);
       }
-      else
-	if (debug) perror("read BPF ether");
+      else if (chether_debug || debug) perror("read BPF ether");
       return 0;
     }
     bpf_buf_length = res;
@@ -517,7 +741,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
   bpf_header = (struct bpf_hdr *)(ether_bpf_buf + bpf_buf_offset);
 
 #if 0 //debug
-  if (debug) fprintf(stderr,"BPF: read %d bytes from fd (MTU %lu), timeval sec %d\n buflen %d, hdrlen %d, caplen %d, datalen %d, offset %d\n",
+  if (chether_debug || debug) fprintf(stderr,"BPF: read %d bytes from fd (MTU %lu), timeval sec %d\n buflen %d, hdrlen %d, caplen %d, datalen %d, offset %d\n",
 		     bpf_buf_length, BPF_MTU,
 		     bpf_header->bh_tstamp.tv_sec,
 		     buflen, bpf_header->bh_hdrlen, bpf_header->bh_caplen, bpf_header->bh_datalen,
@@ -532,7 +756,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
   else
     bpf_buf_offset = 0;
   if (bpf_header->bh_caplen != bpf_header->bh_datalen) {
-    if (debug) fprintf(stderr,"BPF: LENGTH MISMATCH: Captured %d of %d\n",
+    if (chether_debug || debug) fprintf(stderr,"BPF: LENGTH MISMATCH: Captured %d of %d\n",
 		       bpf_header->bh_caplen, bpf_header->bh_datalen);
     return 0;			/* throw away packet */
   } else {
@@ -554,6 +778,10 @@ get_packet (int if_fd, u_char *buf, int buflen)
 
   rlen = recvfrom(if_fd, buf, buflen, 0, (struct sockaddr *) &sll, &sllen);
   protocol = sll.sll_protocol;
+#if 0
+  if (chether_debug) fprintf(stderr,"Ether: Received %d bytes from fd %d, protocol 0x%04x, halen %d\n",
+			     rlen, if_fd, ntohs(protocol), sll.sll_halen);
+#endif
   for (i = 0; i < sll.sll_halen-1; i++) {
     src_mac |= sll.sll_addr[i];
     src_mac = src_mac<<8;
@@ -572,7 +800,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
   if (rlen == 0)
     return 0;
 
-  if (verbose) {
+  if (chether_debug || verbose) {
 #if 0
     if (debug) {
       printf("Received:\n");
@@ -615,34 +843,8 @@ get_packet (int if_fd, u_char *buf, int buflen)
 	) {
       struct arphdr *arp = (struct arphdr *)buf;
       if (debug) {
-	printf("ARP message:\n");
-	printf(" HW format %d (%s)\n",ntohs(arp->ar_hrd),
-	       (arp->ar_hrd == htons(ARPHRD_ETHER) ? "Ether" :
-		(arp->ar_hrd == htons(ARPHRD_CHAOS) ? "Chaos" : "?")));
-	printf(" Protocol format 0x%04x (%s)\n",ntohs(arp->ar_pro),
-	       (arp->ar_pro == htons(ETHERTYPE_ARP) ? "ARP" :
-		(arp->ar_pro == htons(ETHERTYPE_CHAOS) ? "Chaos" :
-		 (arp->ar_pro == htons(ETHERTYPE_IP) ? "IP" : "?"))));
-	printf(" HW addr len %d\n Proto addr len %d\n ARP command %d (%s)\n",
-	       arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op),
-	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
-	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
-		(arp->ar_op == htons(ARPOP_RREQUEST) ? "Reverse request" :
-		 (arp->ar_op == htons(ARPOP_RREPLY) ? "Reverse reply" : "?"))));
-	printf(" Src HW addr: ");
-	for (i = 0; i < arp->ar_hln; i++)
-	  printf("%02X ", buf[sizeof(struct arphdr)+i]);
-	printf("\n Src Protocol addr: ");
-	for (i = 0; i < arp->ar_pln; i++)
-	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+i]);
-	printf("\n Dst HW addr: ");
-	for (i = 0; i < arp->ar_hln; i++)
-	  printf("%02X ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_pln+i]);
-	printf("\n Dst Protocol addr: ");
-	for (i = 0; i < arp->ar_pln; i++)
-	  printf("%d ", buf[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+i]);
-	printf("\n");
-      } else if (stats || verbose) {
+	describe_arp_pkt(buf);
+      } else if (stats || chether_debug || verbose) {
 	printf("ARP %s for protocol 0x%04x",
 	       arp->ar_op == htons(ARPOP_REQUEST) ? "Request" :
 	       (arp->ar_op == htons(ARPOP_REPLY) ? "Reply" :
@@ -669,7 +871,7 @@ get_packet (int if_fd, u_char *buf, int buflen)
 	ch_dumpkt(buf, rlen);
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
       }
-      else if (verbose) {
+      else if (chether_debug || verbose) {
 	struct chaos_header *ch = (struct chaos_header *)buf;
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
 #if 1
@@ -728,7 +930,7 @@ void print_arp_table()
 static u_char *find_arp_entry(u_short daddr)
 {
   int i;
-  if (debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, charp_len);
+  if (chether_debug || debug) fprintf(stderr,"Looking for ARP entry for %#o, ARP table len %d\n", daddr, charp_len);
   if (is_mychaddr(daddr)) {	// #### maybe also look for rt_myaddr matches...
     fprintf(stderr,"#### Looking up ARP for my own address, BUG!\n");
     return NULL;
@@ -739,12 +941,12 @@ static u_char *find_arp_entry(u_short daddr)
     if (charp_list[i].charp_chaddr == daddr) {
       if ((charp_list[i].charp_age != 0)
 	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
-	if (verbose) fprintf(stderr,"Found ARP entry for %#o but it is too old (%lu s)\n",
+	if (chether_debug || verbose) fprintf(stderr,"Found ARP entry for %#o but it is too old (%lu s)\n",
 			     daddr, (time(NULL) - charp_list[i].charp_age));
 	PTUNLOCK(charp_lock);
 	return NULL;
       }
-      if (debug) fprintf(stderr,"Found ARP entry for %#o\n", daddr);
+      if (chether_debug || debug) fprintf(stderr,"Found ARP entry for %#o\n", daddr);
       PTUNLOCK(charp_lock);
       return charp_list[i].charp_eaddr;
     }
@@ -752,6 +954,7 @@ static u_char *find_arp_entry(u_short daddr)
   return NULL;
 }
 
+#if 0
 // Find my chaos address on the ether link #### check config that there are no conflicting addrs?
 static u_short find_ether_chaos_address() {
   int i;
@@ -774,18 +977,13 @@ static u_short find_ether_chaos_address() {
   PTUNLOCK(rttbl_lock);
   return (ech == 0 ? mychaddr[0] : ech);  // hmm, are defaults good?
 }
+#endif
 
 void
-send_chaos_arp_request(int fd, u_short chaddr)
+send_chaos_arp_request(struct chethdest *cd, u_short chaddr)
 {
-  static u_short eth_chaddr = 0;
   u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
   struct arphdr *arp = (struct arphdr *)&req;
-
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
 
   memset(&req, 0, sizeof(req));
   arp->ar_hrd = htons(ARPHRD_ETHER); /* Want ethernet address */
@@ -793,16 +991,22 @@ send_chaos_arp_request(int fd, u_short chaddr)
   arp->ar_hln = ETHER_ADDR_LEN;
   arp->ar_pln = sizeof(chaddr);
   arp->ar_op = htons(ARPOP_REQUEST);
-  memcpy(&req[sizeof(struct arphdr)], &myea, ETHER_ADDR_LEN);	/* my ether */
-  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &eth_chaddr, sizeof(eth_chaddr)); /* my chaos */
+  memcpy(&req[sizeof(struct arphdr)], cd->cheth_ea, ETHER_ADDR_LEN);	/* my ether */
+  memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &cd->cheth_myaddr, sizeof(u_short)); /* my chaos */
   /* his chaos */
   memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2+ETHER_ADDR_LEN], &chaddr, sizeof(chaddr));
-
-  send_packet(fd, ETHERTYPE_ARP, eth_brd, ETHER_ADDR_LEN, req, sizeof(req));
+  
+#if 0
+  if (chether_debug) {
+    fprintf(stderr,"ether: Send ARP request for %#o on fd %d\n", chaddr, cd->cheth_arpfd);
+    describe_arp_pkt(req);
+  }
+#endif
+  send_packet(cd, cd->cheth_arpfd, ETHERTYPE_ARP, eth_brd, ETHER_ADDR_LEN, req, sizeof(req));
 }
 
 static void
-send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
+send_chaos_arp_reply(struct chethdest *cd, u_short dchaddr, u_char *deaddr, u_short schaddr)
 {
   u_char req[sizeof(struct arphdr)+(ETHER_ADDR_LEN+2)*2];
   struct arphdr *arp = (struct arphdr *)&req;
@@ -812,7 +1016,7 @@ send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
   arp->ar_hln = ETHER_ADDR_LEN;
   arp->ar_pln = sizeof(u_short);
   arp->ar_op = htons(ARPOP_REPLY);
-  memcpy(&req[sizeof(struct arphdr)], &myea, ETHER_ADDR_LEN);	/* my ether */
+  memcpy(&req[sizeof(struct arphdr)], &cd->cheth_ea, ETHER_ADDR_LEN);	/* my ether */
   /* proxying for this */
   memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN], &schaddr, sizeof(u_short));
   /* His ether */
@@ -820,15 +1024,21 @@ send_chaos_arp_reply(int fd, u_short dchaddr, u_char *deaddr, u_short schaddr)
   /* his chaos */
   memcpy(&req[sizeof(struct arphdr)+ETHER_ADDR_LEN+2+ETHER_ADDR_LEN], &dchaddr, sizeof(dchaddr));
 
-  send_packet(fd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
+#if 0
+  if (chether_debug) {
+    fprintf(stderr,"ether: Send ARP reply to %#o on fd %d\n", dchaddr, cd->cheth_arpfd);
+    describe_arp_pkt(req);
+  }
+#endif
+
+  send_packet(cd, cd->cheth_arpfd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
 }
 
-static void handle_arp_input(u_char *data, int dlen)
+static void handle_arp_input(struct chethdest *cd, u_char *data, int dlen)
 {
-  if (debug) fprintf(stderr,"Handle ARP\n");
+  // if (chether_debug || debug) fprintf(stderr,"Handle ARP\n");
   /* Chaos over Ethernet */
   struct arphdr *arp = (struct arphdr *)data;
-  static u_short eth_chaddr = 0;
   u_short schad = ntohs((data[sizeof(struct arphdr)+arp->ar_hln]<<8) |
 			data[sizeof(struct arphdr)+arp->ar_hln+1]);
   u_char *sead = &data[sizeof(struct arphdr)];
@@ -836,35 +1046,32 @@ static void handle_arp_input(u_char *data, int dlen)
 			 data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]);
 
   // don't create a storm
-  if (memcmp(sead, eth_brd, ETHER_ADDR_LEN) == 0)
+  if ((memcmp(sead, eth_brd, ETHER_ADDR_LEN) == 0) || (dchad == 0))
     return;
 
-  if (eth_chaddr == 0) {
-    eth_chaddr = find_ether_chaos_address();
-    if (verbose) fprintf(stderr,"My Ethernet Chaos addr is %#o\n", eth_chaddr);
-  }
-
-  if (debug) printf("ARP rcv: Dchad: %o %o => %o\n",
+#if 0
+  if (chether_debug || debug) printf("ARP rcv: Dchad: %o %o => %o\n",
 		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln+1]<<8,
 		    data[sizeof(struct arphdr)+arp->ar_hln+arp->ar_hln+arp->ar_pln],
 		    dchad);
+#endif
 
   /* See if we proxy for this one */
   if (arp->ar_op == htons(ARPOP_REQUEST)) {
-    if (dchad == eth_chaddr || is_mychaddr(dchad)) {
-      if (verbose) printf("ARP: Sending reply for %#o (me) to %#o\n", dchad, schad);
-      send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
+    if (dchad == cd->cheth_myaddr || is_mychaddr(dchad)) {
+      if (chether_debug || verbose) printf("ARP: Sending reply for %#o (me) to %#o\n", dchad, schad);
+      send_chaos_arp_reply(cd, schad, sead, dchad); /* Yep. */
     } else {
-      if (debug) printf("ARP: Looking up %#o...\n",dchad);
+      if (chether_debug || debug) printf("ARP: Looking up %#o...\n",dchad);
       struct chroute *found = find_in_routing_table(dchad, 0, 0);
       if ((found != NULL) && (found->rt_dest == dchad)
 	  && (found->rt_link != LINK_ETHER) && !RT_BRIDGED(found)) {
 	/* Only proxy for non-ether links, and not for bridged routes */
-	if (verbose) {
+	if (chether_debug || verbose) {
 	  fprintf(stderr,"ARP: Sending proxy ARP reply for %#o to %#o\n", dchad, schad);
 	  // fprintf(stderr," route link %s, type %s\n", rt_linkname(found->rt_link), rt_typename(found->rt_type));
 	}
-	send_chaos_arp_reply(arpfd, schad, sead, dchad); /* Yep. */
+	send_chaos_arp_reply(cd, schad, sead, dchad); /* Yep. */
 	return;
       }
     }
@@ -878,12 +1085,12 @@ static void handle_arp_input(u_char *data, int dlen)
       charp_list[i].charp_age = time(NULL);  // update age
       if (memcmp(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN) != 0) {
 	memcpy(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN);
-	if (verbose) {
+	if (chether_debug || verbose) {
 	  fprintf(stderr,"ARP: Changed MAC addr for %#o\n", schad);
 	  print_arp_table();
 	}
       } else
-	if (verbose) {
+	if (chether_debug || verbose) {
 	  fprintf(stderr,"ARP: Updated age for %#o\n", schad);
 	  print_arp_table();
 	}
@@ -891,7 +1098,7 @@ static void handle_arp_input(u_char *data, int dlen)
     }
   /* It's not in the list already, is there room? */
   if (!found && charp_len < CHARP_MAX) {
-    if (verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
+    if (chether_debug || verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
     charp_list[charp_len].charp_chaddr = schad;
     charp_list[charp_len].charp_age = time(NULL);
     memcpy(&charp_list[charp_len++].charp_eaddr, sead, ETHER_ADDR_LEN);
@@ -900,19 +1107,19 @@ static void handle_arp_input(u_char *data, int dlen)
   PTUNLOCK(charp_lock);
 }
 
-static void arp_input(int arpfd, u_char *data, int dlen) {
+static void arp_input(struct chethdest *cd, int arpfd, u_char *data, int dlen) {
   int len;
   struct arphdr *arp = (struct arphdr *)data;
 
-  if ((len = get_packet(arpfd, data, dlen)) < 0) {
-    if (debug) perror("Couldn't read ARP");
+  if ((len = get_packet(cd, cd->cheth_arpfd, data, dlen)) < 0) {
+    if (chether_debug || debug) perror("Couldn't read ARP");
     return;
   }
   if (arp->ar_hrd == htons(ARPHRD_ETHER) &&
       (arp->ar_pro == htons(ETHERTYPE_CHAOS))) {
-    if (debug) fprintf(stderr,"Read ARP len %d\n", len);
-    handle_arp_input(data, len);
-  } else if (0 && debug) {		/* should not happen for BPF case, which filters this */
+    // if (chether_debug || debug) fprintf(stderr,"Read ARP len %d\n", len);
+    handle_arp_input(cd, data, len);
+  } else if (chether_debug || debug) {		/* should not happen for BPF case, which filters this */
     fprintf(stderr,"Read from ARP but wrong HW %d or prot %#x\n",
 	    ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
   }
@@ -921,85 +1128,106 @@ static void arp_input(int arpfd, u_char *data, int dlen) {
 
 void * ether_input(void *v)
 {
+  int i;
+
+  // make sure we have them
+  get_my_ea();
+  for (i = 0; i < nchethdest; i++) {
+    if ((chethdest[i].cheth_arpfd = get_packet_socket(ETHERTYPE_ARP, &chethdest[i])) < 0)
+      exit(1);
+    if ((chethdest[i].cheth_chfd = get_packet_socket(ETHERTYPE_CHAOS, &chethdest[i])) < 0)
+      exit(1);
+  }
+
   /* Ether -> others thread */
   fd_set rfd;
-  int len, sval, maxfd = (chfd > arpfd ? chfd : arpfd)+1;
+  int len, sval, maxfd = -1;
   u_char data[CH_PK_MAXLEN];
   struct chaos_header *cha = (struct chaos_header *)&data;
 
   while (1) {
     FD_ZERO(&rfd);
-    if (chfd > 0)
-      FD_SET(chfd,&rfd);
-    if (arpfd > 0)
-      FD_SET(arpfd,&rfd);
-
+    maxfd = 0;
+    for (i = 0; i < nchethdest; i++) {
+      if (chethdest[i].cheth_chfd > 0)
+	FD_SET(chethdest[i].cheth_chfd,&rfd);
+      if (chethdest[i].cheth_arpfd > 0)
+	FD_SET(chethdest[i].cheth_arpfd,&rfd);
+      if (maxfd < chethdest[i].cheth_chfd)
+	maxfd = chethdest[i].cheth_chfd;
+      if (maxfd < chethdest[i].cheth_arpfd)
+	maxfd = chethdest[i].cheth_arpfd;
+    }
+    if (maxfd > 0)
+      maxfd += 1;
     bzero(data,sizeof(data));
 
     if ((sval = select(maxfd, &rfd, NULL, NULL, NULL)) < 0)
       perror("select");
     else if (sval > 0) {
-      if (arpfd > 0 && FD_ISSET(arpfd, &rfd)) {
-	/* Read an ARP packet */
-	if (0 && verbose) fprintf(stderr,"ARP available\n");
-	arp_input(arpfd, (u_char *)&data, sizeof(data));
-      }	/* end of ARP case */
-      if (chfd > 0 && FD_ISSET(chfd, &rfd)) {
-	// Read a Chaos packet, peeking ether address for ARP optimization
-	if ((len = get_packet(chfd, (u_char *)&data, sizeof(data))) < 0)
-	  return NULL;
-	if (debug) fprintf(stderr,"ether RCV %d bytes\n", len);
-	if (len == 0)
-	  continue;
-	ntohs_buf((u_short *)cha, (u_short *)cha, len);
-	if (debug) ch_dumpkt((u_char *)&data, len);
+      for (i = 0; i < nchethdest; i++) {
+	if ((chethdest[i].cheth_arpfd > 0) && FD_ISSET(chethdest[i].cheth_arpfd, &rfd)) {
+	  /* Read an ARP packet */
+	  // if (chether_debug || debug) fprintf(stderr,"ARP available for %s\n", chethdest[i].cheth_ifname);
+	  arp_input(&chethdest[i], chethdest[i].cheth_arpfd, (u_char *)&data, sizeof(data));
+	}	/* end of ARP case */
+	if ((chethdest[i].cheth_chfd > 0) && FD_ISSET(chethdest[i].cheth_chfd, &rfd)) {
+	  // Read a Chaos packet, peeking ether address for ARP optimization
+	  if ((len = get_packet(&chethdest[i], chethdest[i].cheth_chfd, (u_char *)&data, sizeof(data))) < 0)
+	    return NULL;
+	  // if (chether_debug || debug) fprintf(stderr,"ether RCV %d bytes on %s\n", len, chethdest[i].cheth_ifname);
+	  if (len == 0)
+	    continue;
+	  ntohs_buf((u_short *)cha, (u_short *)cha, len);
+	  if (debug) ch_dumpkt((u_char *)&data, len);
 #if 1 // At least LMI Lambda does not include (a valid) chaosnet trailer
-      // (not even constructs one) but we read more than the packet size shd be
-	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE)
-	  len = ch_nbytes(cha)+CHAOS_HEADERSIZE;
+	  // (not even constructs one) but we read more than the packet size shd be
+	  if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE)
+	    len = ch_nbytes(cha)+CHAOS_HEADERSIZE;
 #else // what we would have done...
-	if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
-	  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	  // check for bogus/ignorable trailer or checksum.
-	  // Symbolics known to send trailer checksum -1
-	  if (// (tr->ch_hw_destaddr != 0 && tr->ch_hw_srcaddr != 0 && tr->ch_hw_checksum != 0)
-	      //&&
-	      (tr->ch_hw_checksum != 0xffff)) {
-	    u_short cks = ch_checksum(data, len);
-	    if (cks != 0) {
-	      u_short schad = ch_srcaddr(cha);
-	      if (verbose) {
-		fprintf(stderr,"[Bad checksum %#x from %#o (Ether)]\n", cks, schad);
-		fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
-			tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-		ch_dumpkt((u_char *)&data, len);
-	      }
-	      // #### Use link source net, can't really trust data
+	  if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
+	    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
+	    // check for bogus/ignorable trailer or checksum.
+	    // Symbolics known to send trailer checksum -1
+	    if (// (tr->ch_hw_destaddr != 0 && tr->ch_hw_srcaddr != 0 && tr->ch_hw_checksum != 0)
+		//&&
+		(tr->ch_hw_checksum != 0xffff)) {
+	      u_short cks = ch_checksum(data, len);
+	      if (cks != 0) {
+		u_short schad = ch_srcaddr(cha);
+		if (chether_debug || verbose) {
+		  fprintf(stderr,"[Bad checksum %#x from %#o (Ether)]\n", cks, schad);
+		  fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
+			  tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
+		  ch_dumpkt((u_char *)&data, len);
+		}
+		// #### Use link source net, can't really trust data
 #if 0
-	      PTLOCK(linktab_lock);
-	      linktab[schad>>8].pkt_crcerr++;
-	      PTUNLOCK(linktab_lock);
+		PTLOCK(linktab_lock);
+		linktab[schad>>8].pkt_crcerr++;
+		PTUNLOCK(linktab_lock);
 #endif
-	      continue;
-	    }
-	  } else if (debug)
-	    fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
-		    tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-	}
+		continue;
+	      }
+	    } else if (chether_debug || debug)
+	      fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
+		      tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
+	  }
 #endif // 0
-	// check where it's coming from
-	u_short srcaddr;
+	  // check where it's coming from
+	  u_short srcaddr;
 #if 0 // #### see above
-	if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
-	  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	  srcaddr = tr->ch_hw_srcaddr;
-	} else
+	  if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
+	    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
+	    srcaddr = tr->ch_hw_srcaddr;
+	  } else
 #endif
-	  srcaddr = ch_srcaddr(cha);
-	struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-	forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
-			  srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
-			  (u_char *)&data, len, LINK_ETHER);  /* forward to appropriate links */
+	    srcaddr = ch_srcaddr(cha);
+	  struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
+	  forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+			    srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
+			    (u_char *)&data, len, LINK_ETHER);  /* forward to appropriate links */
+	}
       }
     }
   }
@@ -1008,46 +1236,47 @@ void * ether_input(void *v)
 void
 forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
-  // @@@@ TODO: look for the right interface
-  if (debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
+  int i, done = 0;
+  if ((nchethdest == 0) || !((chethdest[0].cheth_arpfd > 0) && (chethdest[0].cheth_chfd > 0))) {
+    if (debug) fprintf(stderr,"ether: Forwarding impossible, sockets not open\n");
+    return;
+  }
+
+  if (chether_debug || debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
   // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
   dlen -= CHAOS_HW_TRAILERSIZE;
   htons_buf((u_short *)ch, (u_short *)ch, dlen);
-  if (dchad == 0) {		/* broadcast */
-    if (debug) fprintf(stderr,"Forward: Broadcasting on ether from %#o\n", schad);
-    send_packet(chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
-  } else {
-    if (RT_BRIDGED(rt))
-      // the bridge is on Ether, but the dest might not be
-      dchad = rt->rt_braddr;
-    u_char *eaddr = find_arp_entry(dchad);
-    if (eaddr != NULL) {
-      if (debug) fprintf(stderr,"Forward: Sending on ether from %#o to %#o\n", schad, dchad);
-      send_packet(chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
+  for (i = 0; i < nchethdest; i++) {
+    if (dchad == 0) {		/* broadcast */
+      if ((schad & 0xff00) == chethdest[i].cheth_addr) {  /* right interface */
+	if (chether_debug || debug) fprintf(stderr,"Forward: Broadcasting on ether %s from %#o\n", chethdest[i].cheth_ifname, schad);
+	send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
+	done = 1;
+	break;			/* only one interface from the right source */
+      }
     } else {
-      if (debug) fprintf(stderr,"Forward: Don't know %#o, sending ARP request\n", dchad);
-      send_chaos_arp_request(arpfd, dchad);
-      // Chaos sender will retransmit, surely.
+      u_short idchad = dchad;
+      if (RT_BRIDGED(rt))
+	// the bridge is on Ether, but the dest might not be
+	idchad = rt->rt_braddr;
+      if (chethdest[i].cheth_addr == (idchad & 0xff00)) {
+	// Ether link for this subnet
+	u_char *eaddr = find_arp_entry(idchad);
+	if (eaddr != NULL) {
+	  if (chether_debug || debug) fprintf(stderr,"Forward: Sending on ether %s from %#o to %#o\n", chethdest[i].cheth_ifname, schad, idchad);
+	  send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
+	  done = 1;
+	  break;
+	} else {
+	  if (chether_debug || debug) fprintf(stderr,"Forward: Don't know %#o, sending ARP request on %s\n", idchad, chethdest[i].cheth_ifname);
+	  send_chaos_arp_request(&chethdest[i], idchad);
+	  // Chaos sender will retransmit, surely.
+	  done = 1;
+	  break;
+	}
+      }
     }
   }
-}
-
-void
-print_config_ether() 
-{
-  int i;
-  printf("Using Ethernet interface %s, ether address ", ifname);
-  for (i = 0; i < ETHER_ADDR_LEN-1; i++)
-    printf("%02X:",myea[i]);
-  printf("%02X\n",myea[i]);
-}
-
-// module initialization
-void init_chaos_ether() 
-{
-  get_my_ea();
-  if ((arpfd = get_packet_socket(ETHERTYPE_ARP, ifname)) < 0)
-    exit(1);
-  if ((chfd = get_packet_socket(ETHERTYPE_CHAOS, ifname)) < 0)
-    exit(1);
+  if (!done && (chether_debug || debug || verbose))
+    fprintf(stderr,"%%%% ether: couldn't find ether link for destination %#o\n", dchad);
 }

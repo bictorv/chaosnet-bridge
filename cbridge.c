@@ -21,7 +21,7 @@
 
 /* Bridge program for various Chaosnet implementations.
    Should support as many as desired of
-   - Chaos-over-Ethernet [#### currently only one interface]
+   - Chaos-over-Ethernet
    - CHUDP (Chaos-over-UDP, used by klh10/its)
    - Chaos-over-TLS (using two bytes of record length)
    - chaosd (Unix socket protocol, used by the usim CADR emulator)
@@ -164,11 +164,10 @@ time_t boottime;
 // Config stuff @@@@ some to be moved to respective module
 char myname[32]; /* my chaosnet host name (look it up!). Note size limit by STATUS prot */
 #define NCHADDR 8
-static int nchaddr = 0;
+int nchaddr = 0;
 u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int chudp_port = 42042;		// default UDP port
 int chudp_dynamic = 0; // dynamically add CHUDP entries for new receptions
-char ifname[128] = "eth0";	// default interface name
 int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
 
@@ -189,8 +188,10 @@ void reparse_chudp_names(void);
 
 #if CHAOS_ETHERP
 // chether
-void init_chaos_ether(void);
 void print_config_ether(void);
+int parse_ether_config_line(void);
+int parse_ether_link_config(void);
+int postparse_ether_link_config(struct chroute *rt);
 #endif
 
 #if CHAOS_TLS
@@ -201,12 +202,10 @@ void init_chaos_tls();
 #if CHAOS_IP
 // chip
 void reparse_chip_names();
-void init_chaos_ip();
 void print_chipdest_config();
 #endif
 
 // usockets
-int init_chaos_usockets(void);
 void print_config_usockets(void);
 
 // threads @@@@ document args?
@@ -225,6 +224,16 @@ int is_mychaddr(u_short addr)
     if (mychaddr[i] == addr)
       return 1;
   return 0;
+}
+
+void add_mychaddr(u_short addr)
+{
+  if (!is_mychaddr(addr)) {
+    if (nchaddr < NCHADDR)
+      mychaddr[nchaddr++] = addr;
+    else
+      fprintf(stderr,"out of local chaos addresses, please increase NCHADDR from %d\n", NCHADDR);
+  }
 }
 
 void print_link_stats() 
@@ -944,11 +953,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 	return -1;
       }
       rt->rt_myaddr = sval;
-      if (nchaddr < NCHADDR)
-	mychaddr[nchaddr++] = sval;
-      else
-	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
-		NCHADDR);
+      add_mychaddr(sval);
 #if 0
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
@@ -1063,11 +1068,7 @@ parse_link_args(struct chroute *rt, u_short addr)
 	return -1;
       }
       rt->rt_myaddr = sval;
-      if (nchaddr < NCHADDR)
-	mychaddr[nchaddr++] = sval;
-      else
-	fprintf(stderr,"out of local chaos addresses, please increase NCHADDR from %d\n",
-		NCHADDR);
+      add_mychaddr(sval);
 #if 0
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
@@ -1179,10 +1180,11 @@ parse_link_config()
   }
   if (strcasecmp(tok, "ether") == 0) {
     do_ether = 1;
-    // @@@@ one day, parse interface name
     rt->rt_link = LINK_ETHER;
     rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_DIRECT;
+    if (parse_ether_link_config() < 0)
+      return -1;
   } else if (strcasecmp(tok, "unix") == 0) {
     do_unix = 1;
     rt->rt_link = LINK_UNIXSOCK;
@@ -1306,6 +1308,12 @@ parse_link_config()
     }
   }
 #endif // CHAOS_IP
+#if CHAOS_ETHERP
+  if (rt->rt_link == LINK_ETHER) {
+    if (postparse_ether_link_config(rt) < 0)
+      return -1;
+  }
+#endif
 
   // @@@@ check if mychaddr has an entry for the subnet of the newly defined link
   struct chroute *rrt;
@@ -1363,8 +1371,11 @@ parse_config_line(char *line)
 #if CHAOS_TLS
   // tls key keyfile cert certfile ca-chain ca-chain-cert-file [myaddr %o] [ server [ portnr ]]
   else if (strcasecmp(tok, "tls") == 0) {
-    do_tls = 1;
-    return parse_tls_config_line();
+    // do_tls = 1;
+    int v = parse_tls_config_line();
+    if (v && do_tls_server)
+      do_tls = 1;
+    return v;
   }
 #endif // CHAOS_TLS
 #if CHAOS_DNS
@@ -1375,20 +1386,16 @@ parse_config_line(char *line)
 #if CHAOS_IP
   else if (strcasecmp(tok,"chip") == 0) {
     // this is pointless unless chip is "dynamic", but...
-    do_chip = 1;
+    // do_chip = 1;
     return parse_chip_config_line();
   }
 #endif
+#if CHAOS_ETHERP
   else if (strcasecmp(tok, "ether") == 0) {
-    tok = strtok(NULL," \t\r\n");
-    if (tok == NULL) { fprintf(stderr,"no ether interface given\n"); return -1; }
-    strncpy(ifname,tok,sizeof(ifname));
-    do_ether = 1;
-    if (verbose) {
-      print_config_ether();
-    }
-    return 0;
+    // do_ether = 1;
+    return parse_ether_config_line();
   }
+#endif
   else if (strcasecmp(tok, "route") == 0) {
     return parse_route_config();
   }
@@ -1443,14 +1450,18 @@ print_stats(int sig)
     if (do_unix)
       print_config_usockets();
     if (do_udp || do_udp6)
-      printf(" CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
+      printf("CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
+#if CHAOS_ETHERP
     if (do_ether)
       print_config_ether();
+#endif
+#if CHAOS_TLS
     if (do_tls || do_tls_server) {
-      printf(" Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
+      printf("Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
       if (do_tls_server)
-	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
+	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
+#endif
 #if CHAOS_IP
     print_config_chip();
 #endif
@@ -1461,7 +1472,9 @@ print_stats(int sig)
     }
 #endif
   }
+#if CHAOS_ETHERP
   print_arp_table();
+#endif
   print_routing_table();
   print_chudp_config();
 #if CHAOS_TLS
@@ -1581,24 +1594,9 @@ main(int argc, char *argv[])
 #endif
 
   // Open links that have been configured
-  if (do_unix) {
-    init_chaos_usockets();
-  }
   if (do_udp6 || do_udp) {
     init_chaos_udp(do_udp, do_udp6);
   }
-  if (do_ether) {
-#if CHAOS_ETHERP
-    init_chaos_ether();
-#else
-    fprintf(stderr,"Your config asks for Ether, but its support not compiled\n");
-#endif // CHAOS_ETHERP
-  }
-#if CHAOS_IP
-  if (do_chip) {
-    init_chaos_ip();
-  }
-#endif
 
 #if 1
   if (verbose)

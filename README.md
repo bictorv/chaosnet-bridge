@@ -89,8 +89,6 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 - ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
 - Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
 
-Currently only one Ethernet interface is supported.
-
 ### Chaos-over-IP
 
 Chaosnet packets are sent in IP/IPv6 packets, using the standard
@@ -172,8 +170,8 @@ be done with RUT).
 
 Separate threads are started to handle input from different link types
 (several for TLS). Each thread is only started if the configuration
-needs it (e.g. if you configure an ether interface, or an ether link,
-the ethernet thread is started).
+needs it (e.g. if you configure an ether link, the ethernet thread is
+started).
 
 Often the Ethernet link can NOT send and receive to the host system
 running the bridge program, or other programs using the same

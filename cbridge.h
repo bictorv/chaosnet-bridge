@@ -229,6 +229,18 @@ struct charp_ent {
   u_char charp_eaddr[ETHER_ADDR_LEN];
   time_t charp_age;
 };
+
+#define CHETHDEST_MAX 8
+struct chethdest {
+  u_short cheth_addr;		/* chaos addr or (more likely) subnet */
+  u_short cheth_myaddr;		/* my chaos address on this interface */
+  char cheth_ifname[IFNAMSIZ];	 /* interface name */
+  u_char cheth_ea[ETHER_ADDR_LEN]; /* ether address */
+  int cheth_chfd;		/* Chaos pkt fd */
+  int cheth_arpfd;		/* ARP pkt fd */
+  int cheth_ifix;		/* interface index */
+};
+
 #endif // CHAOS_ETHERP
 
 // ================ IP ================
@@ -299,6 +311,7 @@ extern struct chipdest chipdest[CHIPDEST_MAX];
 
 void send_chaos_pkt(u_char *pkt, int len);
 int is_mychaddr(u_short addr);
+void add_mychaddr(u_short addr);
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);
 

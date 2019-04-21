@@ -10,8 +10,8 @@ Assuming you run an ITS system (e.g. on klh10), and a local Chaosnet network ove
     chaddr 4401
     ; Define a chaos-over-udp link to the Global Chaosnet router, which has address 3040
     link chudp router.aosnet.ch host 3040 myaddr 3171
-    ; Define a local Chaos-over-Ether subnet nr 11 (hosts 4400-4777)
-    link ether subnet 11
+    ; Define a local Chaos-over-Ether on the eth0 interface, for subnet nr 11 (hosts 4400-4777)
+    link ether eth0 subnet 11
     ; A chaos-over-udp link to the ITS configured below
     link chudp localhost:42043 host 4411
 
@@ -46,8 +46,6 @@ individual addresses on net 6.
     chudp 42042 ipv6
     ; Also act as a TLS server for Chaos-over-TLS
     tls key private/router.aosnet.ch.key.pem cert certs/router.aosnet.ch.cert.pem ca-chain ca-chain.cert.pem ipv6 server
-    ; Use the standard name for the ethernet interface
-    ether eth0
 
 The config for the CHUDP hosts consists of lines
 
@@ -62,7 +60,7 @@ Symbolics lisp machine might be running). NOTE the declaration of
 are sent from address 440. A router/bridge should always have (and
 use) an address specific to each net.
 
-    link ether subnet 1 myaddr 440
+    link ether eth0 subnet 1 myaddr 440
 
 To tell cbridge to send routing info about net 6, which only has
 individual host links, a route declaration is necessary.
