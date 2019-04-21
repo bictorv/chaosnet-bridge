@@ -1247,32 +1247,32 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   dlen -= CHAOS_HW_TRAILERSIZE;
   htons_buf((u_short *)ch, (u_short *)ch, dlen);
   for (i = 0; i < nchethdest; i++) {
-    if ((schad & 0xff00) == chethdest[i].cheth_addr) {  /* right interface */
-      if (dchad == 0) {		/* broadcast */
+    if (dchad == 0) {		/* broadcast */
+      if ((schad & 0xff00) == chethdest[i].cheth_addr) {  /* right interface */
 	if (chether_debug || debug) fprintf(stderr,"Forward: Broadcasting on ether %s from %#o\n", chethdest[i].cheth_ifname, schad);
 	send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
 	done = 1;
 	break;			/* only one interface from the right source */
-      } else {
-	u_short idchad = dchad;
-	if (RT_BRIDGED(rt))
-	  // the bridge is on Ether, but the dest might not be
-	  idchad = rt->rt_braddr;
-	if (chethdest[i].cheth_addr == (idchad & 0xff00)) {
-	  // Ether link for this subnet
-	  u_char *eaddr = find_arp_entry(idchad);
-	  if (eaddr != NULL) {
-	    if (chether_debug || debug) fprintf(stderr,"Forward: Sending on ether %s from %#o to %#o\n", chethdest[i].cheth_ifname, schad, idchad);
-	    send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
-	    done = 1;
-	    break;
-	  } else {
-	    if (chether_debug || debug) fprintf(stderr,"Forward: Don't know %#o, sending ARP request on %s\n", idchad, chethdest[i].cheth_ifname);
-	    send_chaos_arp_request(&chethdest[i], idchad);
-	    // Chaos sender will retransmit, surely.
-	    done = 1;
-	    break;
-	  }
+      }
+    } else {
+      u_short idchad = dchad;
+      if (RT_BRIDGED(rt))
+	// the bridge is on Ether, but the dest might not be
+	idchad = rt->rt_braddr;
+      if (chethdest[i].cheth_addr == (idchad & 0xff00)) {
+	// Ether link for this subnet
+	u_char *eaddr = find_arp_entry(idchad);
+	if (eaddr != NULL) {
+	  if (chether_debug || debug) fprintf(stderr,"Forward: Sending on ether %s from %#o to %#o\n", chethdest[i].cheth_ifname, schad, idchad);
+	  send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
+	  done = 1;
+	  break;
+	} else {
+	  if (chether_debug || debug) fprintf(stderr,"Forward: Don't know %#o, sending ARP request on %s\n", idchad, chethdest[i].cheth_ifname);
+	  send_chaos_arp_request(&chethdest[i], idchad);
+	  // Chaos sender will retransmit, surely.
+	  done = 1;
+	  break;
 	}
       }
     }
