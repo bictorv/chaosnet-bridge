@@ -21,7 +21,7 @@
 
 /* Bridge program for various Chaosnet implementations.
    Should support as many as desired of
-   - Chaos-over-Ethernet [#### currently only one interface]
+   - Chaos-over-Ethernet
    - CHUDP (Chaos-over-UDP, used by klh10/its)
    - Chaos-over-TLS (using two bytes of record length)
    - chaosd (Unix socket protocol, used by the usim CADR emulator)
@@ -168,7 +168,6 @@ int nchaddr = 0;
 u_short mychaddr[NCHADDR];	/* My Chaos address (only for ARP) */
 int chudp_port = 42042;		// default UDP port
 int chudp_dynamic = 0; // dynamically add CHUDP entries for new receptions
-char ifname[128] = "eth0";	// default interface name
 int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
 
@@ -1372,8 +1371,11 @@ parse_config_line(char *line)
 #if CHAOS_TLS
   // tls key keyfile cert certfile ca-chain ca-chain-cert-file [myaddr %o] [ server [ portnr ]]
   else if (strcasecmp(tok, "tls") == 0) {
-    do_tls = 1;
-    return parse_tls_config_line();
+    // do_tls = 1;
+    int v = parse_tls_config_line();
+    if (v && do_tls_server)
+      do_tls = 1;
+    return v;
   }
 #endif // CHAOS_TLS
 #if CHAOS_DNS
@@ -1384,13 +1386,13 @@ parse_config_line(char *line)
 #if CHAOS_IP
   else if (strcasecmp(tok,"chip") == 0) {
     // this is pointless unless chip is "dynamic", but...
-    do_chip = 1;
+    // do_chip = 1;
     return parse_chip_config_line();
   }
 #endif
 #if CHAOS_ETHERP
   else if (strcasecmp(tok, "ether") == 0) {
-    do_ether = 1;
+    // do_ether = 1;
     return parse_ether_config_line();
   }
 #endif
@@ -1448,14 +1450,18 @@ print_stats(int sig)
     if (do_unix)
       print_config_usockets();
     if (do_udp || do_udp6)
-      printf(" CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
+      printf("CHUDP enabled on port %d (%s)\n", chudp_port, chudp_dynamic ? "dynamic" : "static");
+#if CHAOS_ETHERP
     if (do_ether)
       print_config_ether();
+#endif
+#if CHAOS_TLS
     if (do_tls || do_tls_server) {
-      printf(" Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
+      printf("Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
       if (do_tls_server)
-	printf("  and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
+	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
+#endif
 #if CHAOS_IP
     print_config_chip();
 #endif
@@ -1466,7 +1472,9 @@ print_stats(int sig)
     }
 #endif
   }
+#if CHAOS_ETHERP
   print_arp_table();
+#endif
   print_routing_table();
   print_chudp_config();
 #if CHAOS_TLS
