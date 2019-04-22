@@ -15,6 +15,7 @@
 */
 
 #include <sys/types.h>
+#include <sys/wait.h>
 #include "chudp.h"
 #include "cbridge.h"
 
