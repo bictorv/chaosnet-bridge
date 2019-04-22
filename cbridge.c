@@ -156,9 +156,6 @@ void print_config_dns(void);
 void *dns_forwarder_thread(void *v);
 #endif
 
-
-int udpsock = 0, udp6sock = 0;
-
 time_t boottime;
 
 // Config stuff @@@@ some to be moved to respective module
@@ -170,13 +167,18 @@ int chudp_port = 42042;		// default UDP port
 int chudp_dynamic = 0; // dynamically add CHUDP entries for new receptions
 int do_unix = 0, do_udp = 0, do_udp6 = 0, do_ether = 0;
 
-
 // for each implementation
-void forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
-void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
-void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
 void forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+void forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+#if CHAOS_ETHERP
+void forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+#endif
+#if CHAOS_TLS
+void forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+#endif
+#if CHAOS_IP
 void forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen);
+#endif
 
 // contacts
 void handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
@@ -184,10 +186,12 @@ int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
 
 // chudp
 void init_chaos_udp(int v6, int v4);
+void print_chudp_config(void);
 void reparse_chudp_names(void);
 
 #if CHAOS_ETHERP
 // chether
+void print_arp_table(void);
 void print_config_ether(void);
 int parse_ether_config_line(void);
 int parse_ether_link_config(void);
@@ -197,6 +201,7 @@ int postparse_ether_link_config(struct chroute *rt);
 #if CHAOS_TLS
 // chtls
 void init_chaos_tls();
+void print_tlsdest_config(void);
 #endif
 
 #if CHAOS_IP
@@ -211,11 +216,17 @@ void print_config_usockets(void);
 // threads @@@@ document args?
 void *unix_input(void *v);
 void *chudp_input(void *v);
+#if CHAOS_ETHERP
 void *ether_input(void *v);
+#endif
+#if CHAOS_IP
 void *chip_input(void *v);
+#endif
+#if CHAOS_TLS
 void *tls_server(void *v);
 void *tls_input(void *v);
 void *tls_connector(void *arg);
+#endif
 
 int is_mychaddr(u_short addr) 
 {
@@ -300,7 +311,9 @@ char *rt_linkname(u_char linktype)
 #if CHAOS_IP
   case LINK_IP: return "CHIP";
 #endif
+#if CHAOS_ETHERP
   case LINK_ETHER: return "Ether";
+#endif
   default: return "Unknown?";
   }
 }
@@ -1178,20 +1191,7 @@ parse_link_config()
     fprintf(stderr,"bad link config: no parameters\n");
     return -1;
   }
-  if (strcasecmp(tok, "ether") == 0) {
-    do_ether = 1;
-    rt->rt_link = LINK_ETHER;
-    rt->rt_type = RT_STATIC;
-    rt->rt_cost = RTCOST_DIRECT;
-    if (parse_ether_link_config() < 0)
-      return -1;
-  } else if (strcasecmp(tok, "unix") == 0) {
-    do_unix = 1;
-    rt->rt_link = LINK_UNIXSOCK;
-    rt->rt_type = RT_STATIC;
-    rt->rt_cost = RTCOST_DIRECT;
-
-  } else if (strcasecmp(tok, "chudp") == 0) {
+  if (strcasecmp(tok, "chudp") == 0) {
     rt->rt_link = LINK_CHUDP;
     rt->rt_type = RT_STATIC;
     rt->rt_cost = RTCOST_ASYNCH;
@@ -1206,6 +1206,21 @@ parse_link_config()
     else if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET6)
       do_udp6 = 1;
     chudpdest_len++;
+
+#if CHAOS_ETHERP
+  } else if (strcasecmp(tok, "ether") == 0) {
+    do_ether = 1;
+    rt->rt_link = LINK_ETHER;
+    rt->rt_type = RT_STATIC;
+    rt->rt_cost = RTCOST_DIRECT;
+    if (parse_ether_link_config() < 0)
+      return -1;
+  } else if (strcasecmp(tok, "unix") == 0) {
+    do_unix = 1;
+    rt->rt_link = LINK_UNIXSOCK;
+    rt->rt_type = RT_STATIC;
+    rt->rt_cost = RTCOST_DIRECT;
+#endif
 
 #if CHAOS_TLS
   } else if (strcasecmp(tok, "tls") == 0) {
@@ -1233,8 +1248,8 @@ parse_link_config()
       return -1;
     do_chip = 1;
     chipdest_len++;
-  }
 #endif
+  }
 
   // host|subnet y type t cost c
   tok = strtok(NULL," \t\r\n");
@@ -1593,11 +1608,6 @@ main(int argc, char *argv[])
   }
 #endif
 
-  // Open links that have been configured
-  if (do_udp6 || do_udp) {
-    init_chaos_udp(do_udp, do_udp6);
-  }
-
 #if 1
   if (verbose)
     // Print config
@@ -1628,17 +1638,10 @@ main(int argc, char *argv[])
       exit(1);
     }
   }
-  if (udpsock > 0) {
-    if (verbose) fprintf(stderr, "Starting thread for UDP socket\n");
-    if (pthread_create(&threads[ti++], NULL, &chudp_input, &udpsock) < 0) {
+  if (do_udp) {
+    if (verbose) fprintf(stderr, "Starting thread for UDP sockets\n");
+    if (pthread_create(&threads[ti++], NULL, &chudp_input, &do_udp6) < 0) {
       perror("pthread_create(chudp_input)");
-      exit(1);
-    }
-  }
-  if (udp6sock > 0) {
-    if (verbose) fprintf(stderr, "Starting thread for UDP v6 socket\n");
-    if (pthread_create(&threads[ti++], NULL, &chudp_input, &udp6sock) < 0) {
-      perror("pthread_create(chudp_input v6)");
       exit(1);
     }
   }

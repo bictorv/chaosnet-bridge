@@ -235,7 +235,7 @@ void reparse_chip_names()
   PTUNLOCK(chipdest_lock);
 }
 
-void
+static void
 init_chaos_ip()
 {
   int one = 1;
@@ -398,6 +398,9 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   // Expected length
   // @@@@ check if this is a subnet-mapped Chaosnet/IP,
   // @@@@ and perhaps fill in the "hw trailer" if necessary. Doesn't do checksumming...
+  // If pkt len is just header+nbytes, check if source IP has a subnet entry in chipdest,
+  // and dest IP also matches, if so use the corresponding Chaos addresses for source/dest trailer.
+  // (Perhaps let this behaviour be a config option for the mapping?)
 
   int xlen = (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE);
   if ((xlen % 2) == 1)
@@ -478,6 +481,15 @@ chip_input(void *v)
   u_char data[CH_PK_MAXLEN+sizeof(struct ip)+sizeof(struct ip6_hdr)];	 /* fuzz */
   int sval;
   
+  if (chipdest_len == 0) {
+    // nothing configured, just die
+    if (chip_debug) fprintf(stderr,"chip_input started without chip links configured, terminating\n");
+    pthread_exit(NULL);
+  }
+
+  // initialize sockets
+  init_chaos_ip();
+
   maxfd = 1+(ip_sock > ip6_sock ? ip_sock : ip6_sock);
   while (1) {
     memset(&sa, 0, sizeof(sa));
@@ -552,8 +564,8 @@ chip_input(void *v)
       perror("CHIP: select");
       len = -1;
     }
-    if (chip_debug || debug) fprintf(stderr,"CHIP: received %d bytes\n", len);
     if (len > 0) {
+      if (chip_debug || debug) fprintf(stderr,"CHIP: received %d bytes\n", len);
       chip_input_handle_data((u_char *)&data, len, (struct sockaddr *)&sa, salen);
     }
   }
@@ -713,6 +725,12 @@ void
 forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
   int i, found = 0;
+
+  if ((ip_sock <= 0) || (ip6_sock <= 0)) {
+    if (chip_debug || debug)
+      fprintf(stderr,"CHIP: can't forward on IP - sockets not open yet\n");
+    return;
+  }
 
   if (RT_BRIDGED(rt))
     // the bridge is on IP, but the dest might not be

@@ -23,7 +23,7 @@
 /* **** Chaos-over-Unix-Sockets functions **** */
 // Based on code by Brad Parker (brad@heeltoe.com), see http://www.unlambda.com/cadr/
 
-static int unixsock;
+static int unixsock = -1;
 
 /*
  * connect to server using specificed socket type
@@ -181,6 +181,10 @@ void * unix_input(void *v)
     }
   }
 
+  if ((unixsock = u_connect_to_server()) < 0)
+    //exit(1);
+    fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+
   while (1) {
     memset(pkt, 0, blen);
     if (unixsock < 0 || (len = u_read_chaos(unixsock, pkt, blen)) < 0) {
@@ -278,12 +282,4 @@ print_config_usockets()
     printf(" Unix socket enabled and open\n");
   else
     printf(" Unix socket not open\n");
-}
-
-// module initialization
-void init_chaos_usockets()
-{
-  if ((unixsock = u_connect_to_server()) < 0)
-    //exit(1);
-    fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
 }

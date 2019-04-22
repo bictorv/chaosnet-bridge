@@ -18,7 +18,8 @@
 #include "chudp.h"
 #include "cbridge.h"
 
-int chudp_debug = 0;
+static int chudp_debug = 0;
+static int udpsock = 0, udp6sock = 0;
 
 extern int chudp_dynamic, chudp_port;
 
@@ -181,6 +182,12 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
   unsigned short cks;
   int i;
   char ip[INET6_ADDRSTRLEN];
+
+  // Not open (yet)
+  if (sock <= 0) {
+    if (chudp_debug) fprintf(stderr,"CHUDP: Can't forward packet, socket not open (yet)\n");
+    return;
+  }
 
   i = CHUDP_HEADERSIZE+CHAOS_HEADERSIZE+ch_nbytes(ch)+CHAOS_HW_TRAILERSIZE;
   if ((i % 2) == 1)
@@ -404,7 +411,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   return cnt;
 }
 
-void * chudp_input(void *v)
+void * chudp_sock_input(void *v)
 {
   /* CHUDP -> others thread */
   int sock = (int)*(int *)v;
@@ -432,6 +439,37 @@ void * chudp_input(void *v)
 			(u_char *)ch, len, LINK_CHUDP);
     } else
       if (len > 0 && (chudp_debug || verbose)) fprintf(stderr,"chudp: Short packet %d bytes\n", len);
+  }
+}
+
+void *
+chudp_input(void *v)
+{
+  int do_ipv6 = (int)*(int *)v;
+  int foo;
+  pthread_t subthreads[2];
+  int ti = 0;
+
+  if (do_ipv6) {
+    if ((udp6sock = chudp_connect(chudp_port, AF_INET6)) < 0)
+      pthread_exit(NULL);
+    else {
+      if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udp6sock) < 0) {
+	perror("pthread_create(chudp_sock_input, v6)");
+	pthread_exit(NULL);
+      }
+    }
+  }
+  if ((udpsock = chudp_connect(chudp_port, AF_INET)) < 0)
+    pthread_exit(NULL);
+
+  if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udpsock) < 0) {
+    perror("pthread_create(chudp_sock_input, v4)");
+    pthread_exit(NULL);
+  }
+  while (1) {
+    sleep(5);
+    wait(&foo);
   }
 }
 
@@ -491,17 +529,4 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   if (!found && (chudp_debug || verbose || debug))
     fprintf(stderr, "Can't find CHUDP link to %#o via %#o/%#o\n",
 	    dchad, rt->rt_dest, rt->rt_braddr);
-}
-
-// initialize module
-void init_chaos_udp(int ipv4, int ipv6)
-{
-  if (ipv6) {
-    if ((udp6sock = chudp_connect(chudp_port, AF_INET6)) < 0)
-      exit(1);
-  }
-  if (ipv4) {
-    if ((udpsock = chudp_connect(chudp_port, AF_INET)) < 0)
-      exit(1);
-  }
 }

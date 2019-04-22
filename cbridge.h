@@ -49,6 +49,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -204,45 +205,6 @@ struct tls_dest {
 
 #endif // CHAOS_TLS
 
-// ================ Ether ================
-#if CHAOS_ETHERP
-// ARP stuff
-#ifndef ETHERTYPE_CHAOS
-# define ETHERTYPE_CHAOS 0x0804
-#endif
-#ifndef ARPHRD_CHAOS		/* this is the original Chaosnet hardware, not the ethernet protocol type */
-#define ARPHRD_CHAOS 5
-#endif
-// old names for new, new names for old?
-#ifndef ARPOP_RREQUEST
-#define ARPOP_RREQUEST ARPOP_REVREQUEST // 3	/* request protocol address given hardware */
-#endif
-#ifndef ARPOP_RREPLY
-#define ARPOP_RREPLY ARPOP_REVREPLY // 4	/* response giving protocol address */
-#endif
-
-/* Chaos ARP list */
-#define CHARP_MAX 16
-#define CHARP_MAX_AGE (60*5)	// ARP cache limit
-struct charp_ent {
-  u_short charp_chaddr;
-  u_char charp_eaddr[ETHER_ADDR_LEN];
-  time_t charp_age;
-};
-
-#define CHETHDEST_MAX 8
-struct chethdest {
-  u_short cheth_addr;		/* chaos addr or (more likely) subnet */
-  u_short cheth_myaddr;		/* my chaos address on this interface */
-  char cheth_ifname[IFNAMSIZ];	 /* interface name */
-  u_char cheth_ea[ETHER_ADDR_LEN]; /* ether address */
-  int cheth_chfd;		/* Chaos pkt fd */
-  int cheth_arpfd;		/* ARP pkt fd */
-  int cheth_ifix;		/* interface index */
-};
-
-#endif // CHAOS_ETHERP
-
 // ================ IP ================
 #if CHAOS_IP
 #ifndef IPPROTO_CHAOS
@@ -299,9 +261,6 @@ extern int tlsdest_len;	/* cf TLSDEST_MAX */
 // @@@@ replace by function
 extern u_short mychaddr[];
 
-// @@@@ move to respective module
-extern int udpsock, udp6sock;
-
 #if CHAOS_IP
 extern int chipdest_len;
 extern struct chipdest chipdest[CHIPDEST_MAX];
@@ -336,11 +295,7 @@ void close_tls_route(struct chroute *rt);
 int validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nchaddr);
 #endif
 
-// @@@@ move to respective module
 void print_routing_table(void);
-void print_tlsdest_config(void);
-void print_chudp_config(void);
-void print_arp_table(void);
 
 struct chroute *find_in_routing_table(u_short dchad, int only_host, int also_nopath);
 void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_linktype);

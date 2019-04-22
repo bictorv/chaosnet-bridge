@@ -21,6 +21,42 @@
 
 /* **** Chaos-over-Ethernet functions **** */
 
+// ARP stuff
+#ifndef ETHERTYPE_CHAOS
+# define ETHERTYPE_CHAOS 0x0804
+#endif
+#ifndef ARPHRD_CHAOS		/* this is the original Chaosnet hardware, not the ethernet protocol type */
+#define ARPHRD_CHAOS 5
+#endif
+// old names for new, new names for old?
+#ifndef ARPOP_RREQUEST
+#define ARPOP_RREQUEST ARPOP_REVREQUEST // 3	/* request protocol address given hardware */
+#endif
+#ifndef ARPOP_RREPLY
+#define ARPOP_RREPLY ARPOP_REVREPLY // 4	/* response giving protocol address */
+#endif
+
+/* Chaos ARP list */
+#define CHARP_MAX 16
+#define CHARP_MAX_AGE (60*5)	// ARP cache limit
+struct charp_ent {
+  u_short charp_chaddr;
+  u_char charp_eaddr[ETHER_ADDR_LEN];
+  time_t charp_age;
+};
+
+#define CHETHDEST_MAX 8
+struct chethdest {
+  u_short cheth_addr;		/* chaos addr or (more likely) subnet */
+  u_short cheth_myaddr;		/* my chaos address on this interface */
+  char cheth_ifname[IFNAMSIZ];	 /* interface name */
+  u_char cheth_ea[ETHER_ADDR_LEN]; /* ether address */
+  int cheth_chfd;		/* Chaos pkt fd */
+  int cheth_arpfd;		/* ARP pkt fd */
+  int cheth_ifix;		/* interface index */
+};
+
+
 static u_char eth_brd[ETHER_ADDR_LEN] = {255,255,255,255,255,255};
 
 static int chether_debug = 0;
