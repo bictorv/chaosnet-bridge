@@ -253,9 +253,10 @@ static void get_my_ea() {
 #if ETHER_BPF
 #define BPF_MTU CH_PK_MAXLEN // (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
 
-// from dpimp.c in klh10 by Ken Harrenstein
+// based on dpimp.c in klh10 by Ken Harrenstein
 /* Packet byte offsets for interesting fields (in network order) */
 #define PKBOFF_EDEST 0		/* 1st shortword of Ethernet destination */
+#define PKBOFF_ESRC 6		/* 1st shortword of Ethernet source */
 #define PKBOFF_ETYPE 12		/* Shortwd offset to Ethernet packet type */
 #define PKBOFF_ARP_PTYPE (sizeof(struct ether_header)+sizeof(u_short))  /* ARP protocol type */
 
@@ -371,8 +372,8 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
     return -1;
   }
 #endif
-  // Don't echo my sent pkts back to me, please
-  x = 0;
+  // Do echo my sent pkts back to me, please - this lets other BPF processes see them
+  x = 1;
   if (ioctl(fd, BIOCSSEESENT, (void *)&x) < 0) {
     perror("ioctl(BIOCSSEESENT)");
     close(fd);
@@ -428,6 +429,9 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
   // (009) ret      #262144
   // (010) ret      #0
 
+  u_short ea1 = ((cd->cheth_ea[0])<<8)|(cd->cheth_ea[1]);
+  u_long ea2 = ((((cd->cheth_ea[2])<<8)|(cd->cheth_ea[3]))<<8|(cd->cheth_ea[4]))<<8 | (cd->cheth_ea[5]);
+
   pfp = &pfilter;
   p = pfp->bf_insns;		/* 1st instruction of BPF program */
   // Check the ethernet type field
@@ -439,13 +443,18 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
     *p++ = BPFI_LDH(PKBOFF_ARP_PTYPE); /* Check the ARP type */
     *p++ = BPFI_CAME(ETHERTYPE_CHAOS);
     *p++ = BPFI_RETFAIL();	/* Not Chaos, ignore */
+    // check for pkt sent from myself
+    *p++ = BPFI_LD(PKBOFF_ESRC+2);  /* last word of Ether source */
+    *p++ = BPFI_CAME(ea2);
+    *p++ = BPFI_RETWIN(); /* no match, handle it */
+    *p++ = BPFI_LDH(PKBOFF_ESRC);  /* get first part of source addr */
+    *p++ = BPFI_CAMN(ea1);
+    *p++ = BPFI_RETFAIL();		/* match both, skip pkt sent from myself */
     // Never mind about destination here, if we get other ARP info that's nice?
   }
   else {
     // For Ethernet pkts, also filter for our own address or broadcast,
     // in case someone else makes the interface promiscuous
-    u_short ea1 = ((cd->cheth_ea[0])<<8)|(cd->cheth_ea[1]);
-    u_long ea2 = ((((cd->cheth_ea[2])<<8)|(cd->cheth_ea[3]))<<8|(cd->cheth_ea[4]))<<8 | (cd->cheth_ea[5]);
     *p++ = BPFI_LD(PKBOFF_EDEST+2);	/* last word of Ether dest */
     *p++ = BPFI_CAME(ea2);
     *p++ = BPFI_SKIP(3); /* no match, skip forward and check for broadcast */
@@ -458,10 +467,21 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
     *p++ = BPFI_LDH(PKBOFF_EDEST);  /* get first part of dest addr */
     *p++ = BPFI_CAME(0xffff);
     *p++ = BPFI_RETFAIL();	/* nope */
+    // check for pkt sent from myself
+    *p++ = BPFI_LD(PKBOFF_ESRC+2);  /* last work of Ether source */
+    *p++ = BPFI_CAME(ea2);
+    *p++ = BPFI_RETWIN(); /* no match, handle it */
+    *p++ = BPFI_LDH(PKBOFF_ESRC);  /* get first part of source addr */
+    *p++ = BPFI_CAMN(ea1);
+    *p++ = BPFI_RETFAIL();		/* match both, skip pkt sent from myself */
   }
   *p++ = BPFI_RETWIN();		/* win */
 
   pfp->bf_len = p - pfp->bf_insns; /* length of program */
+  if (pfp->bf_len > BPF_PFMAX) {
+    fprintf(stderr,"BPF: filter program too long, increase BPF_PFMAX!\n");
+    exit(1);
+  }
 
   if (ioctl(fd, BIOCSETF, (char *)pfp) < 0) {
     perror("ioctl(BIOCSETF)");
@@ -802,6 +822,18 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 
   struct ether_header *eh = (struct ether_header *)(ether_bpf_buf + bpf_buf_offset + bpf_header->bh_hdrlen);
 
+  if (nchethdest > 1) {
+    // check if this was sent by me on another interface
+    // BPF filter program checks for this interface only (lazy) - in most cases there is only one interface
+    for (i = 0; i < nchethdest; i++) {
+      if ((&chethdest[i] != cd) && (memcmp(eh->ether_shost, chethdest[i].cheth_ea, 6) == 0)) {
+	if (chether_debug)
+	  fprintf(stderr,"Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
+	return 0;
+      }
+    }
+  }
+
   for (i = 0; i < ETHER_ADDR_LEN-1; i++) {
     src_mac |= eh->ether_shost[i];
     src_mac = src_mac<<8;
@@ -818,6 +850,20 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
   if (chether_debug) fprintf(stderr,"Ether: Received %d bytes from fd %d, protocol 0x%04x, halen %d\n",
 			     rlen, if_fd, ntohs(protocol), sll.sll_halen);
 #endif
+#if 0
+  // won't happen for non-BPF?
+  // check if pkt sent from myself
+  if (sll.sll_halen == 6) {
+    for (i = 0; i < nchethdest; i++) {
+      if (memcmp(sll.sll_addr, chethdest[i].cheth_ea, 6) == 0) {
+	if (chether_debug)
+	  fprintf(stderr,"Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
+	return 0;
+      }
+    }
+  }
+#endif
+
   for (i = 0; i < sll.sll_halen-1; i++) {
     src_mac |= sll.sll_addr[i];
     src_mac = src_mac<<8;
@@ -837,6 +883,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     return 0;
 
   if (chether_debug || verbose) {
+#if !ETHER_BPF
 #if 0
     if (debug) {
       printf("Received:\n");
@@ -862,7 +909,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       printf("%02X ", sll.sll_addr[i]);
     printf("\n");
 #endif
-
+#endif // !ETHER_BPF
 #if 0
     if (debug && protocol == htons(ETHERTYPE_ARP)) {
       struct arphdr *arp = (struct arphdr *)buf;
