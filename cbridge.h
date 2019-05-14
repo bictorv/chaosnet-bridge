@@ -91,22 +91,22 @@
 
 // Connection types, cf AIM 628 p14, which states Direct, Fixed, and Bridged.
 // We have other ways of saying whether it's bridged or direct, but instead need this:
-enum { RT_NOPATH=0,
-       RT_STATIC,		/* Static route (from config file) */
-       RT_DYNAMIC,		/* Dynamic, from RUT pkt or "dynamic" CHUPD/CHIP/etc */
+enum rttype { RT_NOPATH=0,
+	      RT_STATIC,		/* Static route (from config file) */
+	      RT_DYNAMIC,		/* Dynamic, from RUT pkt or "dynamic" CHUPD/CHIP/etc */
 };
 // Link implementation types
-enum { LINK_NOLINK=0,
-       LINK_UNIXSOCK,		/* Chaos-over-Unix sockets ("chaosd") */
-       LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
+enum linktype { LINK_NOLINK=0,
+		LINK_UNIXSOCK,		/* Chaos-over-Unix sockets ("chaosd") */
+		LINK_CHUDP,		/* Chaos-over-UDP ("chudp") */
 #if CHAOS_ETHERP
-       LINK_ETHER,		/* Chaos-over-Ethernet */
+		LINK_ETHER,		/* Chaos-over-Ethernet */
 #endif
 #if CHAOS_TLS
-       LINK_TLS,		/* Chaos-over-TLS */
+		LINK_TLS,		/* Chaos-over-TLS */
 #endif
 #if CHAOS_IP
-       LINK_IP,			/* Chaos-over-IP */
+		LINK_IP,			/* Chaos-over-IP */
 #endif
 };
 
@@ -129,8 +129,8 @@ struct chroute {
   u_short rt_dest;		/* destination addr (subnet<<8 or host) - NOT redundant for subnets, we might not know the index in rttbl_host */
   u_short rt_braddr;		/* bridge address */
   u_short rt_myaddr;		/* my specific address (on that subnet), or use mychaddr */
-  u_char rt_type;		/* connection type */
-  u_char rt_link;		/* link implementation */
+  enum rttype rt_type;		/* connection type */
+  enum linktype rt_link;		/* link implementation */
   u_short rt_cost;		/* cost */
   time_t rt_cost_updated;	/* cost last updated */
 };

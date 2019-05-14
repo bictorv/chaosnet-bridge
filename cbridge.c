@@ -735,7 +735,7 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
 
   // From me?
   if (is_mychaddr(ch_srcaddr(ch)) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
-    // Should not happen. Unless Unix sockets.
+    // Should not happen. Unless Unix sockets. @@@@ Look for this in usocket code instead.
     if (src_linktype != LINK_UNIXSOCK) {
       if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, link %s) \n",
 			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
@@ -746,7 +746,7 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
   }
 
   if ((rt != NULL) && (rt->rt_link == LINK_UNIXSOCK) && (src_linktype == LINK_UNIXSOCK)) {
-      // Unix socket echoes my own packets
+      // Unix socket echoes my own packets. @@@@ Look for this in usocket code instead.
       if (debug) fprintf(stderr,"[Not routing %s from %#o to %#o back to source route (%s)]\n",
 			 ch_opcode_name(ch_opcode(ch)),
 			 ch_srcaddr(ch), dchad, rt_linkname(rt->rt_link));
@@ -803,6 +803,10 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
   set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
   switch (rt->rt_link) {
+  case LINK_NOLINK:
+    if (debug) fprintf(stderr,"%%%% Not sending RUT on %s link to %#o\n",
+		       rt_typename(rt->rt_link), rt->rt_dest);
+    return;			/* ignore */
 #if CHAOS_ETHERP
   case LINK_ETHER:
     set_ch_destaddr(cha, 0);	/* broadcast */
@@ -1445,6 +1449,36 @@ parse_config(char *cfile)
   }
 }
 
+#if CHAOS_DNS
+// Validate that all addresses in mychaddr (declared by "myaddr" params and "chaddr" config)
+// indeed belong to the Chaos DNS host "mylongname".
+static void
+validate_mychaddrs(u_char *mylongname)
+{
+  int i, j;
+  u_short myaddrs[16];
+  int naddrs = dns_addrs_of_name(mylongname, (u_short *)&myaddrs, 16);
+  if (naddrs == 0) {
+    fprintf(stderr,"DNS config problem: can't get Chaos addresses of your Chaos host name %s\n",
+	    mylongname);
+  } else if (debug)
+    fprintf(stderr,"DNS found %d addresses of %s (configured to use %d)\n", naddrs, mylongname, nchaddr);
+  for (j = 0; j < nchaddr; j++) {
+    int found = 0;
+    if (debug) fprintf(stderr," Looking for %#o\n", mychaddr[j]);
+    for (i = 0; i < naddrs; i++) {
+      if (myaddrs[i] == mychaddr[j]) {
+	found = 1;
+	break;
+      }
+    }
+    if (!found)
+      fprintf(stderr,"Warning: configured to use addr %#o which is not an address of %s in DNS\n",
+	      mychaddr[j], mylongname);
+  }
+}
+#endif
+
 // **** Main program
 
 // Print stats on SIGINFO/SIGUSR1
@@ -1454,11 +1488,11 @@ print_stats(int sig)
   int i;
   if (sig != 0) {
     // fprintf(stderr,"Signal %d received\n", sig);
-    printf("My Chaosnet host name %s, main address %#o\n",
-	    myname, mychaddr[0]);
-    if (nchaddr > 1) {
-      printf(" additional addresses ");
-      for (i = 1; i < nchaddr && i < NCHADDR; i++)
+    printf("My Chaosnet host name %s\n",
+	    myname);
+    if (nchaddr > 0) {
+      printf(" using address%s ", (nchaddr != 1 ? "es" : ""));
+      for (i = 0; i < nchaddr && i < NCHADDR; i++)
 	printf("%#o ", mychaddr[i]);
       printf("\n");
     }
@@ -1554,7 +1588,7 @@ main(int argc, char *argv[])
 
   // Check config, validate settings
   if (mychaddr[0] == 0) {
-    fprintf(stderr,"Configuration error: must set chaddr (my Chaos address)\n");
+    fprintf(stderr,"Configuration error: no Chaos address known, use global \"chaddr\" or \"myaddr\" link param to set one.\n");
     exit(1);
   }
 
@@ -1564,15 +1598,21 @@ main(int argc, char *argv[])
 
   // check if myname should/can be initialized
   if (myname[0] == '\0') {
-    char mylongname[256];
+    u_char mylongname[256];
     // look up my address
-    if (dns_name_of_addr(mychaddr[0], (u_char *)mylongname, sizeof(mylongname)) > 0) {
+    if (debug) fprintf(stderr,"Validating address %#o\n", mychaddr[0]);
+    if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
+      if (debug) fprintf(stderr," found name %s\n", mylongname);
+      validate_mychaddrs(mylongname);
+
       // use first part only
-      char *c = index(mylongname, '.');
+      char *c = index((char *)mylongname, '.');
       if (c) *c = '\0';
       // prettify in case lower
       mylongname[0] = toupper(mylongname[0]);
-      strncpy(myname, mylongname, sizeof(myname));
+      strncpy(myname, (char *)mylongname, sizeof(myname));
+    } else if (verbose) {
+      fprintf(stderr,"%%%% DNS config problem: can't find main address %#o in DNS\n", mychaddr[0]);
     }
   }
 #endif
@@ -1581,6 +1621,7 @@ main(int argc, char *argv[])
   if (myname[0] == '\0') {
     if (gethostname(myname, sizeof(myname)) < 0) {
       perror("gethostname");
+      // make it ugly
       strcpy(myname,"UNKNOWN");
     } else {
       char *c = index(myname,'.');  /* only use unqualified part */
