@@ -175,5 +175,6 @@ started).
 
 Often the Ethernet link can NOT send and receive to the host system
 running the bridge program, or other programs using the same
-mechanism, such as LambdaDelta or klh10 using Chaos-over-Ether. 
-Run the bridge on another system on your network.
+mechanism, such as klh10 using Chaos-over-Ether. 
+(With the latest version of LambdaDelta, the bridge program plays nicely though.)
+If you have problems, run the bridge on another system on your network.
