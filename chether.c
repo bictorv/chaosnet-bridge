@@ -97,12 +97,12 @@ print_config_ether()
     for (j = 0; j < ETHER_ADDR_LEN-1; j++)
       printf("%02X:",chethdest[i].cheth_ea[j]);
     printf("%02X\n",chethdest[i].cheth_ea[j]);
-    printf(" for %s %#o, my Chaos address %#o\n",
+    printf(" for %s %#o, my Chaos address %#o",
 	   (chethdest[i].cheth_addr & 0xff) == 0 ? "subnet" : "host",
 	   (chethdest[i].cheth_addr & 0xff) == 0 ? chethdest[i].cheth_addr >> 8 : chethdest[i].cheth_addr,
 	   chethdest[i].cheth_myaddr);
     if (chether_debug)
-      printf(" ARP fd %d, Chaos fd %d", chethdest[i].cheth_arpfd, chethdest[i].cheth_chfd);
+      printf("\n ARP fd %d, Chaos fd %d", chethdest[i].cheth_arpfd, chethdest[i].cheth_chfd);
     printf("\n");
   }
 }
