@@ -735,7 +735,7 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
 
   // From me?
   if (is_mychaddr(ch_srcaddr(ch)) || (rt != NULL && ch_srcaddr(ch) == rt->rt_myaddr)) {
-    // Should not happen. Unless Unix sockets. @@@@ Look for this in usocket code instead.
+    // Should not happen. Unless Unix sockets.
     if (src_linktype != LINK_UNIXSOCK) {
       if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, link %s) \n",
 			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
@@ -746,7 +746,7 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
   }
 
   if ((rt != NULL) && (rt->rt_link == LINK_UNIXSOCK) && (src_linktype == LINK_UNIXSOCK)) {
-      // Unix socket echoes my own packets. @@@@ Look for this in usocket code instead.
+      // Unix socket echoes my own packets.
       if (debug) fprintf(stderr,"[Not routing %s from %#o to %#o back to source route (%s)]\n",
 			 ch_opcode_name(ch_opcode(ch)),
 			 ch_srcaddr(ch), dchad, rt_linkname(rt->rt_link));
