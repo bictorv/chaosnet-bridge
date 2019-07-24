@@ -237,6 +237,15 @@ int is_mychaddr(u_short addr)
   return 0;
 }
 
+int mychaddr_on_net(u_short addr)
+{
+  int i;
+  for (i = 0; i < nchaddr && i < NCHADDR; i++)
+    if ((mychaddr[i] & 0xff00) == (addr & 0xff00))
+      return mychaddr[i];
+  return 0;
+}
+
 void add_mychaddr(u_short addr)
 {
   if (!is_mychaddr(addr)) {
@@ -332,26 +341,26 @@ void
 print_routing_table()
 {
   int i;
-  fprintf(stderr,"Routing tables follow:\n");
+  printf("Routing tables follow:\n");
   if (rttbl_host_len > 0) {
-    fprintf(stderr,"Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
+    printf("Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
     for (i = 0; i < rttbl_host_len; i++)
       if (rttbl_host[i].rt_link != LINK_NOLINK)
-	fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
-		rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
-		rt_linkname(rttbl_host[i].rt_link),
-		rttbl_host[i].rt_myaddr,
-		rttbl_host[i].rt_cost,
-		rttbl_host[i].rt_cost_updated > 0 ? time(NULL) - rttbl_host[i].rt_cost_updated : 0);
+	printf("%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+	       rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
+	       rt_linkname(rttbl_host[i].rt_link),
+	       rttbl_host[i].rt_myaddr,
+	       rttbl_host[i].rt_cost,
+	       rttbl_host[i].rt_cost_updated > 0 ? time(NULL) - rttbl_host[i].rt_cost_updated : 0);
   }
-  fprintf(stderr,"Net\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
+  printf("Net\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
   for (i = 0; i < 0xff; i++)
     if (rttbl_net[i].rt_link != LINK_NOLINK)
-      fprintf(stderr,"%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
-	      i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link),
-	      rttbl_net[i].rt_myaddr,
-	      rttbl_net[i].rt_cost,
-	      rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
+      printf("%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+	     i, rttbl_net[i].rt_braddr, rt_typename(rttbl_net[i].rt_type), rt_linkname(rttbl_net[i].rt_link),
+	     rttbl_net[i].rt_myaddr,
+	     rttbl_net[i].rt_cost,
+	     rttbl_net[i].rt_cost_updated > 0 ? time(NULL) - rttbl_net[i].rt_cost_updated : 0);
 }
 
 struct chroute *
@@ -798,9 +807,16 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
 void send_rut_pkt(struct chroute *rt, u_char *pkt, int c) 
 {
   struct chaos_header *cha = (struct chaos_header *)pkt;
+  u_short mya;
+  if (rt->rt_myaddr != 0)
+    // obey config
+    mya = rt->rt_myaddr;
+  else
+    // find out
+    mya = mychaddr_on_net(ch_destaddr(cha));
 
   // Update source address
-  set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
+  set_ch_srcaddr(cha, (mya == 0 ? mychaddr[0] : mya));
 
   switch (rt->rt_link) {
   case LINK_NOLINK:
