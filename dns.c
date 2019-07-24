@@ -538,19 +538,24 @@ void
 print_config_dns()
 {
   res_state statp = &chres;
-  printf(" Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
+  printf("DNS config:\n Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
 	 chaos_dns_server, chaos_address_domain, trace_dns ? "on" : "off");
   if (trace_dns) {
     printf(" DNS options %#lx, nsaddrs %d, family %d, port %d", statp->options, statp->nscount, statp->nsaddr_list[0].sin_family, ntohs(statp->nsaddr_list[0].sin_port));
     printf(", addr %s\n", inet_ntoa(statp->nsaddr_list[0].sin_addr));
   }
 
-  int i;
+  int i, n;
   PTLOCK(dns_lock);
-  printf(" DNS request queue:\n  i\tsrc\tsix\tlen\n");
-  for (i = 0; i < CHREQ_MAX; i++) {
-    if (chreq[i].reqlen > 0)
-      printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
+  for (i = 0, n = 0; i < CHREQ_MAX; i++) n += chreq[i].reqlen;
+  if (n == 0)
+    printf(" DNS request queue empty\n");
+  else {
+    printf(" DNS request queue:\n  i\tsrc\tsix\tlen\n");
+    for (i = 0; i < CHREQ_MAX; i++) {
+      if (chreq[i].reqlen > 0)
+	printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
+    }
   }
   PTUNLOCK(dns_lock);
 }
