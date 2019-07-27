@@ -1278,12 +1278,12 @@ parse_link_config()
   else if (strcasecmp(tok, "subnet") == 0) 
     subnetp = 1;
   else {
-    fprintf(stderr,"bad link keyword %s\n", tok);
+    fprintf(stderr,"bad link keyword %s, expected \"host\" or \"subnet\"\n", tok);
     return -1;
   }
   tok = strtok(NULL, " \t\r\n");
   if (tok == NULL) {
-    fprintf(stderr,"bad link config: no addr\n");
+    fprintf(stderr,"bad link config: no %s addr\n", (subnetp ? "subnet" : "host"));
     return -1;
   }
   if (sscanf(tok,"%ho",&addr) != 1) {
