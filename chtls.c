@@ -51,7 +51,10 @@ parse_tls_config_line()
     } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
-      tls_myaddr = atoi(tok);
+      if (sscanf(tok, "%ho", &tls_myaddr) != 1) {
+	fprintf(stderr,"tls: bad octal value %s for myaddr specified\n", tok);
+	return -1;
+      }
     }
     else if (strncmp(tok,"server",sizeof("server")) == 0) {
       tok = strtok(NULL, " \t\r\n");
