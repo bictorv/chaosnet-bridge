@@ -397,7 +397,7 @@ add_to_routing_table(u_short dest, u_short braddr, u_short myaddr, int type, int
     rttbl_host_len++;
     if (verbose) print_routing_table();
   } else
-    fprintf(stderr,"%%%% host route table full (adding %s for %#o), increase RTTBL_HOST_MAX!\n",
+    fprintf(stderr,"%%%% host route table full (NOT adding %s for %#o), increase RTTBL_HOST_MAX!\n",
 	    rt_linkname(link), dest);
   return r;
 }
@@ -970,11 +970,13 @@ parse_route_params(struct chroute *rt, u_short addr)
     }
     PTUNLOCK(rttbl_lock);
     if (rt->rt_link == LINK_NOLINK) {
-      fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n",
+      fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n"
+	      "%%%% No route added! Maybe you need to reorder your config?\n",
 	      rt->rt_dest);
     }
   } else {
-    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown. Perhaps you need to reorder your config?\n",
+    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown.\n"
+	    "%%%% No route added! Maybe you need to reorder your config?\n",
 	    rt->rt_dest);
   }
 
