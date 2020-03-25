@@ -975,9 +975,9 @@ parse_route_params(struct chroute *rt, u_short addr)
 	      rt->rt_dest);
     }
   } else {
-    fprintf(stderr,"route to %#o: can't find route to its bridge, thus link is unknown.\n"
-	    "%%%% No route added! Maybe you need to reorder your config?\n",
-	    rt->rt_dest);
+    fprintf(stderr,"route to %#o: can't find route to its bridge %#o, thus link is unknown.\n"
+	    "%%%% No route added! Try to reorder your config - put \"route\" definitions after \"link\" definitions.\n",
+	    rt->rt_dest, rt->rt_braddr);
   }
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
