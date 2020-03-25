@@ -15,7 +15,11 @@ See also the [example configurations](EXAMPLES.md).
 
 `;` or `#` at the **start** of a line begins a comment. Below, *%o* stands for "an octal number", typically 16-bit.
 
+It is strongly suggested to begin with Global settings, followed by Link definitions, followed by Route definitions.
+
 ### Global settings
+
+Use max one of each of these. Collect all arguments on one command, rather than repeating the command with different options.
 
 | Command | Description |
 | --- | --- |
@@ -49,11 +53,11 @@ See also the [example configurations](EXAMPLES.md).
 ### LINKTYPE:
 | Option | Description |
 | --- | --- |
-| `ether` *ifname* | this is a Chaos-over-Ethernet link using the interface *ifname*. Default type: direct, cost: direct. |
-| `unix` | this is a Chaos-over-unix-sockets link. Default type: direct, cost: direct. |
-| `chudp` *host:port* | this is a Chaos-over-UDP link to *host* (IPv4, IPv6, or hostname) on *port* (default 42042). Default type: fixed, cost: asynch. |
-| `tls` *host:port* | this is a Chaos-over-TLS link, client end, connecting to *host* (ip or name) at *port* (default 42042). Default type: fixed, cost: asynch. |
-| `chip` *addr* | this is a Chaos-over-IP link to *addr* (IPv4, IPv6, or hostname). Default type: fixed, cost: asynch. |
+| `ether` *ifname* | this is a Chaos-over-Ethernet link using the interface *ifname*. Default cost: direct. |
+| `unix` | this is a Chaos-over-unix-sockets link. Default cost: direct. |
+| `chudp` *host:port* | this is a Chaos-over-UDP link to *host* (IPv4, IPv6, or hostname) on *port* (default 42042). Default cost: asynch. |
+| `tls` *host:port* | this is a Chaos-over-TLS link, client end, connecting to *host* (ip or name) at *port* (default 42042). Default cost: asynch. |
+| `chip` *addr* | this is a Chaos-over-IP link to *addr* (IPv4, IPv6, or hostname). Default cost: asynch. |
 
 Note that while links implicitly define a (static) route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;

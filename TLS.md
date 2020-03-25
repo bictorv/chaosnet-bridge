@@ -33,6 +33,10 @@ Create a Certificate Request by using the following command (one line):
 
 where "my.fully-qualified-domain.on.chaosnet" should not be taken literally, but should be your host name including domain that you used in the previous step (or already registered).
 
+If you already have a key (e.g. in case you want to renew your certificate), instead use
+
+    openssl req -new -key my.key.pem -nodes -out my.csr.pem -subj "/C=SE/O=The Global Chaosnet/CN=my.fully-qualified-domain.on.chaosnet"
+
 1. Save the key file `my.key.pem` in a safe place, e.g. `chaosnet-bridge/private/my.key.pem`.
 1. Send the file `my.csr.pem` to Björn, who will generate a certificate and send it back to you. Put it in a good place, e.g. `chaosnet-bridge/certs/my.cert.pem`.
 
