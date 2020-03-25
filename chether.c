@@ -318,7 +318,7 @@ struct bpf_insn bpf_jump(unsigned short code, bpf_u_int32 k,
 static int
 get_packet_socket(u_short ethtype, struct chethdest *cd)
 {
-  int fd;
+  int fd = -1;
 #if ETHER_BPF
   struct ifreq ifr;
   char bpfname[64];
