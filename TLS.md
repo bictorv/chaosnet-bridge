@@ -2,7 +2,7 @@
 
 With Chaos-over-TLS, the Chaosnet packets are sent over a [TLS](https://en.wikipedia.org/wiki/Transport_Layer_Security) connection. 
 
-One typical situation is that you already had a host (e.g. ITS or LISPM) or two connected by `chudp`, and now want to add a Chaosnet Bridge between your local Chaosnet and the global one. You need a local Chaosnet subnet (different from subnet 6) for your local traffic, and your `cbridge` needs an address on subnet 6 for the connection to the [Global Chaosnet](https://aosnet.ch).
+One typical situation is that you already had a host (e.g. ITS or LISPM) or two connected by `chudp`, and now want to add a Chaosnet Bridge between your local Chaosnet and the global one. You need a local Chaosnet subnet (different from subnet 6) for your local traffic, and your `cbridge` needs an address on subnet 6 for the connection to the [Global Chaosnet](https://chaosnet.net).
 
 There are different reasons to want to use TLS:
 - one is for improved security (confidentiality, authenticity), and
@@ -21,7 +21,7 @@ To get a certificate for the Global Chaosnet, you need to do the following.
 ## Register
 
 Unless you are already connected to the Global Chaosnet, register your cbridge with the DNS server: send the following info about it to Björn:
-- the host name, including its domain. Do not invent domains, but use a domain you have permission to use. If you have none, use "aosnet.CH".
+- the host name, including its domain. Do not invent domains, but use a domain you have permission to use. If you have none, use "Chaosnet.net".
 
 If you were not already connected, Björn will assign a Chaosnet address for you on subnet 6.
 
@@ -46,11 +46,11 @@ Add TLS configuration to your `cbridge.conf` file:
 
     tls key private/my.key.pem cert certs/my.cert.pem
 
-*If* you were already connected over `chudp`, **remove** your old `link chudp router.aosnet.ch...` line.
+*If* you were already connected over `chudp`, **remove** your old `link chudp router.chaosnet.net...` line.
 
 Add the link configuration:
 
-    link tls router.aosnet.ch host 3040 myaddr 3xxx
+    link tls router.chaosnet.net host 3040 myaddr 3xxx
 
 where 3xxx is the Chaosnet address on subnet 6 which you got from Björn.
 

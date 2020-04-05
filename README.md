@@ -35,7 +35,7 @@ Use cases could be
   configuration. 
 - and interconnecting these, of course!
 
-For more info on the Global Chaosnet, see https://aosnet.ch.
+For more info on the Global Chaosnet, see https://chaosnet.net.
 
 ## Features
 

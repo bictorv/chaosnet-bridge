@@ -45,4 +45,4 @@ response as an ANS packet to the (Chaosnet) requester. A client
 implementation for the LambdaDelta lisp machine exists, which could
 prossibly be ported to the CADR system (which doesn't have IP). 
 
-See also https://www.aosnet.ch for info about DNS for Chaosnet data.
+See also https://chaosnet.net for info about DNS for Chaosnet data.
