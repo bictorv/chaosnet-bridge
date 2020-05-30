@@ -1086,7 +1086,7 @@ finish_stream_conn(struct conn *conn)
   }
   close(conn->conn_sock);
   conn->conn_sock = -1;
-  if (unlink(conn->conn_sockaddr.sun_path) != 0) 
+  if ((strlen(conn->conn_sockaddr.sun_path) > 0) && (unlink(conn->conn_sockaddr.sun_path) != 0))
     fprintf(stderr,"unlink %s: %s\n", conn->conn_sockaddr.sun_path, strerror(errno));
   conn->conn_state->state = CS_Inactive;
   // and terminate
@@ -1104,7 +1104,7 @@ socket_closed_for_simple_conn(struct conn *conn)
   conn->conn_state->state = CS_Inactive;
   close(conn->conn_sock);
   conn->conn_sock = -1;
-  if (unlink(conn->conn_sockaddr.sun_path) != 0) 
+  if ((strlen(conn->conn_sockaddr.sun_path) > 0) && (unlink(conn->conn_sockaddr.sun_path) != 0))
     fprintf(stderr,"unlink %s: %s\n", conn->conn_sockaddr.sun_path, strerror(errno));
   cancel_conn_threads(conn);
   // does not get here
@@ -1128,7 +1128,7 @@ user_socket_los(struct conn *conn, char *fmt, ...) {
   va_end(args);
   close(conn->conn_sock);
   conn->conn_sock = -1;
-  if (unlink(conn->conn_sockaddr.sun_path) != 0) 
+  if ((strlen(conn->conn_sockaddr.sun_path) > 0) && (unlink(conn->conn_sockaddr.sun_path) != 0))
     fprintf(stderr,"unlink %s: %s\n", conn->conn_sockaddr.sun_path, strerror(errno));
   cancel_conn_threads(conn);
 }
@@ -1288,7 +1288,7 @@ garbage_collect_idle_conns()
       if (c->conn_sock != -1) {
 	close(c->conn_sock);
 	c->conn_sock = -1;
-	if (unlink(c->conn_sockaddr.sun_path) != 0) 
+	if ((strlen(c->conn_sockaddr.sun_path) > 0) && (unlink(c->conn_sockaddr.sun_path) != 0))
 	  fprintf(stderr,"unlink %s: %s\n", c->conn_sockaddr.sun_path, strerror(errno));
       }
       // remove it from the conn list and free the storage used
