@@ -12,6 +12,7 @@ This program is a bridge between Chaosnet implementations. It supports
 - [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
 - [EXAMPLES](EXAMPLES.md) for some example configurations.
 - [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
+- [NCP](NCP.md) for how to connect a user program to Chaosnet.
 - [HISTORY](HISTORY.md) for some historic notes.
 - [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 

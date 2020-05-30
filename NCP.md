@@ -12,7 +12,7 @@
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also a special verion of supdup.c to try a "real" protocol.
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](supdup-patch.tar) to try a "real" protocol.
 
 ## chaos_stream
 
