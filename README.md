@@ -35,6 +35,8 @@ Use cases could be
   configuration. 
 - and interconnecting these, of course!
 
+There is also support for connecting user programs (in some Unix-like environment) to Chaosnet - [read more](#network-control-program).
+
 For more info on the Global Chaosnet, see https://chaosnet.net.
 
 ## Features
@@ -130,6 +132,10 @@ which have both roles, but might work. :-)
 (My preliminary impression is that it is faster than CHUDP!)
 
 Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`.
+
+### Network Control Program
+
+A simple unix sockets interface for connecting any old program to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [the supdup patch](supdup-patch.tar).
 
 ## Routing basics
 
