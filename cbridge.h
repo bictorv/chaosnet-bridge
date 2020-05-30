@@ -87,6 +87,9 @@
 #define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"FAILED TO LOCK\n")
 #define PTUNLOCK(x) if (pthread_mutex_unlock(&x) != 0) fprintf(stderr,"FAILED TO UNLOCK\n")
 
+#define PTLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_lock(&x)) != 0) fprintf(stderr,"FAILED TO LOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
+#define PTUNLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_unlock(&x)) != 0) fprintf(stderr,"FAILED TO UNLOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
+
 // ==== Route/routing/link structures
 
 // Connection types, cf AIM 628 p14, which states Direct, Fixed, and Bridged.
@@ -272,6 +275,9 @@ extern struct chipdest chipdest[CHIPDEST_MAX];
 
 void send_chaos_pkt(u_char *pkt, int len);
 int is_mychaddr(u_short addr);
+int mychaddr_on_net(u_short addr);
+u_short find_closest_addr(u_short addrs[], int naddrs);
+u_short find_my_closest_addr(u_short addr);
 void add_mychaddr(u_short addr);
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);
@@ -285,8 +291,8 @@ void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);
 char *ip46_ntoa(struct sockaddr *sa, char *buf, int buflen);
 
-unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
-void ch_11_puts(unsigned char *out, unsigned char *in);
+int ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
+int ch_11_puts(unsigned char *out, unsigned char *in);
 char *ch_opcode_name(int op);
 
 #if CHAOS_TLS

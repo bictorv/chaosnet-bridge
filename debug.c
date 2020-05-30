@@ -58,11 +58,13 @@ ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
 char *
 ch_opcode_name(int op)
   {
-    if (op < 017 && op > 0)
+    if (op == 0)
+      return "bogus0";
+    else if (op <= CHOP_BRD && op > 0)
       return ch_opc[op];
-    else if (op == 0200)
+    else if ((op >= CHOP_DAT) && (op < CHOP_DWD))
       return "DAT";
-    else if (op == 0300)
+    else if (op >= CHOP_DWD)
       return "DWD";
     else
       return "bogus";
@@ -96,7 +98,7 @@ ch_char(unsigned char x, char *buf) {
   return buf;
 }
 
-void
+int
 ch_11_puts(unsigned char *out, unsigned char *in) 
 {
   int i, x = ((strlen((char *)in)+1)/2)*2;
@@ -106,22 +108,23 @@ ch_11_puts(unsigned char *out, unsigned char *in)
     else
       out[i+1] = in[i];
   }
+  return x;
 }
 
-unsigned char *
-ch_11_gets(unsigned char *in, unsigned char *out, int maxlen)
+int
+ch_11_gets(unsigned char *in, unsigned char *out, int nbytes)
 {
-  int i, l = ((strlen((char *)in)+1)/2)*2;
-  if (l > maxlen)
-    l = maxlen;
-  for (i = 0; i < l /* && ((in[i] & 0200) == 0) */; i++) { /* Where did I get 0200 bit from? */
+  int i;
+  // round up because the last byte might be in the lsb of the last word
+  if (nbytes % 2) nbytes++;
+  for (i = 0; i < nbytes; i++) {
     if (i % 2 == 1)
       out[i] = in[i-1];
     else
       out[i] = in[i+1];
   }
   out[i] = '\0';
-  return out;
+  return i-1;
 }
 
 void print_its_string(unsigned char *s)
@@ -153,14 +156,14 @@ ch_dumpkt(unsigned char *ucp, int cnt)
   struct chaos_hw_trailer *tr;
   unsigned char *data = malloc(ch_nbytes(ch)+1);
 
-  fprintf(stderr,"Opcode: %o (%s), unused: %o\r\nFC: %o, Nbytes %d.\r\n",
+  fprintf(stderr,"Opcode: %#o (%s), unused: %o\r\nFC: %o, Nbytes %d.\r\n",
 	  ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
 	  ch->ch_opcode_u.ch_opcode_s.ch_unused,
 	  ch_fc(ch), ch_nbytes(ch));
-  fprintf(stderr,"Dest host: %o, index %o\r\nSource host: %o, index %o\r\n",
-	  ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
-  fprintf(stderr,"Packet #%o\r\nAck #%o\r\n",
-	  ch_packetno(ch), ch_ackno(ch));
+  fprintf(stderr,"Dest host: %#o, index %#o (%#x)\r\nSource host: %#o, index %#o (%#x)\r\n",
+	  ch_destaddr(ch), ch_destindex(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch), ch_srcindex(ch));
+  fprintf(stderr,"Packet %#o (%#x)\r\nAck %#o (%#x)\r\n",
+	  ch_packetno(ch), ch_packetno(ch), ch_ackno(ch), ch_ackno(ch));
 
   fprintf(stderr,"Data:\r\n");
 
@@ -172,7 +175,7 @@ ch_dumpkt(unsigned char *ucp, int cnt)
 
   switch (ch_opcode(ch)) {
   case CHOP_RFC:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
+    ch_11_gets(ucp, data, ((ch_nbytes(ch)+1)/2)*2);
     fprintf(stderr,"[Contact: \"%s\"]\n", data);
     break;
 
@@ -182,18 +185,18 @@ ch_dumpkt(unsigned char *ucp, int cnt)
       unsigned short rcpt, winsz;
       rcpt = WORD16(ucp);
       winsz = WORD16(ucp+2);
-      fprintf(stderr,"[Received up to and including %#o, window size %#o]\n",
-	     rcpt, winsz);
+      fprintf(stderr,"[Received up to and including %#o (%#x), window size %d]\n",
+	      rcpt, rcpt, winsz);
       break;
     }
   case CHOP_CLS:
   case CHOP_LOS:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
+    ch_11_gets(ucp, data, ((ch_nbytes(ch)+1)/2)*2);
     fprintf(stderr,"[Reason: \"%s\"]\n", data);
     break;
 
   case CHOP_FWD:
-    ch_11_gets(ucp, data, ch_nbytes(ch));
+    ch_11_gets(ucp, data, ((ch_nbytes(ch)+1)/2)*2);
     fprintf(stderr,"[New contact name: \"%s\" (host: see Ack field)]\n", data);
     break;
 
@@ -246,7 +249,9 @@ ch_dumpkt(unsigned char *ucp, int cnt)
   /* Now show trailer */
   if (len % 2)
     len++;			/* Align */
-  if (cnt < len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE)
+  if (cnt == len+CHAOS_HEADERSIZE)
+    fprintf(stderr,"[No trailer]\n");
+  else if (cnt < len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE)
     fprintf(stderr,"[Incomplete trailer: pkt size %d < (header + len + trailer size) = %lu]\n",
 	    cnt, len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE);
   else {

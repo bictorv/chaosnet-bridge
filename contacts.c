@@ -362,7 +362,7 @@ lastcn_responder(u_char *rfc, int len)
   send_chaos_pkt((u_char *)ap, ch_nbytes(ap)+CHAOS_HEADERSIZE);
 }
 
-void
+int
 handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
 {
   int i;
@@ -378,7 +378,10 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
       if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);
       // call the handler
       (*mycontacts[i].handler)(data, dlen);
-      break;
+      // Signal that it was handled
+      return 1;
     } 
   }
+  // it wasn't handled
+  return 0;
 }
