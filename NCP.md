@@ -5,9 +5,13 @@
 `ncp ` [ `debug` off/on ] [ `trace` off/on ]  [ `domain` *default* ] [ `socketdir` /tmp ] [ `retrans` 500 ]
 
 `domain`: used for specifying the default DNS domain for RFC arg parsing - default is `chaosnet.net`.
+
 `retrans`: specifies the retransmission time interval - default 500 ms.
+
 `socketdir`: specifies the directory where to put the socket file(s), `chaos_stream` - default is `/tmp`.
+
 `trace`: if on, writes a line when a connection is opened or closed
+
 `debug`: if on, writes a lot.
 
 # Usage
