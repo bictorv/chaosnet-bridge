@@ -71,7 +71,7 @@ struct conn_list *conn_list;
 static void print_conn(char *leader, struct conn *conn, int alsostate);
 static void start_conn(struct conn *conn);
 static void add_output_pkt(struct conn *c, struct chaos_header *pkt);
-
+static void socket_closed_for_simple_conn(struct conn *conn);
 
 // parse a configuration file line:
 // ncp socketdir /var/run debug on domain ams.chaosnet.net trace on
@@ -959,7 +959,6 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   PTUNLOCK(c->conn_state->conn_state_lock);
   switch (opcode) {
   case CHOP_DAT: case CHOP_RFC: case CHOP_CLS: case CHOP_LOS:
-    // ch_11_puts(datao, data);
     htons_buf((u_short *)data, (u_short *)datao, len);
     break;
   default:
@@ -973,7 +972,10 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
       printf("NCP sending uncontrolled pkt %#x (%s) len %d in state %s\n", 
 	     ch_packetno((struct chaos_header *)pkt), ch_opcode_name(ch_opcode((struct chaos_header *)pkt)),
 	     pklen, conn_state_name(c));
-      // ch_dumpkt((u_char *)pkt, pklen);
+#if 0
+      if (opcode == CHOP_ANS)
+	ch_dumpkt((u_char *)pkt, pklen);
+#endif
     }
     send_chaos_pkt(pkt, pklen);
   } else 
@@ -984,13 +986,15 @@ static void
 send_ans_pkt(struct conn *c, u_char *ans, int len)
 {
   send_basic_pkt_with_data(c, CHOP_ANS, ans, len);
+  // ANS is uncontrolled, so just terminate
+  socket_closed_for_simple_conn(c);
 }
 
 // i.e LOS or CLS
 static void
 send_text_response_pkt(struct conn *c, int opcode, u_char *msg)
 {
-  u_char txt[256];		// @@@@ arbitrary 
+  u_char txt[488];
   int len = strlen((char *)msg);
   if (len < sizeof(txt))
     ch_11_puts(txt,msg);
@@ -2311,20 +2315,48 @@ socket_to_conn_stream_handler(struct conn *conn)
     int anslen = 0;
     if (ncp_debug) printf("Stream cmd \"%s\", switching to Simple\n", buf);
     // @@@@ mind about byte order?
-    if ((sscanf((char *)&buf[4], "%d", &anslen) == 1) && (anslen >= 0)) {
-      u_char *nl = (u_char *)index((char *)&buf[4], '\n');
-      if (nl != NULL) {
-	nl++; // skip \n
-	if (cnt-(nl-buf) >= anslen)
-	  // the buffer holds the whole ANS data
-	  send_ans_pkt(conn, nl, anslen);
-	else {
-	  // @@@@ should read more bytes, but punt for now
-	  user_socket_los(conn, "LOS Sorry your data does not fit in specified length %d", anslen);
+    if (sscanf((char *)&buf[4], "%d", &anslen) == 1) {
+      if ((anslen >= 0) && (anslen <= 488)) {
+	u_char *nl = (u_char *)index((char *)&buf[4], '\n');
+	if (nl != NULL) {
+	  nl++; // skip \n
+	  if (cnt-(nl-buf) >= anslen) {
+	    // the buffer holds the whole ANS data
+	    if (ncp_debug) printf("ANS length %d, buffer len %d has %ld bytes after \\n\n", 
+				  anslen, cnt, cnt-(nl-buf));
+	    send_ans_pkt(conn, nl, anslen);
+	  } else {
+	    // @@@@ should read more bytes, but punt for now
+	    if (ncp_debug) printf("ANS length %d, buffer len %d has %ld bytes after \\n\n", 
+				  anslen, cnt, cnt-(nl-buf));
+	    int ncnt = 0;
+	    u_char *bp = &buf[cnt];
+	    while (cnt-(nl-buf) < anslen) {
+	      if ((ncnt = recv(sock, bp, sizeof(buf)-cnt, 0)) < 0) {
+		if ((errno == EBADF) || (errno == ECONNRESET) || (errno == ETIMEDOUT)) {
+		  socket_closed_for_stream_conn(conn);
+		} else {
+		  perror("recv(socket_to_conn_stream_handler)");
+		  exit(1);
+		}
+	      }
+	      cnt += ncnt;
+	      bp += ncnt;
+	    }
+	    // read the rest, use it
+	    if (ncp_debug) {
+	      nl[anslen] = '\0';
+	      printf("ANS length %d, buffer len %d now has %ld bytes after \\n: \"%s\"\n", 
+		     anslen, cnt, cnt-(nl-buf), nl);
+	    }
+	    send_ans_pkt(conn, nl, anslen);
+	  }
+	} else {
+	  user_socket_los(conn, "LOS No newline after ANS length?");
 	  cs->state = CS_Inactive;
 	}
       } else {
-	user_socket_los(conn, "LOS No newline after ANS length?");
+	user_socket_los(conn, "LOS Bad ANS length %d (should be positive and max 488)", anslen);
 	cs->state = CS_Inactive;
       }
     } else {
