@@ -550,7 +550,7 @@ find_existing_conn(struct chaos_header *ch)
 	(c->conn_lhost == ch_destaddr(ch)) &&
 	((c->conn_lidx == ch_destindex(ch)) 
 	 // when receiving RFC, dest index is not specified
-	 || ((ch_opcode(ch) == CHOP_RFC) && (ch_destindex(ch) == 0)))) {
+	 || ((c->conn_state->state != CS_Inactive) && (ch_opcode(ch) == CHOP_RFC) && (ch_destindex(ch) == 0)))) {
       val = c;
       break;
     }
@@ -958,7 +958,7 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
   PTUNLOCK(c->conn_state->conn_state_lock);
   switch (opcode) {
-  case CHOP_DAT: case CHOP_RFC: case CHOP_CLS: case CHOP_LOS:
+  case CHOP_DAT: case CHOP_RFC: case CHOP_CLS: case CHOP_LOS: case CHOP_ANS:
     htons_buf((u_short *)data, (u_short *)datao, len);
     break;
   default:
@@ -1846,10 +1846,8 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 	pktnum_equal(ch_packetno(pkt), cs->pktnum_received_highest)) {
       // Evidence of unnecessary retransmisson, keep other end informed
       if (ncp_debug) printf("Pkt %#x already received\n", ch_packetno(pkt));
-#if 1 // @@@@ debug
       if (cs->state == CS_Open)
 	send_sts_pkt(conn);
-#endif
       return;
     }
     // - add it to read_pkts if it's the next one in order, and collect in-order pkts from received_pkts_ooo
@@ -2094,7 +2092,8 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       if (ncp_debug) printf("%%%% %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
     }
   }
-  if (pktnum_less(cs->pktnum_received_highest, ch_packetno(ch)))
+  // is it the next in order?
+  if (pktnum_equal(ch_packetno(ch), pktnum_1plus(cs->pktnum_received_highest)))
     cs->pktnum_received_highest = ch_packetno(ch);
   return;
 }
@@ -2394,6 +2393,7 @@ socket_to_conn_stream_handler(struct conn *conn)
   else if (cs->state != CS_Inactive) {
     fprintf(stderr,"Bad request len %d from stream user in state %s: not RFC, LSN, OPN, CLS, ANS, or wrong state: %s\n", 
 	    cnt, conn_state_name(conn), buf);
+    send_los_pkt(conn,"Local error. We apologize for the incovenience.");
     // return a LOS to the user: bad request - not RFC or LSN
     user_socket_los(conn, "LOS Bad request len %d from stream user in state %s: not RFC, LSN, OPN, CLS, ANS, or wrong state (%s)", 
 		    cnt, conn_state_name(conn), buf);
