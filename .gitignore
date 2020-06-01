@@ -51,8 +51,9 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-# Emacs backup files
+# Emacs backup and lock files
 *~
+.#*
 
 # Other additions
 cbridge
