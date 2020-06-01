@@ -8,6 +8,7 @@
 | --- | --- |
 |`domain`| used for specifying the default DNS domain for RFC arg parsing - default is `chaosnet.net`. |
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
+|`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128.|
 |`socketdir`| specifies the directory where to put the socket file(s), `chaos_stream` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
@@ -58,7 +59,7 @@ When the user program closes the socket, the NCP sends an EOF, waits for it to b
 
 When the NCP receives an EOF or CLS, the user socket is closed.
 
-The user socket file is removed by the NCP after it is closed.
+The NCP attempts to remove the user socket file after it is closed, to keep the place tidy.
 
 ### Server opening
 

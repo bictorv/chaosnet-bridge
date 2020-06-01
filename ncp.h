@@ -26,6 +26,7 @@
 #define PROBE_INTERVAL 10 // s
 #define LONG_PROBE_INTERVAL 60 // s
 #define HOST_DOWN_INTERVAL 300 // s = 5 min
+#define GARBAGE_CONN_AGE 60 // (3*HOST_DOWN_INTERVAL)
 
 // Conn types
 typedef enum conntype {
