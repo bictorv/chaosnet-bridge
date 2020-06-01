@@ -16,8 +16,9 @@
 */
 
 // TODO:
+// - GC of inactive connections - note garbage_collect_idle_conns doesn't quite work yet
 // - Decide/structure/clean up who changes the state
-// - Break up long funs
+// - Break up long funs, clean up
 // - Document it better
 //
 // add statistics struct, for (new) PEEK protocol to report
@@ -1898,17 +1899,10 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   u_short *dataw = (u_short *)data;
   struct conn_state *cs = conn->conn_state;
 
-  if (!packet_uncontrolled(ch)) {
-    // Update state
-#if 0 // done in receive_data_for_conn
-    if (pktnum_less(cs->pktnum_received_highest, ch_packetno(ch)))
-      cs->pktnum_received_highest = ch_packetno(ch);
-#endif
-    if (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch))) {
-      cs->pktnum_sent_acked = ch_ackno(ch);
+  if ((ch_ackno(ch) != 0) && (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))) {
+    cs->pktnum_sent_acked = ch_ackno(ch);
       // clear out acked pkts from send_pkts
       discard_received_pkts_from_send_list(conn, ch_ackno(ch));
-    }
   }
   // not for RFC LOS CLS MNT? (cf RECEIVE-INT-PKT)
   cs->time_last_received = time(NULL);
