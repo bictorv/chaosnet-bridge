@@ -287,7 +287,7 @@ add_tls_route(int tindex, u_short srcaddr)
   rt = find_in_routing_table(srcaddr, 1, 1);
   if (rt != NULL) {
     // old route exists
-    if ((rt->rt_link != LINK_TLS) && (rt->rt_type != RT_STATIC)) {
+    if (((rt->rt_link != LINK_TLS) || (rt->rt_type == RT_NOPATH)) && (rt->rt_type != RT_STATIC)) {
       if (tls_debug || debug)
 	fprintf(stderr,"TLS: Old %s route to %#o found (type %s), updating to TLS Dynamic\n",
 		rt_linkname(rt->rt_link), srcaddr, rt_typename(rt->rt_type));

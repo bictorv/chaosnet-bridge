@@ -1202,7 +1202,7 @@ static void arp_input(struct chethdest *cd, int arpfd, u_char *data, int dlen) {
       (arp->ar_pro == htons(ETHERTYPE_CHAOS))) {
     // if (chether_debug || debug) fprintf(stderr,"Read ARP len %d\n", len);
     handle_arp_input(cd, data, len);
-  } else if (chether_debug || debug) {		/* should not happen for BPF case, which filters this */
+  } else if (chether_debug) {		/* should not happen for BPF case, which filters this */
     fprintf(stderr,"Read from ARP but wrong HW %d or prot %#x\n",
 	    ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
   }
