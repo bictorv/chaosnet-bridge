@@ -1032,19 +1032,22 @@ cancel_conn_threads(struct conn *conn)
 
   // cancel the other threads
   if (!pthread_equal(conn->conn_from_sock_thread, pthread_self())) {
-    if ((x = pthread_cancel(conn->conn_from_sock_thread)) != 0)
-      fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+    if ((x = pthread_cancel(conn->conn_from_sock_thread)) != 0) {
+      if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+    }
     if (ncp_debug) printf("cancelled c_f_s thread %p for %p\n", conn->conn_from_sock_thread, conn);
   }
   if (!pthread_equal(conn->conn_to_sock_thread, pthread_self())) {
-    if ((x = pthread_cancel(conn->conn_to_sock_thread)) != 0)
-      fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+    if ((x = pthread_cancel(conn->conn_to_sock_thread)) != 0) {
+      if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+    }
     if (ncp_debug) printf("cancelled c_t_s thread %p for %p\n", conn->conn_to_sock_thread, conn);
   }
   if (conn->conn_type != CT_Simple) {
     if (!pthread_equal(conn->conn_to_net_thread, pthread_self())) {
-      if ((x = pthread_cancel(conn->conn_to_net_thread)) != 0)
-	fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+      if ((x = pthread_cancel(conn->conn_to_net_thread)) != 0) {
+	if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
+      }
       if (ncp_debug) printf("cancelled c_t_n thread %p for %p\n", conn->conn_to_net_thread, conn);
     }
   }
