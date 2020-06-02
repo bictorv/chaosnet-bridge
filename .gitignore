@@ -58,3 +58,4 @@ dkms.conf
 # Other additions
 cbridge
 cbridge.conf
+hostat

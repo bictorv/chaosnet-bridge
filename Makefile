@@ -15,7 +15,7 @@ CFLAGS = -I/opt/local/include -g
 LDFLAGS = -L/opt/local/lib
 endif
 
-all: cbridge
+all: cbridge hostat
 
 OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o
 
@@ -57,6 +57,9 @@ ncp.o: ncp.c ncp.h cbridge.h pkqueue.h
 
 pkqueue.o: pkqueue.c pkqueue.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
+
+hostat: hostat.c cbridge-chaos.h
+	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
 	rm -f cbridge $(OBJS)
