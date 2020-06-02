@@ -46,7 +46,7 @@ For more info on the Global Chaosnet, see https://chaosnet.net.
 
 Chaosnet packets are encapsulated in UDP packets, using a four-byte
 header (version=1, function=1, 0, 0), and with a "hardware
-trailer" (cf [Section 2.5 of MIT AI Memo 628](https://lm-3.github.io/amber.html#Hardware-Protocols))
+trailer" (cf [Section 2.5 of MIT AI Memo 628](https://tumbleweed.nu/r/lm-3/uv/amber.html#Hardware-Protocols))
 containing the destination and source addresses and an [Internet
 Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
 ["little-endian"
@@ -71,11 +71,11 @@ When configured to use Chaos-over-UDP ("chudp", see the [configuration](CONFIGUR
 Chaosnet packets are sent over a named Unix socket, with a 4-byte
 header (length MSB, length LSB, 1, 0). Packets are sent in
 "big-endian" order, with a ["hardware
-trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
+trailer"](https://tumbleweed.nu/r/lm-3/uv/amber.html#Hardware-Protocols).
 
 When configured to use Chaos-over-unix-sockets, you need to also run
 the "chaosd" server (found with the usim CADR emulator, see
-http://www.unlambda.com/cadr/, or at https://github.com/LM-3/chaos).
+http://www.unlambda.com/cadr/, or at https://tumbleweed.nu/lm-3/).
 There can be only one such server per host system (on the same host as
 the bridge) since the named socket of the server is constant.
 
@@ -84,7 +84,7 @@ the bridge) since the named socket of the server is constant.
 Chaosnet packets are sent using the standard Ethernet protocol
 [0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
 No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
-628](https://lm-3.github.io/amber.html#Hardware-Protocols)), since the
+628](https://tumbleweed.nu/r/lm-3/uv/amber.html#Hardware-Protocols)), since the
 Ethernet header does the corresponding job. Packets are sent in
 "big-endian" order.
 
@@ -97,7 +97,7 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 Chaosnet packets are sent in IP/IPv6 packets, using the standard
 [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
 Packets are sent in "big-endian" order, with a ["hardware
-trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
+trailer"](https://tumbleweed.nu/r/lm-3/uv/amber.html#Hardware-Protocols).
 
 Chaosnet addresses are mapped to IP/IPv6 addresses either
 individually, or for a whole subnet (see
@@ -114,7 +114,7 @@ Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` 
 
 Chaosnet packets are sent over TLS, with a 2-byte header (length MSB,
 length LSB). Packets are sent in "big-endian" order, with a ["hardware
-trailer"](https://lm-3.github.io/amber.html#Hardware-Protocols).
+trailer"](https://tumbleweed.nu/r/lm-3/uv/amber.html#Hardware-Protocols).
 
 There are different reasons to want to use TLS:
 - one is for improved security (confidentiality, authenticity), and
