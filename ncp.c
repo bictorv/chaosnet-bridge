@@ -335,9 +335,10 @@ print_conn(char *leader, struct conn *conn, int alsostate)
 	 conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
-    printf("%s made %#x fwin %d avail %d, read %d contr %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld\n",
+    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld\n",
 	   leader, cs->pktnum_made_highest,
 	   cs->foreign_winsize, cs->window_available, pkqueue_length(cs->read_pkts), cs->read_pkts_controlled,
+	   pkqueue_length(cs->received_pkts_ooo), 
 	   cs->pktnum_read_highest, cs->pktnum_received_highest, 
 	   pkqueue_length(cs->send_pkts), cs->pktnum_sent_highest, cs->pktnum_sent_acked,
 	   cs->time_last_received > 0 ? now - cs->time_last_received : -1);
@@ -1499,6 +1500,24 @@ add_input_pkt(struct conn *c, struct chaos_header *pkt)
 }
 
 static void
+add_ooo_pkt(struct conn *c, struct chaos_header *pkt)
+{
+  struct conn_state *cs = c->conn_state;
+  int pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
+
+  if (pklen % 2) pklen++;
+  struct chaos_header *saved = (struct chaos_header *)malloc(pklen);
+  // save a copy since the pkt comes from cbridge
+  memcpy(saved, pkt, pklen);
+
+  // lock it
+  PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+  // add pkt
+  pkqueue_insert_by_packetno(saved, cs->received_pkts_ooo);
+  PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+}
+
+static void
 add_output_pkt(struct conn *c, struct chaos_header *pkt)
 {
   int pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
@@ -1830,7 +1849,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     // it fits
     if (ncp_debug) printf("Receive %s pkt %#x with %d room in window\n",
 			  ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt),
-			  cs->local_winsize - (cs->read_pkts_controlled + pkqueue_length(cs->received_pkts_ooo))); 
+			  cs->local_winsize - (cs->read_pkts_controlled + pkqueue_length(cs->received_pkts_ooo)));
     // Check if it has already been received
     if (pktnum_less(ch_packetno(pkt), cs->pktnum_received_highest) || 
 	pktnum_equal(ch_packetno(pkt), cs->pktnum_received_highest)) {
@@ -1844,6 +1863,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     if (pktnum_equal(ch_packetno(pkt), pktnum_1plus(cs->pktnum_received_highest))) {
       // it was the next expected packet, so add it to the read_pkts
       add_input_pkt(conn, pkt);	// this also updates read_pkts_controlled
+      cs->pktnum_received_highest = ch_packetno(pkt);
 
       // now pick pkts from received_pkts_ooo as long as they are in order
       PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
@@ -1856,15 +1876,15 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 	add_input_pkt(conn, p);
 	// update the highest received in order pkt for STS
 	cs->pktnum_received_highest = ch_packetno(p);
+	// add_input_pkt makes a copy, so free this one
+	free(p);
 	p = pkqueue_peek_first(cs->received_pkts_ooo);
       }
       PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
     } else {
       // - or put it in the right place in received_pkts_ooo
       if (ncp_debug) printf(" pkt %#x is OOO (highest is %#x)\n", ch_packetno(pkt), cs->pktnum_received_highest);
-      PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
-      pkqueue_insert_by_packetno(pkt, cs->received_pkts_ooo);
-      PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+      add_ooo_pkt(conn, pkt);
     }
   } else {
     // window full, send STS
@@ -1947,6 +1967,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
 	u_char buf[256];
 	if (ch_nbytes(ch) < sizeof(buf)) {
 	  ch_11_gets(data, buf, ch_nbytes(ch));
+	  buf[ch_nbytes(ch)] = '\0';
 	  printf("%%%% LOS: %s\n", buf);
 	}
 	break;
@@ -2049,9 +2070,13 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       if (ncp_debug) printf("%%%% %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
     }
   }
-  // is it the next in order? then update highest received
-  if (pktnum_equal(ch_packetno(ch), pktnum_1plus(cs->pktnum_received_highest)))
-    cs->pktnum_received_highest = ch_packetno(ch);
+  if (packet_uncontrolled(ch)) { // controlled pkts must fit in window to count
+    // is it the next in order? then update highest received
+    if (pktnum_equal(ch_packetno(ch), pktnum_1plus(cs->pktnum_received_highest))) {
+      if (ncp_debug) printf("NCP packet_to_conn_stream_handler noting highest pkt %#x\n", ch_packetno(ch));
+      cs->pktnum_received_highest = ch_packetno(ch);
+    }
+  }
   return;
 }
 
