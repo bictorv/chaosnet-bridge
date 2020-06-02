@@ -17,6 +17,7 @@
 
 // TODO:
 // - GC of inactive connections - note garbage_collect_idle_conns doesn't quite work yet
+// - handle local address (including cbridge "built-in" handlers, e.g. STATUS)
 // - Decide/structure/clean up/document who changes the state
 // - Document it better
 //
@@ -1182,7 +1183,10 @@ parse_contact_args(u_char *data, u_char *contact)
     for (i = 0, e = p; i < j && isprint(*e); e++, i++);
     // terminate (e.g. CRLF)
     *e = '\0';
-    return (u_char *)strdup((char *)p);
+    if (e == p)
+      return NULL;
+    else
+      return (u_char *)strdup((char *)p);
   } else
     return NULL;
 }
