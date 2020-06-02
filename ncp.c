@@ -2071,11 +2071,17 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     }
   }
   if (packet_uncontrolled(ch)) { // controlled pkts must fit in window to count
+    // Amber: "The packet number field contains sequential numbers in
+    // controlled packets; in uncontrolled packets it contains the same
+    // number as the next controlled packet will contain."
+    // 
+    // Clearly not the case, I'd say, given experimental evidence from ITS 1648.
+    // Instead, it seems to be vaguely related to the ack field, OR to an old pkt that has been sent already.
+#if 0
     // is it the next in order? then update highest received
-    if (pktnum_equal(ch_packetno(ch), pktnum_1plus(cs->pktnum_received_highest))) {
-      if (ncp_debug) printf("NCP packet_to_conn_stream_handler noting highest pkt %#x\n", ch_packetno(ch));
+    if (pktnum_equal(ch_packetno(ch), pktnum_1plus(cs->pktnum_received_highest)))
       cs->pktnum_received_highest = ch_packetno(ch);
-    }
+#endif
   }
   return;
 }
