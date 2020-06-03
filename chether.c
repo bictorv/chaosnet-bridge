@@ -814,7 +814,12 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
   if (bpf_header->bh_caplen != bpf_header->bh_datalen) {
     if (chether_debug || debug) fprintf(stderr,"BPF: LENGTH MISMATCH: Captured %d of %d\n",
 		       bpf_header->bh_caplen, bpf_header->bh_datalen);
+#if 0
     return 0;			/* throw away packet */
+#else
+    // try it
+    rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
+#endif
   } else {
     rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
     // if (debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
