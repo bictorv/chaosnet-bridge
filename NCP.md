@@ -15,7 +15,7 @@
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](supdup-patch.tar) to try a "real" protocol, and [a simple demo program for connectionless protocols](hostat.c).
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](supdup-patch.tar) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) to try a simple stream protocol.
 
 Example:
 ```
@@ -35,6 +35,12 @@ Net 	In       Out      Abort    Lost     crcerr   ram      Badlen   Rejected
 06 	1005504  316751   0        33373    0        0        2800     0
 $ hostat up.update.uu.se time
 2020-06-02 17:48:21
+$ finger -w bv@up.update.uu.se
+BV     @  Bjorn Victor           Last logout 06/02/20 21:50:32  No plan.
+   [UP]
+
+   Alias for VICTOR
+
 ```
 
 ## chaos_stream
