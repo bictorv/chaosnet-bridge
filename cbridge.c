@@ -159,6 +159,7 @@ void *dns_forwarder_thread(void *v);
 #endif
 
 // NCP
+extern int ncp_enabled;
 void *ncp_user_server(void *v);
 int parse_ncp_config_line(void);
 void packet_to_conn_handler(u_char *pkt, int len);
@@ -1848,12 +1849,13 @@ main(int argc, char *argv[])
     }
   }
 
-  if (verbose) fprintf(stderr,"Starting NCP\n");
-  if (pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL) < 0) {
-    perror("pthread_create(ncp_user_server)");
-    exit(1);
+  if (ncp_enabled) {
+    if (verbose) fprintf(stderr,"Starting NCP\n");
+    if (pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL) < 0) {
+      perror("pthread_create(ncp_user_server)");
+      exit(1);
+    }
   }
-  
 
   // Now unblock SIGINFO/SIGUSR1 in this thread
   if (pthread_sigmask(SIG_UNBLOCK, &ss, NULL) < 0)

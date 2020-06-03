@@ -2,10 +2,11 @@
 
 # Configuration
 
-`ncp ` [ `debug` off/on ] [ `trace` off/on ]  [ `domain` *default* ] [ `socketdir` /tmp ] [ `retrans` 500 ]
+`ncp ` [ `enabled` no/yes ] [ `debug` off/on ] [ `trace` off/on ]  [ `domain` *default* ] [ `socketdir` /tmp ] [ `retrans` 500 ]
 
 | setting | description |
 | --- | --- |
+|`enabled`| used to enable/disable the NCP - default is `no` (disabled).|
 |`domain`| used for specifying the default DNS domain for RFC arg parsing - default is `chaosnet.net`. |
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128.|
@@ -35,6 +36,10 @@ Net 	In       Out      Abort    Lost     crcerr   ram      Badlen   Rejected
 06 	1005504  316751   0        33373    0        0        2800     0
 $ hostat up.update.uu.se time
 2020-06-02 17:48:21
+```
+
+Using `finger`:
+```
 $ finger -w bv@up.update.uu.se
 BV     @  Bjorn Victor           Last logout 06/02/20 21:50:32  No plan.
    [UP]
@@ -112,6 +117,14 @@ Each connection uses three threads:
 1. one to handle data from the connection to the network
 
 Tons of locking, but probably not enough.
+
+## Caveats
+
+Currently (2020-06-03), the server side (LSN) is not very debugged.
+
+The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried.
+
+There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
 ## Future? chaos_seqpacket
 

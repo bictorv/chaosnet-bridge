@@ -51,6 +51,7 @@
 #define MAX_CONTACT_NAME_LENGTH CH_PK_MAX_DATALEN
 
 // configurable stuff
+int ncp_enabled = 0;
 // chaos socket directory
 #define DEFAULT_CHAOS_SOCKET_DIRECTORY "/tmp/"
 static char chaos_socket_directory[PATH_MAX];
@@ -146,13 +147,24 @@ parse_ncp_config_line()
 	fprintf(stderr,"ncp: bad 'trace' arg %s specified\n", tok);
 	return -1;
       }
+    } else if (strcmp(tok, "enabled") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0)) {
+	ncp_enabled = 1;
+      } else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0)) {
+	ncp_enabled = 0;
+      } else {
+	fprintf(stderr,"ncp: bad 'enabled' arg %s specified\n", tok);
+	return -1;
+      }
     } else {
       fprintf(stderr,"bad ncp keyword %s\n", tok);
       return -1;
     }
   }
   if (verbose || ncp_debug) {
-    printf("Using NCP socket directory \"%s\", default domain \"%s\", retrans %d, window %d, debug %d %s, trace %d %s\n", 
+    printf("NCP is %s. Socket directory \"%s\", default domain \"%s\", retrans %d, window %d, debug %d %s, trace %d %s\n", 
+	   ncp_enabled ? "enabled" : "disabled",
 	   chaos_socket_directory, default_chaos_domain, default_retransmission_interval, default_window_size,
 	   ncp_debug, (ncp_debug > 0) ? "on" : "off",
 	   ncp_trace, (ncp_trace > 0) ? "on" : "off");
@@ -2563,19 +2575,23 @@ print_ncp_stats()
 {
   int x, cstate, cslocked, llocked;
 
+  if (!ncp_enabled) {
+    printf("NCP disabled\n");
+    return;
+  }
 #if 0
   printf("NCP: %d indexes used\n", indexindexindex);
 #endif
   // debugging...
   if ((cslocked = pthread_mutex_trylock(&connlist_lock)) != 0) {
     if (cslocked == EBUSY)
-      printf(" connlist lock is already locked\n");
+      printf("%%%% NCP: connlist lock is already locked\n");
     else
       fprintf(stderr,"pthread_mutex_trylock(connlist_lock): %s\n", strerror(cslocked));
   } else PTUNLOCKN(connlist_lock,"connlist_lock");
   if ((llocked = pthread_mutex_trylock(&listener_lock)) != 0) {
     if (llocked == EBUSY)
-      printf(" listener lock is already locked\n");
+      printf("%%%% NCP: listener lock is already locked\n");
     else
       fprintf(stderr,"pthread_mutex_trylock(listener_lock): %s\n", strerror(llocked));
   } else PTUNLOCKN(listener_lock,"listener_lock");
