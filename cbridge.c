@@ -659,7 +659,7 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
   }
   else {    
     if (verbose) {
-      fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
+      fprintf(stderr,"%s pkt for self (%#o) received",
 	      ch_opcode_name(ch_opcode(ch)),
 	      dchad);
       if (ch_opcode(ch) == CHOP_RFC) {
