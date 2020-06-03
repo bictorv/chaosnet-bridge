@@ -155,19 +155,19 @@ truncate_dns_pkt(u_char *pkt, int len)
     if (ns_msg_count(m, i) > 0) {
       // calculate length of section
       int l = (((i < ns_s_max-1) && (m._sections[i+1] != NULL)) ? m._sections[i+1] : ns_msg_end(m)) - m._sections[i];
-      if (size + l > 488) {
+      if (size + l > CH_PK_MAX_DATALEN) {
 	// this section is too long, truncate where in it
 	// Look at RRs, add them one by one while under 488
 	u_char *p = (u_char *)m._sections[i];	
 	int nrr = 0;
-	while ((size < 488) && (size < len)) {
+	while ((size < CH_PK_MAX_DATALEN) && (size < len)) {
 	  // skip over a RR, finding length of the RR
 	  int rrlen = ns_skiprr(p, ns_msg_end(m), i, 1);
 	  if (rrlen < 0) {
 	    fprintf(stderr,"Failed skipping RR!\n");
 	    return -1;
 	  }
-	  if (size + rrlen < 488) {
+	  if (size + rrlen < CH_PK_MAX_DATALEN) {
 	    // this RR is OK to include
 	    nrr++;
 	    size += rrlen;
@@ -248,7 +248,7 @@ dns_forwarder_thread(void *v)
 
       // Check that the answer fits in a Chaos pkt
       // libresolv seems to handle truncation to 512 bytes, but here we need manual truncation to 488.
-      if (anslen > 488) {
+      if (anslen > CH_PK_MAX_DATALEN) {
 	// test case: amnesia.lmi.com. on pi3
 	if (trace_dns) fprintf(stderr,"%% DNS: answer doesn't fit in Chaos ANS, truncating\n");
 

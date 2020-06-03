@@ -104,4 +104,6 @@ struct chaos_hw_trailer {
 #define CHAOS_HW_TRAILERSIZE (sizeof(struct chaos_hw_trailer))
 // Max pkt size (12 bits) plus header
 // The limit of 488 bytes is from MIT AIM 628, although more would fit any modern pkt (and 12 bits would give 4096 as max).
-#define CH_PK_MAXLEN (488 + CHAOS_HEADERSIZE + CHAOS_HW_TRAILERSIZE)
+// This is due to original Chaos hardware pkts limited to 4032 bits, of which 16 bytes are header.
+#define CH_PK_MAX_DATALEN 488
+#define CH_PK_MAXLEN (CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE + CHAOS_HW_TRAILERSIZE)
