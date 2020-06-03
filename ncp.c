@@ -48,8 +48,7 @@
 // ms to wait for ack of EOF
 #define EOF_WAIT_TIMEOUT 1000
 
-// Random int
-#define MAX_CONTACT_NAME_LENGTH 487
+#define MAX_CONTACT_NAME_LENGTH CH_PK_MAX_DATALEN
 
 // configurable stuff
 // chaos socket directory
@@ -884,10 +883,6 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
       printf("NCP sending uncontrolled pkt %#x (%s) len %d in state %s\n", 
 	     ch_packetno(ch), ch_opcode_name(ch_opcode(ch)),
 	     pklen, conn_state_name(c));
-#if 0
-      if (opcode == CHOP_ANS)
-	ch_dumpkt((u_char *)pkt, pklen);
-#endif
     }
     send_chaos_pkt(pkt, pklen);
   } else 
@@ -950,14 +945,6 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate)
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
 
-
-  // set_ch_packetno(((struct chaos_header *)&pkt), pktnum_1plus(c->conn_state->pktnum_sent_acked));
-
-  if (ncp_debug > 1) {
-    fprintf(stderr,"NCP: made %s packet %#x len %d\n", ch_opcode_name(opcode), ch_packetno((struct chaos_header *)pkt), pklen);
-    // ch_dumpkt((u_char *)pkt, pklen);
-  }
-
   c->conn_state->state = newstate;
   PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
 
@@ -999,7 +986,7 @@ send_ans_pkt(struct conn *c, u_char *ans, int len)
 static void
 send_text_response_pkt(struct conn *c, int opcode, u_char *msg)
 {
-  u_char txt[488];
+  u_char txt[CH_PK_MAX_DATALEN];
   int len = strlen((char *)msg);
   if (len < sizeof(txt))
     ch_11_puts(txt,msg);
@@ -1658,7 +1645,6 @@ send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt)
     if (ncp_debug) printf("NCP: Sending controlled pkt %#x, window now %d, q len %d, ack %#x\n", ch_packetno(pkt),
 			  cs->window_available, pkqueue_length(cs->send_pkts), ch_ackno(pkt));
     PTUNLOCKN(cs->window_mutex,"window_mutex");
-    // if (ncp_debug) ch_dumpkt((u_char *)pkt, ch_nbytes(pkt)+CHAOS_HEADERSIZE);
     // update ack field
     set_ch_ackno(pkt, cs->pktnum_read_highest);
     cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
@@ -2173,7 +2159,7 @@ packet_to_conn_handler(u_char *pkt, int len)
     return;
   }
 
-  if (ch_nbytes(ch) > MAX_CONTACT_NAME_LENGTH) {
+  if (ch_nbytes(ch) > CH_PK_MAX_DATALEN) {
     if (ncp_debug) print_conn("Data too long for", conn, 1);
     send_los_pkt(conn,"Data too long");
     return;
@@ -2341,10 +2327,10 @@ socket_to_conn_stream_handler(struct conn *conn)
     int anslen = 0;
     if (ncp_debug) printf("Stream cmd \"%s\", switching to Simple\n", buf);
     if (sscanf((char *)&buf[4], "%d", &anslen) == 1) {
-      if ((anslen >= 0) && (anslen <= 488)) {
+      if ((anslen >= 0) && (anslen <= CH_PK_MAX_DATALEN)) {
 	get_ans_bytes_and_send(conn, anslen, buf, sizeof(buf), cnt);
       } else {
-	user_socket_los(conn, "LOS Bad ANS length %d (should be positive and max 488)", anslen);
+	user_socket_los(conn, "LOS Bad ANS length %d (should be positive and max %d)", anslen, CH_PK_MAX_DATALEN);
 	cs->state = CS_Inactive;
       }
     } 
