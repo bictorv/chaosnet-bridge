@@ -243,8 +243,8 @@ ch_dumpkt(unsigned char *ucp, int cnt)
     fprintf(stderr, " (11-chars)\r\n");
 #endif
   }
-  if (cnt < len)
-    fprintf(stderr,"... (header length field > buf len)\n");
+  if (len+CHAOS_HEADERSIZE > cnt)
+    fprintf(stderr,"... (header length field %d > buf len %d)\n", len, cnt);
 
   /* Now show trailer */
   if (len % 2)
