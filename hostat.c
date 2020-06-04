@@ -170,32 +170,66 @@ void print_time(u_char *bp, int len)
     printf("Unexpected time value %ld <= %ld\n", t, 2208988800UL);
 }
 
+char *seconds_as_interval(u_int t)
+{
+  char tbuf[64], *tp = tbuf;
+  
+  if (t == 0)
+    return strdup("now");
+
+  if (t > 60*60*24*7) {
+    int w = t/(60*60*24*7);
+    sprintf(tp, "%d week%s ", w, w == 1 ? "" : "s");
+    t %= 60*60*24*7;
+    tp += strlen(tp);
+  }
+  if (t > 60*60*24) {
+    int d = t/(60*60*24);
+    sprintf(tp, "%d day%s ", d, d == 1 ? "" : "s");
+    t %= (60*60*24);
+    tp = &tbuf[strlen(tbuf)];
+  }
+  if (t > 60*60) {
+    int h = t/(60*60);
+    sprintf(tp, "%d hour%s ", h, h == 1 ? "" : "s");
+    t %= 60*60;
+    tp = &tbuf[strlen(tbuf)];
+  }
+  if (t > 60)
+    sprintf(tp, "%dm %ds", (t/60), t % 60);
+  else
+    sprintf(tp, "%d s", t);
+  return strdup(tbuf);
+}
+
 void print_uptime(u_char *bp, int len)
 {
   u_short *dp = (u_short *)bp;
-  char tbuf[64];
 
   if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
 
   u_int t = (u_short)ntohs(*dp++); t |= (u_long) ((u_short)ntohs(*dp)<<16);
 
   t /= 60;
-  if (t > 60*60*24*7) {
-    int w = t/(60*60*24*7);
-    printf("%d week%s ", w, w == 1 ? "" : "s");
-    t %= 60*60*24*7;
+  printf("%s\n", seconds_as_interval(t));
+}
+
+void print_lastcn(u_char *bp, int len)
+{
+  u_short *dp = (u_short *)bp;
+  int i;
+  
+  // @@@@ prettyprint age, host?
+  printf("%-8s %-8s %-8s %s\n", "Host","#in","Via","Age(s)");
+  for (i = 0; i < len/2/7; i++) {
+    u_short wpe = ntohs(*dp++);
+    if (wpe != 7) { printf("Unexpected WPE of LASTCN: %d should be 7\n", wpe); exit(1); }
+    u_short addr = ntohs(*dp++);
+    u_short in = ntohs(*dp++); in |= (ntohs(*dp++)<<16);
+    u_short last = ntohs(*dp++);
+    u_short age = ntohs(*dp++); age |= (ntohs(*dp++)<<16);
+    printf("%#-8o %-8d %#-8o %s\n", addr, in, last, seconds_as_interval(age));
   }
-  if (t > 60*60*24) {
-    int d = t/(60*60*24);
-    printf("%d day%s ", d, d == 1 ? "" : "s");
-    t %= (60*60*24);
-  }
-  if (t > 60*60) {
-    int h = t/(60*60);
-    printf("%d hour%s ", h, h == 1 ? "" : "s");
-    t %= 60*60;
-  }
-  printf("%d:%02d\n", (t/60), t % 60);
 }
 
 void print_status(u_char *bp, int len)
@@ -227,7 +261,7 @@ void print_status(u_char *bp, int len)
     u_int crcerr_post = ntohs(*dp++); crcerr_post |= (ntohs(*dp++)<<16);
     u_int badlen = ntohs(*dp++); badlen |= (ntohs(*dp++)<<16);
     u_int rejected = 0;
-    if (elen > 14) {
+    if (elen == 16) {
       rejected = ntohs(*dp++); rejected |= (ntohs(*dp++)<<16);
     }
     printf("%#o \t%-8d %-8d %-8d %-8d %-8d %-8d %-8d %-8d\n",
@@ -288,6 +322,8 @@ main(int argc, char *argv[])
     print_uptime((u_char *)nl, anslen);
   else if (strcasecmp(contact, "DUMP-ROUTING-TABLE") == 0)
     print_routing_table((u_char *)nl, anslen);
+  else if (strcasecmp(contact, "LASTCN") == 0)
+    print_lastcn((u_char *)nl, anslen);
   else
     print_buf((u_char *)nl, anslen);
 }
