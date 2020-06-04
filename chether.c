@@ -1226,7 +1226,7 @@ void * ether_input(void *v)
   /* Ether -> others thread */
   fd_set rfd;
   int len, sval, maxfd = -1;
-  u_char data[BPF_MTU];
+  u_char data[CH_PK_MAXLEN];
   struct chaos_header *cha = (struct chaos_header *)&data;
 
   while (1) {
