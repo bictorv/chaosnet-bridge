@@ -333,13 +333,22 @@ conn_state_name(struct conn *conn)
   return state_name(conn->conn_state->state);
 }
 
+static char *
+conn_type_name(struct conn *conn)
+{
+  switch (conn->conn_type) {
+  case CT_Stream: return "Stream";
+  case CT_Simple: return "Simple";
+  }
+}
+
 static void
 print_conn(char *leader, struct conn *conn, int alsostate)
 {
   time_t now = time(NULL);
   printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld %s\n",
 	 leader,
-	 conn, (conn->conn_type == CT_Simple ? "Simple" : "Stream"),
+	 conn, conn_type_name(conn),
 	 conn->conn_contact,
 	 conn->conn_rhost, conn->conn_ridx,
 	 conn->conn_lhost, conn->conn_lidx,
@@ -1029,25 +1038,35 @@ cancel_conn_threads(struct conn *conn)
 
   if (ncp_debug) printf("cancelling threads for %p\n", conn);
 
+  PTLOCKN(conn->conn_lock,"conn_lock");
   // cancel the other threads
   if (!pthread_equal(conn->conn_from_sock_thread, pthread_self())) {
-    if ((x = pthread_cancel(conn->conn_from_sock_thread)) != 0) {
+    if (conn->conn_from_sock_thread == 0) {
+      if (ncp_debug) printf("thread c_f_s already exited\n");
+    } else if ((x = pthread_cancel(conn->conn_from_sock_thread)) != 0) {
       if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
     }
     if (ncp_debug) printf("cancelled c_f_s thread %p for %p\n", conn->conn_from_sock_thread, conn);
+    conn->conn_from_sock_thread = 0;
   }
   if (!pthread_equal(conn->conn_to_sock_thread, pthread_self())) {
-    if ((x = pthread_cancel(conn->conn_to_sock_thread)) != 0) {
+    if (conn->conn_to_sock_thread == 0) {
+      if (ncp_debug) printf("thread c_t_s already exited\n");
+    } else if ((x = pthread_cancel(conn->conn_to_sock_thread)) != 0) {
       if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
     }
     if (ncp_debug) printf("cancelled c_t_s thread %p for %p\n", conn->conn_to_sock_thread, conn);
+    conn->conn_to_sock_thread = 0;
   }
   if (conn->conn_type != CT_Simple) {
     if (!pthread_equal(conn->conn_to_net_thread, pthread_self())) {
-      if ((x = pthread_cancel(conn->conn_to_net_thread)) != 0) {
+      if (conn->conn_to_net_thread == 0) {
+	if (ncp_debug) printf("thread c_t_n already exited\n");
+      } else if ((x = pthread_cancel(conn->conn_to_net_thread)) != 0) {
 	if (ncp_debug) fprintf(stderr,"pthread_cancel failed: %s\n", strerror(x));
       }
       if (ncp_debug) printf("cancelled c_t_n thread %p for %p\n", conn->conn_to_net_thread, conn);
+      conn->conn_to_net_thread = 0;
     }
   }
   // and exit this one if it's a conn thread
@@ -1055,6 +1074,7 @@ cancel_conn_threads(struct conn *conn)
       pthread_equal(conn->conn_to_sock_thread, pthread_self()) ||
       pthread_equal(conn->conn_from_sock_thread, pthread_self())) {
     if (ncp_debug) printf("exiting this thread %p for %p\n", pthread_self(), conn);
+    PTUNLOCKN(conn->conn_lock,"conn_lock");
     pthread_exit(NULL);
   }
 }
@@ -1066,9 +1086,8 @@ finish_stream_conn(struct conn *conn)
   if ((conn->conn_state->state == CS_Inactive) || (conn->conn_sock == -1)) {
     trace_conn("Already finished", conn);
     PTUNLOCKN(conn->conn_lock, "conn_lock");
-    // wil be terminated anyway
-    if (ncp_debug) printf("Thread %p exiting\n", pthread_self());
-    pthread_exit(NULL);
+    cancel_conn_threads(conn);
+    return;
   }
   trace_conn("Finishing", conn);
   if (ncp_debug) print_conn("Finishing", conn, 0);
@@ -1412,7 +1431,7 @@ clear_send_pkts(struct conn *c)
 
   PTLOCKN(cs->window_mutex,"window_mutex");
   PTLOCKN(cs->send_mutex,"send_mutex");
-  while ((p =  pkqueue_get_first(cs->send_pkts)) != NULL) {
+  while ((p = pkqueue_get_first(cs->send_pkts)) != NULL) {
     npkts++;
     if (!packet_uncontrolled(p))
       cs->window_available++;
@@ -1692,7 +1711,8 @@ probe_connection(struct conn *conn)
   retransmit_controlled_packets(conn);
   if ((cs->time_last_received != 0) && (now.tv_sec - cs->time_last_received > HOST_DOWN_INTERVAL)) {
     // haven't received for a long time, despite probing
-    if (ncp_debug) printf("conn hasn't received in %ld seconds, host down!\n", 
+    if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, host down!\n", 
+			  conn, conn_state_name(conn),
 			  now.tv_sec - cs->time_last_received);
     cs->state = CS_Host_Down;
     // close and die
@@ -1703,7 +1723,8 @@ probe_connection(struct conn *conn)
   } else if ((cs->time_last_received != 0) && (now.tv_sec - cs->time_last_received > LONG_PROBE_INTERVAL)) {
     // haven't received for quite some time, send a SNS probe
     if (cs->state == CS_Open) {
-      if (ncp_debug) printf("conn hasn't received in %ld seconds, sending SNS\n",
+      if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, sending SNS\n",
+			    conn, conn_state_name(conn),
 			    now.tv_sec - cs->time_last_received);
       send_sns_pkt(conn);
     }
@@ -1711,7 +1732,8 @@ probe_connection(struct conn *conn)
     {
     // still have outstanding acks, ask for ack confirmation
     if (cs->state == CS_Open) {
-      if (ncp_debug) printf("conn has %d outstanding acks (acked %#x sent %#x), sending SNS\n",
+      if (ncp_debug) printf("conn %p (%s) has %d outstanding acks (acked %#x sent %#x), sending SNS\n",
+			    conn, conn_state_name(conn),
 			    pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_acked),
 			    cs->pktnum_sent_acked, cs->pktnum_sent_highest);
       send_sns_pkt(conn);
@@ -1738,7 +1760,7 @@ conn_to_packet_stream_handler(void *v)
   while (1) {
     if (conn->conn_sock == -1) {
       // should have exited already
-      pthread_exit(NULL);
+      // pthread_exit(NULL);
       return NULL;
     }
     // Wait for input to be available to send to network
@@ -1905,18 +1927,22 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   u_short *dataw = (u_short *)data;
   struct conn_state *cs = conn->conn_state;
 
+  if (ncp_debug) 
+    printf("NCP <<< in state %s: got %s pkt %#x from <%#o,%#x> to <%#o,%#x> ack %#x nbytes %d\n",
+	   state_name(cs->state), ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
+	   ch_srcaddr(ch), ch_srcindex(ch), ch_destaddr(ch), ch_destindex(ch),
+	   ch_ackno(ch), ch_nbytes(ch));
+  if (cs->state == CS_Inactive) {
+    if (ncp_debug) printf("NCP: inactive conn, ignoring pkt\n");
+    return;
+  }
+
   if ((ch_ackno(ch) != 0) && (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))) {
     cs->pktnum_sent_acked = ch_ackno(ch);
     // clear out acked pkts from send_pkts
     discard_received_pkts_from_send_list(conn, ch_ackno(ch));
   }
   cs->time_last_received = time(NULL);
-
-  if (ncp_debug) 
-    printf("NCP <<< in state %s: got %s pkt %#x from <%#o,%#x> to <%#o,%#x> ack %#x nbytes %d\n",
-	   state_name(cs->state), ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
-	   ch_srcaddr(ch), ch_srcindex(ch), ch_destaddr(ch), ch_destindex(ch),
-	   ch_ackno(ch), ch_nbytes(ch));
 
   // Handle STS and SNS 
   if (ch_opcode(ch) == CHOP_STS) {
@@ -2303,8 +2329,10 @@ socket_to_conn_stream_handler(struct conn *conn)
   memset(buf, 0, CH_PK_MAXLEN);
 
   cnt = receive_or_die(conn, sock, (u_char *)buf, sizeof(buf));
-
   if (ncp_debug) printf("socket_to_conn_stream_handler: read %d bytes\n", cnt);
+  if (cnt < 0)
+    return;
+
   if ((strncasecmp((char *)buf,"LSN ", 4) == 0) && (cs->state == CS_Inactive)) {
     cname = parse_contact_name(&buf[4]);
     if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
@@ -2389,7 +2417,8 @@ socket_to_conn_handler(void *arg)
       if ((cs->state == CS_Answered) || (cs->state == CS_LOS_Received) || (cs->state == CS_CLS_Received)) {
 	// our work is done
 	if (ncp_debug) print_conn("Simple done",conn,0);
-	pthread_exit(NULL);
+	// pthread_exit(NULL);
+	return NULL;
       }
     }
     break;
@@ -2398,7 +2427,8 @@ socket_to_conn_handler(void *arg)
       socket_to_conn_stream_handler(conn);
       if (0 && (cs->state == CS_Inactive)) {
 	if (ncp_debug) print_conn("Stream done",conn,1);
-	pthread_exit(NULL);
+	return NULL;
+	// pthread_exit(NULL);
       }
     }
     break;
