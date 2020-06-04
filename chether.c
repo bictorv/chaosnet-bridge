@@ -251,7 +251,8 @@ static void get_my_ea() {
 }
 
 #if ETHER_BPF
-#define BPF_MTU CH_PK_MAXLEN // (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
+// #define BPF_MTU (BPF_WORDALIGN(CH_PK_MAXLEN) + BPF_WORDALIGN(sizeof(struct bpf_hdr)) + BPF_WORDALIGN(sizeof(struct ether_header)))
+#define BPF_MTU (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
 
 // based on dpimp.c in klh10 by Ken Harrenstein
 /* Packet byte offsets for interesting fields (in network order) */
@@ -645,7 +646,7 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
   iov[1].iov_len = packetlen;;
 
   if (packetlen+sizeof(struct ether_header) > BPF_MTU) {
-    fprintf(stderr,"send_packet: buf len %lu vs MTU %lu\n",
+    fprintf(stderr,"send_packet: buf len %lu > MTU %lu\n",
 	    packetlen+sizeof(struct ether_header), BPF_MTU);
   }
   // @@@@ skip if_fd param
@@ -814,15 +815,10 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
   if (bpf_header->bh_caplen != bpf_header->bh_datalen) {
     if (chether_debug || debug) fprintf(stderr,"BPF: LENGTH MISMATCH: Captured %d of %d\n",
 		       bpf_header->bh_caplen, bpf_header->bh_datalen);
-#if 0
     return 0;			/* throw away packet */
-#else
-    // try it
-    rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
-#endif
   } else {
     rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
-    // if (debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
+    // if (chether_debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
   }
 
   struct ether_header *eh = (struct ether_header *)(ether_bpf_buf + bpf_buf_offset + bpf_header->bh_hdrlen);
@@ -1230,7 +1226,7 @@ void * ether_input(void *v)
   /* Ether -> others thread */
   fd_set rfd;
   int len, sval, maxfd = -1;
-  u_char data[CH_PK_MAXLEN];
+  u_char data[BPF_MTU];
   struct chaos_header *cha = (struct chaos_header *)&data;
 
   while (1) {
@@ -1261,8 +1257,13 @@ void * ether_input(void *v)
 	}	/* end of ARP case */
 	if ((chethdest[i].cheth_chfd > 0) && FD_ISSET(chethdest[i].cheth_chfd, &rfd)) {
 	  // Read a Chaos packet, peeking ether address for ARP optimization
-	  if ((len = get_packet(&chethdest[i], chethdest[i].cheth_chfd, (u_char *)&data, sizeof(data))) < 0)
+	  len = get_packet(&chethdest[i], chethdest[i].cheth_chfd, (u_char *)&data, sizeof(data));
+	  if (len < 0) {
+	    fprintf(stderr,"%%%% Ether: get_packet for if %s fd %d returned %d\n",
+		    chethdest[i].cheth_ifname, chethdest[i].cheth_chfd, len);
+	    // something is really bad, return from thread
 	    return NULL;
+	  }
 	  // if (chether_debug || debug) fprintf(stderr,"ether RCV %d bytes on %s\n", len, chethdest[i].cheth_ifname);
 	  if (len == 0)
 	    continue;
