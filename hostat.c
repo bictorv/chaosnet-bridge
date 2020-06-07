@@ -16,6 +16,8 @@
    limitations under the License.
 */
 
+// TODO: byte order for ANS data wrong here and in NCP.
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -145,7 +147,7 @@ void print_routing_table(u_char *bp, int len)
   for (sub = 0; sub < maxroutes; sub++) {
     if (dp[sub*2] != 0) {
       printf("%#-8o %#-8o %-8d\n",
-	     sub, ntohs(dp[sub*2]), ntohs(dp[sub*2+1]));
+	     sub, dp[sub*2], dp[sub*2+1]);
     }
   }
 }
@@ -157,7 +159,7 @@ void print_time(u_char *bp, int len)
 
   if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
 
-  time_t t = (u_short)ntohs(*dp++); t |= (u_long) ((u_short)ntohs(*dp)<<16);
+  time_t t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
 #if __APPLE__
   // imagine this
   t &= 0xffffffff;
@@ -208,7 +210,7 @@ void print_uptime(u_char *bp, int len)
 
   if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
 
-  u_int t = (u_short)ntohs(*dp++); t |= (u_long) ((u_short)ntohs(*dp)<<16);
+  u_int t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
 
   t /= 60;
   printf("%s\n", seconds_as_interval(t));
@@ -222,12 +224,12 @@ void print_lastcn(u_char *bp, int len)
   // @@@@ prettyprint age, host?
   printf("%-8s %-8s %-8s %s\n", "Host","#in","Via","Age(s)");
   for (i = 0; i < len/2/7; i++) {
-    u_short wpe = ntohs(*dp++);
+    u_short wpe = (*dp++);
     if (wpe != 7) { printf("Unexpected WPE of LASTCN: %d should be 7\n", wpe); exit(1); }
-    u_short addr = ntohs(*dp++);
-    u_short in = ntohs(*dp++); in |= (ntohs(*dp++)<<16);
-    u_short last = ntohs(*dp++);
-    u_short age = ntohs(*dp++); age |= (ntohs(*dp++)<<16);
+    u_short addr = (*dp++);
+    u_short in = (*dp++); in |= ((*dp++)<<16);
+    u_short last = (*dp++);
+    u_short age = (*dp++); age |= ((*dp++)<<16);
     printf("%#-8o %-8d %#-8o %s\n", addr, in, last, seconds_as_interval(age));
   }
 }
@@ -249,20 +251,20 @@ void print_status(u_char *bp, int len)
   printf("%s \t%-8s %-8s %-8s %-8s %-8s %-8s %-8s %-8s\n",
 	 "Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected");
   for (i = 0; dp < ep; i++) {
-    u_short subnet = ntohs(*dp++);
+    u_short subnet = (*dp++);
     if ((subnet - 0400) < 0) { printf("Unexpected format of subnet: %#o (%#x)\n", subnet, subnet); exit(1); }
     subnet -= 0400;
-    u_short elen = ntohs(*dp++);
-    u_int in = ntohs(*dp++); in |= (ntohs(*dp++)<<16);
-    u_int out = ntohs(*dp++); out |= (ntohs(*dp++)<<16);
-    u_int aborted = ntohs(*dp++); aborted |= (ntohs(*dp++)<<16);
-    u_int lost = ntohs(*dp++); lost |= (ntohs(*dp++)<<16);
-    u_int crcerr = ntohs(*dp++); crcerr |= (ntohs(*dp++)<<16);
-    u_int crcerr_post = ntohs(*dp++); crcerr_post |= (ntohs(*dp++)<<16);
-    u_int badlen = ntohs(*dp++); badlen |= (ntohs(*dp++)<<16);
+    u_short elen = (*dp++);
+    u_int in = (*dp++); in |= ((*dp++)<<16);
+    u_int out = (*dp++); out |= ((*dp++)<<16);
+    u_int aborted = (*dp++); aborted |= ((*dp++)<<16);
+    u_int lost = (*dp++); lost |= ((*dp++)<<16);
+    u_int crcerr = (*dp++); crcerr |= ((*dp++)<<16);
+    u_int crcerr_post = (*dp++); crcerr_post |= ((*dp++)<<16);
+    u_int badlen = (*dp++); badlen |= ((*dp++)<<16);
     u_int rejected = 0;
     if (elen == 16) {
-      rejected = ntohs(*dp++); rejected |= (ntohs(*dp++)<<16);
+      rejected = (*dp++); rejected |= ((*dp++)<<16);
     }
     printf("%#o \t%-8d %-8d %-8d %-8d %-8d %-8d %-8d %-8d\n",
 	   subnet, in, out, aborted, lost, crcerr, crcerr_post, badlen, rejected);
@@ -273,19 +275,31 @@ int
 main(int argc, char *argv[])
 {
   signed char c;
+  char opts[] = "r";		// raw
   char *host, *contact = "STATUS", *pname;
   char buf[CH_PK_MAXLEN];
   char *nl, *bp;
-  int i, cnt, sock, anslen, ncnt;
+  int i, cnt, sock, anslen, ncnt, raw = 0;
 
   pname = argv[0];
 
-  if (argc < 2) 
+  while ((c = getopt(argc, argv, opts)) != -1) {
+    switch (c) {
+    case 'r': raw = 1; break;
+    default:
+      fprintf(stderr,"unknown option '%c'\n", c);
+      usage(pname);
+    }
+  }
+  argc -= optind;
+  argv += optind;
+
+  if (argc < 1) 
     usage(pname);
 
-  host = argv[1];
-  if (argc > 2)
-    contact = argv[2];
+  host = argv[0];
+  if (argc > 1)
+    contact = argv[1];
 
   sock = connect_to_named_socket(SOCK_STREAM, "chaos_stream");
   
@@ -314,7 +328,9 @@ main(int argc, char *argv[])
     cnt += ncnt;
     bp += ncnt;
   }
-  if (strcasecmp(contact, "STATUS") == 0)
+  if (raw)
+    print_buf((u_char *)nl, anslen);
+  else if (strcasecmp(contact, "STATUS") == 0)
     print_status((u_char *)nl, anslen);
   else if (strcasecmp(contact, "TIME") == 0)
     print_time((u_char *)nl, anslen);

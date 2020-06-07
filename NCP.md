@@ -1,5 +1,7 @@
 # Network Control Program
 
+The NCP lets a regular user program easily make use of the Chaosnet routing and infrastructure built by the rest of cbridge.
+
 # Configuration
 
 `ncp ` [ `enabled` no/yes ] [ `debug` off/on ] [ `trace` off/on ]  [ `domain` *default* ] [ `socketdir` /tmp ] [ `retrans` 500 ]
@@ -125,6 +127,14 @@ Currently (2020-06-03), the server side (LSN) is not very debugged.
 The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried.
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
+
+## TODO
+
+Write simple server programs to validate LSN stuff (NAME, SEND, HOSTAB... and DOMAIN).
+
+Implement fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
+
+Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need chaos_seqpacket though (below).
 
 ## Future? chaos_seqpacket
 

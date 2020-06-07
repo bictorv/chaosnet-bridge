@@ -256,17 +256,21 @@ int pktnum_equal(u_short a, u_short b)
   // assumes using pktnum_1plus so no overflow
   return a==b;
 }
-int pktnum_1plus(u_short a)
-{
-  return ((int)a+1) & 0177777;
-}
-int pktnum_diff(u_short a, u_short b)
+static int pktnum_diff(u_short a, u_short b)
 {
   signed int x = (int)a-(int)b;
   if (x < 0)
     return x+0200000;
   else
     return x;
+}
+static int pktnum_1plus(u_short a)
+{
+  return ((int)a+1) & 0177777;
+}
+static int pktnum_1minus(u_short a)
+{
+  return pktnum_diff(a, 1);
 }
 
 //////// named sockets
@@ -1881,7 +1885,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     if (pktnum_less(ch_packetno(pkt), cs->pktnum_received_highest) || 
 	pktnum_equal(ch_packetno(pkt), cs->pktnum_received_highest)) {
       // Evidence of unnecessary retransmisson, keep other end informed
-      if (ncp_debug) printf("Pkt %#x already received\n", ch_packetno(pkt));
+      if (ncp_debug) printf("Pkt %#x already received (highest %#x)\n", ch_packetno(pkt), cs->pktnum_received_highest);
       if (cs->state == CS_Open)
 	send_sts_pkt(conn);
       return;
@@ -1941,6 +1945,13 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     cs->pktnum_sent_acked = ch_ackno(ch);
     // clear out acked pkts from send_pkts
     discard_received_pkts_from_send_list(conn, ch_ackno(ch));
+  }
+  if (cs->time_last_received == 0) {
+    // if this is the first, make sure we realize we haven't already received it
+    // @@@@ mmm, but if pkts arrive out-of-order? the first for a conn should always be RFC or OPN.
+    cs->pktnum_received_highest = pktnum_1minus(ch_packetno(ch));
+    cs->pktnum_read_highest = cs->pktnum_received_highest;
+    if (ncp_debug) print_conn("First pkt for", conn, 1);
   }
   cs->time_last_received = time(NULL);
 
@@ -2455,7 +2466,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       if (pktnum_less(cs->pktnum_read_highest, ch_packetno(pkt)))
 	cs->pktnum_read_highest = ch_packetno(pkt);
       else if (pktnum_equal(cs->pktnum_read_highest, ch_packetno(pkt))) {
-	if (ncp_debug) printf("NCP conn_to_socket_pkt_handler: retransmission of pkt %#x received - ignoring\n", ch_packetno(pkt));
+	if (ncp_debug) printf("NCP conn_to_socket_pkt_handler: retransmission of pkt %#x received (highest %#x) - ignoring\n", 
+			      ch_packetno(pkt), cs->pktnum_read_highest);
 	return;
       } else
 	fprintf(stderr,"%%%% Read pkt from read_pkts with unexpected number: highest was %d, pkt is %d\n", 
@@ -2483,7 +2495,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     if (ncp_debug) printf("To socket: %s", buf);
     len = strlen(buf);
     // might be non-string data
-    memcpy(&buf[len], data, ch_nbytes(pkt));
+    ntohs_buf((u_short *)data, (u_short *)&buf[len], ch_nbytes(pkt));
+    // memcpy(&buf[len], data, ch_nbytes(pkt));
     len += ch_nbytes(pkt);
     cs->state = CS_Answered;
   } else if (ch_opcode(pkt) == CHOP_OPN) {
@@ -2495,6 +2508,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 			  conn_state_name(conn), ch_nbytes(pkt));
     sprintf(buf, "%s ", ch_opcode_name(ch_opcode(pkt)));
     ch_11_gets(data, (u_char *)&buf[4], ch_nbytes(pkt));
+    buf[4+ch_nbytes(pkt)] = '\0';
     strcat(buf, "\r\n");
     len = 4+ch_nbytes(pkt)+2; // strlen(buf);
     if (ncp_debug) printf("To socket (len %d): %s\n", len, buf);
