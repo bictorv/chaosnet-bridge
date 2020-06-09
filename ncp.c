@@ -1541,8 +1541,8 @@ discard_received_pkts_from_send_list(struct conn *conn, u_short receipt)
   while ((p != NULL) && !packet_uncontrolled(p) && 
 	 (pktnum_less(ch_packetno(p), receipt) || pktnum_equal(ch_packetno(p), receipt))) {
     // discard and increase space in window
-    if (ncp_debug) printf("Discarding pkt %#x receipt %#x opcode %s\n",
-			  ch_packetno(p), receipt, ch_opcode_name(ch_opcode(p)));
+    if (ncp_debug > 1) printf("Discarding pkt %#x receipt %#x opcode %s\n",
+			      ch_packetno(p), receipt, ch_opcode_name(ch_opcode(p)));
     if (ncp_debug > 1) print_pkqueue(cs->send_pkts);
     p = pkqueue_get_first(cs->send_pkts);
     if (ncp_debug > 1) print_pkqueue(cs->send_pkts);
