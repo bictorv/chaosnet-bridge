@@ -55,6 +55,7 @@ typedef enum connstate {
 struct conn_state {
   connstate_t state;
   pthread_mutex_t conn_state_lock;
+  pthread_cond_t conn_state_cond; // wait on this to see state changes
   u_short pktnum_made_highest;
 
   u_short local_winsize;
