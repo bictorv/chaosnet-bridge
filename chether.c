@@ -971,6 +971,11 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 	printf(" Packet #%o\n Ack #%o\n",
 		ch_packetno(ch), ch_ackno(ch));
 #endif
+	if ((ch_opcode(ch) == 0) || ((ch_opcode(ch) > CHOP_BRD) && (ch_opcode(ch) < CHOP_DAT))) {
+	  if (chether_debug)
+	    printf("BOGUS OPCODE, discarding\n");
+	  return 0;
+	}
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
       }
 #if 0
