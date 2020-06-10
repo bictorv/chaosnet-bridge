@@ -286,6 +286,8 @@ struct chroute *add_to_routing_table(u_short dest, u_short braddr, u_short myadd
 
 void htons_buf(u_short *ibuf, u_short *obuf, int len);
 void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
+int get_packet_string(struct chaos_header *pkt, u_char *out, int outsize);
+void print_buf(u_char *ucp, int cnt);
 void ch_dumpkt(u_char *ucp, int cnt);
 void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);

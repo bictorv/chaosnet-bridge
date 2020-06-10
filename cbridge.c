@@ -642,6 +642,17 @@ ntohs_buf(u_short *ibuf, u_short *obuf, int len)
     *obuf++ = ntohs(*ibuf++);
 }
 
+// Note: this is for strings, not general data.
+int 
+get_packet_string(struct chaos_header *pkt, u_char *out, int outsize) 
+{
+  u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
+  int len = outsize < ch_nbytes(pkt) ? outsize : ch_nbytes(pkt);
+  ntohs_buf(dataw, (u_short *)out, len);
+  out[len] = '\0';
+  return len;
+}
+
 void
 handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad)
 {

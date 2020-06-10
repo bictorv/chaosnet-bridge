@@ -147,6 +147,32 @@ void print_its_string(unsigned char *s)
   }
 }  
 
+void print_buf(u_char *ucp, int len) 
+{
+  int row, i;
+  char b1[3],b2[3];
+
+  for (row = 0; row*8 < len; row++) {
+    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
+      fprintf(stderr, "  %02x", ucp[i+row*8]);
+      fprintf(stderr, "%02x", ucp[(++i)+row*8]);
+    }
+    fprintf(stderr, " (hex)\r\n");
+#if 1
+    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
+      fprintf(stderr, "  %2s", ch_char(ucp[i+row*8],(char *)&b1));
+      fprintf(stderr, "%2s", ch_char(ucp[(++i)+row*8],(char *)&b2));
+    }
+    fprintf(stderr, " (chars)\r\n");
+    for (i = 0; (i < 8) && (i+row*8 < len); i++) {
+      fprintf(stderr, "  %2s", ch_char(ucp[i+1+row*8],(char *)&b1));
+      fprintf(stderr, "%2s", ch_char(ucp[(i++)+row*8],(char *)&b2));
+    }
+    fprintf(stderr, " (11-chars)\r\n");
+#endif
+  }
+}
+
 void
 ch_dumpkt(unsigned char *ucp, int cnt)
 {

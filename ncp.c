@@ -662,9 +662,7 @@ find_existing_conn(struct chaos_header *ch)
   }
   if (ncp_debug && (val == NULL) && ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_LOS))) {
     u_char contact[CH_PK_MAX_DATALEN];
-    u_char *data = &((u_char *)ch)[CHAOS_HEADERSIZE];
-    ch_11_gets(data, contact, ch_nbytes(ch));
-    contact[ch_nbytes(ch)] = '\0';
+    get_packet_string(ch, contact, sizeof(contact));
     printf("NCP: no conn found for %s %#x from src <%#o,%#x> for dest <%#o,%#x>, data (len %d) \"%s\"\n", 
 	   ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 	   ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), ch_nbytes(ch), contact);
@@ -848,10 +846,8 @@ find_matching_listener(struct chaos_header *ch)
   struct listener *ll;
   struct conn *val = NULL;
   u_char *contact = (u_char *)calloc(1, ch_nbytes(ch)+3);
-  u_char *data = &((u_char *)ch)[CHAOS_HEADERSIZE];
 
-  ch_11_gets(data, contact, ch_nbytes(ch));
-  contact[ch_nbytes(ch)] = '\0';
+  get_packet_string(ch, contact, ch_nbytes(ch)+2);
   char *space = index((char *)contact, ' ');
   if (space) // ignore args
     *space = '\0';
@@ -1295,8 +1291,8 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *d
 {
   u_char contact[MAX_CONTACT_NAME_LENGTH];
 
-  ch_11_gets(data, contact, ch_nbytes(ch));
-  contact[ch_nbytes(ch)] = '\0';
+  get_packet_string(ch, contact, sizeof(contact));
+
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(contact);
   conn->conn_contact_args = parse_contact_args(contact, conn->conn_contact);
@@ -2096,11 +2092,8 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       printf("%%%% p_t_c_stream_h %s pkt received in %s state for %p!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn), conn);
       if (ch_opcode(ch) == CHOP_LOS) {
 	u_char buf[CH_PK_MAX_DATALEN];
-	if (ch_nbytes(ch) < sizeof(buf)) {
-	  ch_11_gets(data, buf, ch_nbytes(ch));
-	  buf[ch_nbytes(ch)] = '\0';
-	  printf("%%%% LOS: %s\n", buf);
-	}
+	get_packet_string(ch, buf, sizeof(buf));
+	printf("%%%% LOS: %s\n", buf);
 	break;
       }
     }
@@ -2224,9 +2217,7 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
   struct conn *conn = NULL;
   if (ch_opcode(ch) == CHOP_RFC) {
     u_char contact[CH_PK_MAX_DATALEN];
-    // @@@@ make a fun fur these two lines
-    ch_11_gets(data, contact, ch_nbytes(ch));
-    contact[ch_nbytes(ch)] = '\0';
+    get_packet_string(ch, contact, sizeof(contact));
     if (ncp_debug) printf("NCP p_t_c_h: Got %s %#x from <%#o,%#x> for <%#o,%#x>, contact \"%s\"\n", 
 			  ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 			  ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), contact);
@@ -2256,11 +2247,7 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
     // LOS for unknown conn - try to figure out why?
     if (ncp_debug) {
       u_char buf[CH_PK_MAX_DATALEN];
-      buf[0] = '\0';
-      if (ch_nbytes(ch) < sizeof(buf)) {
-	ch_11_gets(data, buf, ch_nbytes(ch));
-	buf[ch_nbytes(ch)] = '\0';
-      }
+      get_packet_string(ch, buf, sizeof(buf));
       printf("NCP p_t_c_h: Got LOS from <%#o,%#x> for <%#o,%#x> - ignoring: %s\n",
 	     ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch),
 	     buf);
@@ -2593,8 +2580,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
       sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
-    ch_11_gets(data, (u_char *)args, ch_nbytes(pkt));
-    args[ch_nbytes(pkt)] = '\0';
+    get_packet_string(pkt, (u_char *)args, sizeof(args));
     if (ncp_debug) printf("NCP rfc data: \"%s\"\n", args);
     if ((space = index(args, ' ')) != NULL) 
       sprintf(buf, "RFC %s%s\r\n", fhost, space);
@@ -2620,8 +2606,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     if (ncp_debug) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
 			  conn_state_name(conn), ch_nbytes(pkt));
     sprintf(buf, "%s ", ch_opcode_name(ch_opcode(pkt)));
-    ch_11_gets(data, (u_char *)&buf[4], ch_nbytes(pkt));
-    buf[4+ch_nbytes(pkt)] = '\0';
+    get_packet_string(pkt, (u_char *)&buf[4], sizeof(buf)-4-3);
     strcat(buf, "\r\n");
     len = 4+ch_nbytes(pkt)+2; // strlen(buf);
     if (ncp_debug) printf("To socket %s (len %d): %s\n", conn_sockaddr_path(conn), len, buf);
