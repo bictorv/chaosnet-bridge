@@ -43,12 +43,13 @@ typedef enum connstate {
   CS_Listening,
   CS_RFC_Received,
   CS_RFC_Sent,
+  CS_Open_Sent, // not in Amber or LISPM code
   CS_Open,
   CS_LOS_Received,
   CS_Host_Down,
   CS_Foreign,
   CS_BRD_Sent,
-  CS_Finishing, // not in Amber or Lispm code
+  CS_Finishing, // not in Amber or LISPM code
 } connstate_t;
 
 // state parts of conn
