@@ -829,7 +829,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     for (i = 0; i < nchethdest; i++) {
       if ((&chethdest[i] != cd) && (memcmp(eh->ether_shost, chethdest[i].cheth_ea, 6) == 0)) {
 	if (chether_debug)
-	  fprintf(stderr,"Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
+	  fprintf(stderr,"%%%% Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
 	return 0;
       }
     }
@@ -958,22 +958,22 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       else if (chether_debug || verbose) {
 	struct chaos_header *ch = (struct chaos_header *)buf;
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-#if 1
 	printf("Ethernet Chaos message received: %s from %#o to %#o\n",
 	       ch_opcode_name(ch_opcode(ch)), ch_srcaddr(ch), ch_destaddr(ch));
-#else
-	printf(" Opcode: %o (%s), unused: %o\n FC: %o, Nbytes %d.\n",
-		ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-		ch->ch_unused,
-		ch_fc(ch), ch_nbytes(ch));
-	printf(" Dest host: %o, index %o\n Source host: %o, index %o\n",
-		ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
-	printf(" Packet #%o\n Ack #%o\n",
-		ch_packetno(ch), ch_ackno(ch));
-#endif
 	if ((ch_opcode(ch) == 0) || ((ch_opcode(ch) > CHOP_BRD) && (ch_opcode(ch) < CHOP_DAT))) {
-	  if (chether_debug)
+	  if (chether_debug) {
 	    printf("BOGUS OPCODE, discarding\n");
+#if 1
+	    printf(" Opcode: %#o (%s), unused: %#x\n FC: %d, Nbytes %d.\n",
+		   ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
+		   ch->ch_opcode_u.ch_opcode_s.ch_unused,
+		   ch_fc(ch), ch_nbytes(ch));
+	    printf(" Dest host: %#o, index %#o\n Source host: %#o, index %#o\n",
+		   ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
+	    printf(" Packet %#x\n Ack %#x\n",
+		   ch_packetno(ch), ch_ackno(ch));
+#endif
+	  }
 	  return 0;
 	}
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
