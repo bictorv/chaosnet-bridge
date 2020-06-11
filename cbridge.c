@@ -1535,6 +1535,7 @@ parse_config(char *cfile)
 	}
       }
     }
+    fclose(config);
   }
 }
 
