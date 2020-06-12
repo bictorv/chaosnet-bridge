@@ -13,6 +13,8 @@ endif
 ifeq ($(OS), OSX)
 CFLAGS = -I/opt/local/include -g
 LDFLAGS = -L/opt/local/lib
+else
+CFLAGS = -g
 endif
 
 all: cbridge hostat finger
