@@ -271,6 +271,34 @@ void print_status(u_char *bp, int len)
   }
 }
 
+void
+print_finger_info(u_char *bp, int len, char *host)
+{
+  u_char *nl;
+  u_char *uid = NULL, *loc = NULL, *idle = NULL, *pname = NULL, *aff = NULL;
+  uid = bp;
+  if ((nl = (u_char *)index((char *)bp, 0215)) != NULL) {
+    *nl = '\0';
+    loc = ++nl;
+    if ((nl = (u_char *)index((char *)nl, 0215)) != NULL) {
+      *nl = '\0';
+      idle = ++nl;
+      if ((nl = (u_char *)index((char *)nl, 0215)) != NULL) {
+	*nl = '\0';
+	pname = ++nl;
+	if ((nl = (u_char *)index((char *)nl, 0215)) != NULL) {
+	  *nl = '\0';
+	  aff = ++nl;
+	}
+      }
+    }
+  }
+  printf("%-15s %.1s %-22s %-10s %5s    %s\n"
+	 "%-15.15s %.1s %-22.22s %-10.10s %5.5s    %s\n",
+	 "User"," ","Name","Host","Idle","Location",
+	 uid,aff,pname,host,idle,loc);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -338,6 +366,8 @@ main(int argc, char *argv[])
     print_uptime((u_char *)nl, anslen);
   else if (strcasecmp(contact, "DUMP-ROUTING-TABLE") == 0)
     print_routing_table((u_char *)nl, anslen);
+  else if (strcasecmp(contact, "FINGER") == 0)
+    print_finger_info((u_char *)nl, anslen, host);
   else if (strcasecmp(contact, "LASTCN") == 0)
     print_lastcn((u_char *)nl, anslen);
   else
