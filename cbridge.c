@@ -979,6 +979,12 @@ void send_chaos_pkt(u_char *pkt, int len)
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short dchad = ch_destaddr(cha);
 
+  if (is_mychaddr(dchad)) {
+    // shortcut. We don't need to update FC or link stats.
+    handle_pkt_for_me(cha, pkt, len, dchad);
+    return;
+  }
+
   struct chroute *rt = find_in_routing_table(dchad, 0, 0);
 
   if (rt == NULL) {

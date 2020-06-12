@@ -16,14 +16,13 @@
 */
 
 // TODO:
-// - GC of inactive connections - note garbage_collect_idle_conns doesn't quite work yet
-// - handle local address (including cbridge "built-in" handlers, e.g. STATUS)
-// - Decide/structure/clean up/document who changes the state
+// - GC of inactive connections - note garbage_collect_idle_conns doesn't quite work (yet)
+// - Decide/structure/clean up/make sure/document who changes the state
 // - Document it better
 //
 // add statistics struct, for (new) PEEK protocol to report
 // domain search list config - here or in dns?
-// write client library
+// write client library (but see named.py for how simple it is)
 
 #include <stdlib.h>
 #include <ctype.h>
