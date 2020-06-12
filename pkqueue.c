@@ -151,7 +151,8 @@ pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)
   nl->next = NULL;
   if (q->first == NULL) {
     // optimization: see if q was empty
-    // @@@@ assert(q->pkq_len == 0)
+    assert(q->last == NULL);
+    assert(q->pkq_len == 0);
     q->first = nl; 
     q->last = nl;
     q->pkq_len = 1;
