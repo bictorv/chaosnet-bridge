@@ -236,12 +236,13 @@ void print_lastcn(u_char *bp, int len)
 
 void print_status(u_char *bp, int len)
 {
-  u_char hname[32];
+  u_char hname[32+1];
   u_short *dp;
   int i;
 
   // First 32 bytes contain the name of the node, padded on the right with zero bytes.
-  ch_11_gets(bp, hname, sizeof(hname));
+  memset(hname, 0, sizeof(hname));
+  strncpy((char *)hname, (char *)bp, sizeof(hname)-1);
   printf("Hostat for host %s\n", hname);
   bp += 32;
 

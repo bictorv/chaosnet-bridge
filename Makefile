@@ -67,5 +67,5 @@ finger: finger.c cbridge-chaos.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
-	rm -f cbridge $(OBJS)
+	rm -f cbridge hostat finger $(OBJS)
 
