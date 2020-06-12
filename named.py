@@ -66,7 +66,7 @@ if __name__ == '__main__':
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     parser.add_argument("-p",'--program',nargs=1,dest='program',
-                            default='/usr/bin/finger',
+                            default=['/usr/bin/finger'],
                             help='The program to run to get finger information')
     args = parser.parse_args()
     if args.program:
