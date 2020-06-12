@@ -31,6 +31,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/param.h>
+#include <stdarg.h>
 
 #include "cbridge.h"
 #include "pkqueue.h"
@@ -59,8 +61,10 @@ int ncp_enabled = 0;
 #define DEFAULT_CHAOS_SOCKET_DIRECTORY "/tmp/"
 static char chaos_socket_directory[PATH_MAX];
 // default domain for host lookups
+#if CHAOS_DNS
 #define DEFAULT_CHAOS_DOMAIN "chaosnet.net"
 static char default_chaos_domain[NS_MAXDNAME];
+#endif
 // default retransmission interval
 static int default_retransmission_interval = DEFAULT_RETRANSMISSION_INTERVAL;
 // default window size
@@ -93,7 +97,9 @@ parse_ncp_config_line()
   int val = 0;
 
   strcpy(chaos_socket_directory,DEFAULT_CHAOS_SOCKET_DIRECTORY); // default
+#if CHAOS_DNS
   strcpy(default_chaos_domain,DEFAULT_CHAOS_DOMAIN); // default
+#endif
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     val = 0;
     if (strcmp(tok,"socketdir") == 0) {
@@ -105,6 +111,7 @@ parse_ncp_config_line()
 	fprintf(stderr,"ncp: fixing socketdir to add slash to \"%s\"\n", chaos_socket_directory);
 	strcat(chaos_socket_directory, "/");
       }
+#if CHAOS_DNS
     } else if (strcmp(tok,"domain") == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"ncp: no domain specified\n"); return -1; }
@@ -115,6 +122,7 @@ parse_ncp_config_line()
 		default_chaos_domain[strlen(default_chaos_domain)-1], default_chaos_domain);
 	default_chaos_domain[strlen(default_chaos_domain)-1] = '\0';
       }
+#endif
     } else if (strcmp(tok,"retrans") == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"ncp: no retrans value specified\n"); return -1; }
@@ -187,7 +195,13 @@ parse_ncp_config_line()
   if (verbose || ncp_debug) {
     printf("NCP is %s. Socket directory \"%s\", default domain \"%s\", retrans %d, window %d, eofwait %d, finishwait %d, debug %d %s, trace %d %s\n", 
 	   ncp_enabled ? "enabled" : "disabled",
-	   chaos_socket_directory, default_chaos_domain, default_retransmission_interval, default_window_size,
+	   chaos_socket_directory, 
+#if CHAOS_DNS
+	   default_chaos_domain,
+#else
+	   "(no DNS)",
+#endif
+	   default_retransmission_interval, default_window_size,
 	   eof_wait_timeout, finish_wait_timeout,
 	   ncp_debug, (ncp_debug > 0) ? "on" : "off",
 	   ncp_trace, (ncp_trace > 0) ? "on" : "off");
@@ -670,7 +684,7 @@ remove_active_conn(struct conn *c, int dolock, int dofree)
       if (lastone)
 	conn_list = NULL;
       if (dofree) {
-	if (ncp_debug) printf("NCP freeing conn %p\n", c);
+	// if (ncp_debug) printf("NCP freeing conn %p\n", c);
 	// @@@@ mmm, don't do this yet.
 	// free_conn(c);
       }
@@ -1812,13 +1826,10 @@ retransmit_controlled_packets(struct conn *conn)
   PTUNLOCKN(cs->send_mutex,"send_mutex");
 }
 
+// call with a fresh copy of a pkt (no swapping protection here)
 static int
-send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt) 
+send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt, int pklen) 
 {
-  u_char tempkt[CH_PK_MAXLEN];
-  int pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
-  if (pklen % 2) pklen++;
-
   if (packet_uncontrolled(pkt)) {
     // just send it
     if (ncp_debug) printf("Sending uncontrolled pkt %#x (%s len %d)\n", 
@@ -1845,15 +1856,11 @@ send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt)
     // update ack field
     set_ch_ackno(pkt, cs->pktnum_read_highest);
     cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
-    // protect against swapping
-    if (pklen <= sizeof(tempkt)) {
-      memcpy(tempkt, (u_char *)pkt, pklen);
-      if (ncp_debug) printf("NCP sending controlled pkt %#x (%s) ack %#x\n", 
-			    ch_packetno(pkt), ch_opcode_name(ch_opcode(pkt)), ch_ackno(pkt));
-      send_chaos_pkt(tempkt, pklen);
-      return 1;
-    } else if (ncp_debug)
-      printf("NCP: packet too long (%d > %lu)\n", pklen, sizeof(tempkt));
+
+    if (ncp_debug) printf("NCP sending controlled pkt %#x (%s) ack %#x\n", 
+			  ch_packetno(pkt), ch_opcode_name(ch_opcode(pkt)), ch_ackno(pkt));
+    send_chaos_pkt((u_char *)pkt, pklen);
+    return 1;
   } else {
     // already acked, so ignore it
   }
@@ -1913,9 +1920,12 @@ conn_to_packet_stream_handler(void *v)
   struct conn_state *cs = conn->conn_state;
   struct chaos_header *pkt;
   struct timespec retrans, lastsent, now;
+  struct timeval tv;
   int timedout = 0;
   int qlen = 0;
   int npkts = 0;
+  u_char tempkt[CH_PK_MAXLEN];
+  int pklen;
 
   if (conn->conn_type != CT_Stream) {
     fprintf(stderr,"%%%% Bug: conn_to_packet_stream_handler running with non-stream conn\n");
@@ -1930,11 +1940,15 @@ conn_to_packet_stream_handler(void *v)
     }
     // Wait for input to be available to send to network
     PTLOCKN(cs->send_mutex,"send_mutex");
-    timespec_get(&retrans, TIME_UTC);
-    retrans.tv_nsec += (conn->retransmission_interval)*1000000;
-    while (retrans.tv_nsec > 1000000000) {
-      retrans.tv_sec++; retrans.tv_nsec -= 1000000000;
+
+    gettimeofday(&tv, NULL);
+    tv.tv_usec += (conn->retransmission_interval)*1000;
+    while (tv.tv_usec > 1000000) {
+      tv.tv_sec++; tv.tv_usec -= 1000000;
     }
+    retrans.tv_sec = tv.tv_sec + 0;
+    retrans.tv_nsec = tv.tv_usec * 1000;
+
     timedout = 0;
     npkts = 0;
 
@@ -1944,13 +1958,20 @@ conn_to_packet_stream_handler(void *v)
     if (timedout == 0) {
       // get a packet
       pkt = pkqueue_peek_last(cs->send_pkts);
-      if (pkt == NULL) pkt = pkqueue_peek_first(cs->send_pkts);
-      PTUNLOCKN(cs->send_mutex,"send_mutex");
-
+      if (pkt == NULL) // @@@@ should not be necessary
+	pkt = pkqueue_peek_first(cs->send_pkts);
       if (pkt != NULL) {
-	npkts += send_packet_when_window_open(cs, pkt);
-      } else if (ncp_debug) {
-	printf("NCP: c_t_p triggered w/o timeout (qlen %d) but no pkt?\n", qlen);
+	// make a copy, to protect against (1) swapping when sending, and (2) pkt being freed after lock is released
+	pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
+	if (pklen % 2) pklen++;
+	memcpy(tempkt, (u_char *)pkt, pklen);
+	pkt = (struct chaos_header *)tempkt;
+	PTUNLOCKN(cs->send_mutex,"send_mutex");
+
+	npkts += send_packet_when_window_open(cs, pkt, pklen);
+      } else {
+	PTUNLOCKN(cs->send_mutex,"send_mutex");
+	if (ncp_debug) printf("%%%% NCP: c_t_p triggered w/o timeout (qlen %d) but no pkt?\n", qlen);
       }
       timespec_get(&now, TIME_UTC);
       if (npkts == 0) {
@@ -2650,9 +2671,16 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   }
   if (((cs->state == CS_Listening) || (cs->state == CS_RFC_Received))
       && (ch_opcode(pkt) == CHOP_RFC)) {
-    char fhost[NS_MAXDNAME], args[MAX_CONTACT_NAME_LENGTH], *space;
+#if CHAOS_DNS
+    char fhost[NS_MAXDNAME];
+#else
+    char fhost[32];
+#endif
+    char args[MAX_CONTACT_NAME_LENGTH], *space;
     len = ch_nbytes(pkt);
+#if CHAOS_DNS
     if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
+#endif
       sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
     get_packet_string(pkt, (u_char *)args, sizeof(args));
