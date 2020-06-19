@@ -19,7 +19,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](supdup-patch.tar) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) to try a simple stream protocol.
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](supdup-patch.tar) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) to try a simple stream protocol, and [an example server program](named.py).
 
 Example:
 ```
@@ -111,7 +111,7 @@ where *reason* is a single line of text, which results in the NCP sending a corr
 where *len* is the length in bytes (max 488) of the following *data* (which may include any bytes). This results in the NCP sending an ANS packet to the remote host, with the supplied data, and then closing the socket.
 
 
-To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example program](named.py).
+To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
 
 
 # Internals
