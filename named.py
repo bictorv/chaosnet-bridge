@@ -48,9 +48,9 @@ def name_server():
         data = sock.recv(128)
         # Strip newlines, split at blanks
         args = data.rstrip().split(b' ')
-        # print(args)
         if args[0] == b"RFC":
-            # print('got rfc from {!s} with args {!r}'.format(args[1],args[2:]))
+            if debug:
+                print('got RFC from {!s} with args {!r}'.format(args[1],args[2:]))
             # Accept the request
             sock.sendall(b"OPN\r\n")
             t = threading.Thread(target=give_finger_response,args=(sock, args[2:])).start()
@@ -66,7 +66,6 @@ if __name__ == '__main__':
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     parser.add_argument("-p",'--program',nargs=1,dest='program',
-                            default=['/usr/bin/finger'],
                             help='The program to run to get finger information')
     args = parser.parse_args()
     if args.program:

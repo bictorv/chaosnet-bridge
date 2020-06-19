@@ -1,10 +1,10 @@
 # Network Control Program
 
-The NCP lets a regular user program easily make use of the Chaosnet routing and infrastructure built by the rest of cbridge.
+The NCP implements the "transport layer" of Chaosnet, and lets a regular user program easily make use of the Chaosnet routing and infrastructure built by the rest of cbridge.
 
 # Configuration
 
-`ncp ` [ `enabled` no/yes ] [ `debug` off/on ] [ `trace` off/on ]  [ `domain` *default* ] [ `socketdir` /tmp ] [ `retrans` 500 ]
+`ncp ` [ `enabled` no/yes ] [ `debug` off/on ] [ `trace` off/on ]  ...
 
 | setting | description |
 | --- | --- |
@@ -12,6 +12,7 @@ The NCP lets a regular user program easily make use of the Chaosnet routing and 
 |`domain`| used for specifying the default DNS domain for RFC arg parsing - default is `chaosnet.net`. |
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128.|
+|`finishwait`| specifies time to wait for ACK of final EOF pkt when closing conn - default 5000 ms.|
 |`socketdir`| specifies the directory where to put the socket file(s), `chaos_stream` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
@@ -76,9 +77,9 @@ or
 
 In the case of OPN, the NCP sets up a stream connection , handles flow control etc, and forwards data between the remote host and the user program. 
 
-Writes from the user program are packaged into DAT packets which are sent to the remote host (when the window allows), and DAT packets from the remote host are written to the user program.
+Writes from the user program are packaged into DAT packets which are sent to the remote host (when the window allows), and DAT packets from the remote host are written to the user program. No character translation is done in the NCP, so the client needs to handle e.g. translation between "ascii newline" (012) and "lispm newline" (0212).
 
-When the user program closes the socket, the NCP sends an EOF, waits for it to be acked, and then sends a CLS to close the connection in a controlled way (not quite as in Section 4.4 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData)..
+When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in Section 4.4 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData)..
 
 When the NCP receives an EOF or CLS, the user socket is closed.
 
@@ -86,7 +87,7 @@ The NCP attempts to remove the user socket file after it is closed, to keep the 
 
 ### Server opening
 
-If the user program acts as a server, it opens the socket and write
+If the user program acts as a server, it opens the socket and writes
 
 `LSN `*contactname*
 
@@ -104,11 +105,13 @@ causes the NCP to send an OPN packet to the remote host, and when it reponds wit
 `CLS `*reason*
 where *reason* is a single line of text, which results in the NCP sending a corresponding CLS packet to the remote host, and the connection is then closed - including the user socket.
 
-`ANS `*len*\r\n*data*
-where *len* is the length in bytes of the following *data* (which may include any bytes). This results in the NCP sending an ANS packet to the remote host, with the supplied data, and then closing the connection.
+`ANS `*len*
+*data*
+
+where *len* is the length in bytes (max 488) of the following *data* (which may include any bytes). This results in the NCP sending an ANS packet to the remote host, with the supplied data, and then closing the socket.
 
 
-To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again.
+To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example program](named.py).
 
 
 # Internals
@@ -118,11 +121,9 @@ Each connection uses three threads:
 1. one to handle data from the socket to the connection, and
 1. one to handle data from the connection to the network
 
-Tons of locking, but probably not enough.
+Tons of locking, but possibly not enough.
 
 ## Caveats
-
-Currently (2020-06-03), the server side (LSN) is not very debugged.
 
 The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried.
 
@@ -130,13 +131,11 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 
 ## TODO
 
-Write simple server programs to validate LSN stuff (NAME, SEND, HOSTAB... and DOMAIN).
-
 Implement fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 
 Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need chaos_seqpacket though (below).
 
-## Future? chaos_seqpacket
+## Future idea? chaos_seqpacket
 
 This is a socket of type `SOCK_SEQPACKET`.
 

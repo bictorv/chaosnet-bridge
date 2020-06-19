@@ -39,6 +39,7 @@
 // #### clean up routing table issues
 // invent host-route protocol (RUTH? RBG?)
 
+// autoconf please
 
 // logging:
 // - lock to avoid mixed output from different threads
@@ -57,8 +58,7 @@
 // HOSTAB server?
 // - No clients except LMI but would be simpler for CADR than porting DNS?
 // - requires stream protocol (cf MIT AIM 628 sec 5.10)
-// - bite the bullet and implement stream server - externally - but then perhaps in ITS?
-// - or invent a HOSTTB connectionless protocol
+// x bite the bullet and implement stream server (see NCP)
 
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr

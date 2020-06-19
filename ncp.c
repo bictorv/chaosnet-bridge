@@ -212,8 +212,8 @@ static void
 trace_conn(char *leader, struct conn *conn)
 {
   char tbuf[128], buf[256];
-  time_t now = time(NULL);
   if (ncp_trace) {
+    time_t now = time(NULL);
     strftime(tbuf, sizeof(tbuf), "%T", localtime(&now));
     sprintf(buf, "%s %s", tbuf, leader);
     print_conn(buf, conn, 0);
@@ -670,8 +670,8 @@ remove_active_conn(struct conn *c, int dolock, int dofree)
 	 (c->conn_lhost == cn->conn_lhost) &&
 	 (c->conn_lidx == cn->conn_lidx))) {
       int lastone = 0;
-      if (ncp_debug || ncp_trace) printf("Removing conn %p from conn_list prev %p next %p\n", 
-					 c, cl->conn_prev, cl->conn_next);
+      if (ncp_debug) printf("Removing conn %p from conn_list prev %p next %p\n", 
+			    c, cl->conn_prev, cl->conn_next);
       if (cl->conn_prev != NULL)
 	cl->conn_prev->conn_next = cl->conn_next;
       if (cl->conn_next != NULL)
@@ -1227,7 +1227,8 @@ finish_stream_conn(struct conn *conn)
   if (ncp_debug) printf("NCP conn %p (%s) finishing\n", conn, conn_thread_name(conn));
   PTLOCKN(conn->conn_lock,"conn_lock");
   if (conn->conn_state->state == CS_Inactive) { // || (conn->conn_sock == -1)
-    trace_conn("Already finished", conn);
+    //trace_conn("Already finished", conn);
+    if (ncp_debug) print_conn("Already finished", conn, 1);
     PTUNLOCKN(conn->conn_lock, "conn_lock");
     cancel_conn_threads(conn);
     return;
@@ -2172,7 +2173,6 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       break;
     case CHOP_ANS:
       // let user read the answer, and nothing more
-      // cs->state = CS_Answered;
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
     case CHOP_OPN: {
@@ -2709,6 +2709,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     if (ncp_debug) printf("To socket %s (%d bytes): %s", conn_sockaddr_path(conn), len, buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
   } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_ANS)) {
+    trace_conn("Answered", conn);
     sprintf(buf, "ANS %d\r\n", ch_nbytes(pkt));
     if (ncp_debug) printf("To socket %s: %s", conn_sockaddr_path(conn), buf);
     len = strlen(buf);

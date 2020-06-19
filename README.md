@@ -1,14 +1,16 @@
 # The Chaosnet Bridge
 
-This program is a bridge between Chaosnet implementations. It supports
+This program is a bridge between Chaosnet implementations. It supports different link layer implementations:
 - Chaos-over-Ethernet (protocol nr 0x0804, cf https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml)
 - Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator, see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see http://www.unlambda.com/cadr/) 
 - Chaos-over-TLS (see below)
 - Chaos-over-IP (using IP protocol 16, cf https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml)
 
+It also implements the transport layer of Chaosnet (using any of the above link layers), see [NCP](NCP.md).
+
 ## See also
-- [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported.
+- [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported - see also NCP (below) for how to add your own.
 - [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
 - [EXAMPLES](EXAMPLES.md) for some example configurations.
 - [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
@@ -36,7 +38,7 @@ Use cases could be
   configuration. 
 - and interconnecting these, of course!
 
-There is also support for connecting user programs (in some Unix-like environment) to Chaosnet - [read more](#network-control-program).
+There is also support for connecting user programs such as Supdup (in some Unix-like environment) to Chaosnet - [read more](#network-control-program).
 
 For more info on the Global Chaosnet, see https://chaosnet.net.
 
@@ -136,7 +138,7 @@ Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`
 
 ### Network Control Program
 
-A simple unix sockets interface for connecting any old program to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [the supdup patch](supdup-patch.tar).
+A simple unix sockets interface for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [the supdup patch](supdup-patch.tar).
 
 ## Routing basics
 
