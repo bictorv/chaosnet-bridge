@@ -15,18 +15,17 @@
 */
 
 // Oh well, I guess we have to accept this in the name of Backwards Compatibilty
-#define MAX_WINSIZE 0200	// 128 x 488 = 62464, i.e. 61k bytes
+#define MAX_WINSIZE 0200       // 128 x 488 = 62464, i.e. 61k bytes
 // Lambda value: should be configurable
 #define DEFAULT_WINSIZE 015	// 6344b, just over 6k
 
-#define CONNECTION_TIMEOUT 30  // seconds
+#define CONNECTION_TIMEOUT 30	// seconds
 
 // Lambda values: should be configurable
 #define DEFAULT_RETRANSMISSION_INTERVAL 500 // ms
 #define PROBE_INTERVAL 10 // s
 #define LONG_PROBE_INTERVAL 60 // s
 #define HOST_DOWN_INTERVAL 300 // s = 5 min
-#define GARBAGE_CONN_AGE 60 // (3*HOST_DOWN_INTERVAL)
 
 // Conn types
 typedef enum conntype {
@@ -57,30 +56,31 @@ struct conn_state {
   connstate_t state;
   pthread_mutex_t conn_state_lock;
   pthread_cond_t conn_state_cond; // wait on this to see state changes
-  u_short pktnum_made_highest;
+  u_short pktnum_made_highest;	  // highest pktnum made for this conn
 
-  u_short local_winsize;
-  u_short foreign_winsize;
-  u_short window_available; // for sending, before it's full
+  u_short local_winsize;	// local window size
+  u_short foreign_winsize;	// foreign
+  u_short window_available;	// for sending, before it's full
   pthread_mutex_t window_mutex; // make sure there is room in window before adding to send_pkts
-  pthread_cond_t window_cond;
+  pthread_cond_t window_cond;	// wait for this to do so
 
-  struct pkqueue *read_pkts; // available for user to read
-  int read_pkts_controlled;  // nr of controlled pkts in read_pkts, for window calculation
-  pthread_mutex_t read_mutex; // to tell conn there are things in it
-  pthread_cond_t read_cond;
+  struct pkqueue *read_pkts;	// available for user to read
+  int read_pkts_controlled; // nr of controlled pkts in read_pkts, for window calculation
+  pthread_mutex_t read_mutex;	// to tell conn there are things in it
+  pthread_cond_t read_cond;	// wait for this to see if there are things to read
   struct pkqueue *received_pkts_ooo; // received, out of order (need to add to read_pkts when preceding in-order pkt arrives)
+  int received_pkts_ooo_width;	     // pktnum difference between lowest and highest ooo pkt (note they are all controlled)
   pthread_mutex_t received_ooo_mutex;
-  u_short pktnum_read_highest; // given to user, next ack
+  u_short pktnum_read_highest;	   // given to user, next ack
   u_short pktnum_received_highest; // highest num on read_pkts, for STS
-  u_short pktnum_acked; // actually acked
-  struct pkqueue *send_pkts; // packets to send
+  u_short pktnum_acked;		   // actually acked
+  struct pkqueue *send_pkts;	   // packets to send
   u_short send_pkts_pktnum_highest; // highest controlled pkt nr 
   pthread_mutex_t send_mutex; // to tell network there are things to send
   pthread_cond_t send_cond;
   u_short pktnum_sent_highest;
-  u_short pktnum_sent_acked; // last we got ack for
-  time_t time_last_received; // for probing
+  u_short pktnum_sent_acked;	// last we got ack for
+  time_t time_last_received;	// for probing
 };
 
 // static parts
@@ -97,18 +97,20 @@ struct conn {
   u_short conn_ridx;
   u_short conn_lhost;
   u_short conn_lidx;
-  u_int retransmission_interval; // msec
-  pthread_t conn_to_sock_thread;	 // conn_to_socket
-  pthread_t conn_from_sock_thread;	 // socket_to_conn
-  pthread_t conn_to_net_thread;	 // conn_to_packet (only for stream)
+  u_int retransmission_interval;   // msec - need not be per conn, really?
+  pthread_t conn_to_sock_thread;   // conn_to_socket
+  pthread_t conn_from_sock_thread; // socket_to_conn
+  pthread_t conn_to_net_thread;	   // conn_to_packet (only for stream)
 };
 
+// The list of active conns
 struct conn_list {
   struct conn *conn_conn;
   struct conn_list *conn_prev;
   struct conn_list *conn_next;
 };
 
+// The list of registered listeners
 struct listener {
   u_char *lsn_contact;		// contact name
   struct conn *lsn_conn;	// conn to handle an RFC

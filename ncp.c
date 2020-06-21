@@ -503,6 +503,7 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
   cs->read_pkts = read_pkts;
   cs->read_pkts_controlled = 0;
   cs->received_pkts_ooo = received_pkts_ooo;
+  cs->received_pkts_ooo_width = 0;
   cs->send_pkts = send_pkts;
   cs->state = CS_Inactive;
   cs->local_winsize = DEFAULT_WINSIZE;
@@ -1675,7 +1676,27 @@ add_ooo_pkt(struct conn *c, struct chaos_header *pkt)
   PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
   // add pkt
   pkqueue_insert_by_packetno(saved, cs->received_pkts_ooo);
+  cs->received_pkts_ooo_width = 1+pktnum_diff(ch_packetno(pkqueue_peek_last(cs->received_pkts_ooo)), 
+					      ch_packetno(pkqueue_peek_first(cs->received_pkts_ooo)));
   PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+}
+
+struct chaos_header *
+get_ooo_pkt(struct conn *c, int dolock)
+{
+  struct conn_state *cs = c->conn_state;
+  struct chaos_header *pkt;
+  if (dolock)
+    PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+  pkt = pkqueue_get_first(cs->received_pkts_ooo);
+  if (pkqueue_length(cs->received_pkts_ooo) > 0) {
+    cs->received_pkts_ooo_width = 1+pktnum_diff(ch_packetno(pkqueue_peek_last(cs->received_pkts_ooo)), 
+						ch_packetno(pkqueue_peek_first(cs->received_pkts_ooo)));
+  } else
+    cs->received_pkts_ooo_width = 0;
+  if (dolock)
+    PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
+  return pkt;
 }
 
 static void
@@ -2033,11 +2054,11 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     add_input_pkt(conn, pkt);
     return;
   }
-  if ((cs->read_pkts_controlled + pkqueue_length(cs->received_pkts_ooo)) < cs->local_winsize) {
+  if ((cs->read_pkts_controlled + cs->received_pkts_ooo_width) < cs->local_winsize) {
     // it fits
     if (ncp_debug) printf("Receive %s pkt %#x with %d room in window\n",
 			  ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt),
-			  cs->local_winsize - (cs->read_pkts_controlled + pkqueue_length(cs->received_pkts_ooo)));
+			  cs->local_winsize - (cs->read_pkts_controlled + cs->received_pkts_ooo_width));
     // Check if it has already been received
     if (pktnum_less(ch_packetno(pkt), cs->pktnum_received_highest) || 
 	pktnum_equal(ch_packetno(pkt), cs->pktnum_received_highest)) {
@@ -2058,7 +2079,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
       int expected = pktnum_1plus(ch_packetno(pkt));
       struct chaos_header *p = pkqueue_peek_first(cs->received_pkts_ooo);
       while ((p != NULL) && (pktnum_equal(ch_packetno(p), expected))) {
-	p = pkqueue_get_first(cs->received_pkts_ooo);
+	p = get_ooo_pkt(conn, 0);
 	expected = pktnum_1plus(ch_packetno(p));
 	if (ncp_debug) printf(" moving pkt %#x from OOO to ordered list\n", ch_packetno(p));
 	add_input_pkt(conn, p);
