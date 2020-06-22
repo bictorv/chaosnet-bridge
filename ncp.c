@@ -671,10 +671,14 @@ remove_active_conn(struct conn *c, int dolock, int dofree)
 	 (c->conn_lhost == cn->conn_lhost) &&
 	 (c->conn_lidx == cn->conn_lidx))) {
       int lastone = 0;
-      if (ncp_debug) printf("Removing conn %p from conn_list prev %p next %p\n", 
-			    c, cl->conn_prev, cl->conn_next);
+      if (ncp_debug) printf("Removing conn %p from conn_list %p prev %p next %p\n", 
+			    c, cl, cl->conn_prev, cl->conn_next);
       if (cl->conn_prev != NULL)
 	cl->conn_prev->conn_next = cl->conn_next;
+      else
+	// if prev was null, this is the first element, so conn_list needs updating
+	conn_list = cl->conn_next;
+
       if (cl->conn_next != NULL)
 	cl->conn_next->conn_prev = cl->conn_prev;
       if ((cl->conn_prev == NULL) && (cl->conn_next == NULL))
