@@ -374,12 +374,14 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
   }
 #endif
   // Do echo my sent pkts back to me, please - this lets other BPF processes see them
+#ifdef BIOCSSEESENT
   x = 1;
   if (ioctl(fd, BIOCSSEESENT, (void *)&x) < 0) {
     perror("ioctl(BIOCSSEESENT)");
     close(fd);
     return -1;
   }
+#endif
   // Operate in Immediate Mode: process pkts as they arrive rather than wait for timeout or buffer full
   x = 1;
   if (ioctl(fd, BIOCIMMEDIATE, (void *)&x) < 0) {
