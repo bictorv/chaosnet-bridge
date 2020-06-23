@@ -683,6 +683,9 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
     return;
   else if (cc >= 0) {
     if (chether_debug || debug) fprintf(stderr,"send_packet sent only %d bytes\n", cc);
+  } else if ((errno == EHOSTUNREACH) || (errno == ENETDOWN) || (errno == ENETUNREACH)) {
+    // Ignore these errors.
+   if (chether_debug || debug) perror("send_packet");
   } else
     {
       perror("send_packet");
