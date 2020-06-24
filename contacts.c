@@ -70,7 +70,15 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	// don't send a subnet route to the subnet itself (but to individual hosts)
 	&& (! (((dest & 0xff) == 0) && (i == (dest>>8))))
 	// and not to the bridge itself
-	&& (rttbl_net[i].rt_braddr != dest)) {
+	&& (rttbl_net[i].rt_braddr != dest)
+	// don't include routes which are reachable through the dest
+	// e.g. Peg (on net 7) now sends 1, 6, 13, 16 routes to net 7, while the routes are through pi3 on net 7
+	&& (! (((dest & 0xff) == 0) // subnet dest, and 
+	       // someone else is the bridge and it's not a broadcast/direct route
+	       && (rttbl_net[i].rt_braddr != 0) && (!is_mychaddr(rttbl_net[i].rt_braddr))
+	       // route for this subnet route is through a host on the dest subnet
+	       && ((rttbl_net[i].rt_braddr >> 8) == (dest >> 8))))
+	) {
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
       data[nroutes*4+2] = (cost >> 8);
@@ -79,9 +87,14 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
       nroutes++;
     } else if (debug && (rttbl_net[i].rt_type != RT_NOPATH)) {
       if (i == (dest >> 8))
-	fprintf(stderr, " not including net %#o for dest %#o\n", i, dest);
+	fprintf(stderr, " NOT including net %#o for dest %#o\n", i, dest);
       else if (rttbl_net[i].rt_braddr == dest) 
-	fprintf(stderr, " not including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
+	fprintf(stderr, " NOT including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
+      else if ((rttbl_net[i].rt_braddr >> 8) == (dest >> 8))
+	fprintf(stderr, " NOT including net %#o (bridge %#o is on dest subnet %#o)\n", i, rttbl_net[i].rt_braddr, dest>>8);
+      else 
+	// extra debug
+	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o (anyway)\n", i, rttbl_net[i].rt_braddr, dest);
     }
   }
   PTUNLOCK(rttbl_lock);

@@ -951,7 +951,8 @@ rut_sender(void *v)
 	if (debug) fprintf(stderr,"Making RUT pkt for net %#o\n", i);
 	if ((c = make_routing_table_pkt(i<<8, &pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(rt, pkt, c);
-	}
+	} else if (debug)
+	  fprintf(stderr," no RUT data to send for net %#o\n", i);
       }
     }
     /* And to all individual hosts */
@@ -964,7 +965,8 @@ rut_sender(void *v)
 	if ((c = make_routing_table_pkt(rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr,
 					&pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(rt, pkt, c);
-	}
+	} else if (debug)
+	  fprintf(stderr," no RUT data to send for link %d\n", i);
       }
     }
 
