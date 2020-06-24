@@ -55,15 +55,23 @@ BV     @  Bjorn Victor           Last logout 06/02/20 21:50:32  No plan.
 
 This is a socket of type `SOCK_STREAM`.
 
-This socket is for "stream protocols" (see Section 4.1 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can/will also be used for Simple protocols.
+This socket is for "stream protocols" (see Section 4.1 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can also be used for Simple protocols (similar to UDP).
 
 ### Client opening
 
 If the user program acts as a client, it opens the socket and writes
 
-`RFC `*host* *contactname* *args*
+`RFC `[*options*] *host* *contactname* *args*
 
-(followed by LF or CRLF), where *host* is either the name or the (octal) address of the host to be contacted, *contactname* is the contact name, such as `FINGER`, `TIME` or `STATUS`, and *args* are optional arguments, such as a user name for `FINGER`. The *args* are separated from *contactname* with a single space.
+(followed by LF or CRLF), where
+- [*options*] (including the square brackets!) is optional, and specifies options for the connection. So far the only option is timeout=*%d* to specify a (positive) timeout value for opening the connection. If it times out, a `LOS Connection timed out` response is given to the user program.
+- *host* is either the name or the (octal!) address of the host to be contacted,
+- *contactname* is the contact name, such as `FINGER`, `TIME` or `STATUS`, and
+- *args* are optional arguments, such as a user name for `FINGER`. The *args* are separated from *contactname* with a single space.
+
+Any errors in parsing the RFC line (etc) result in a
+`LOS `*reason*
+line given to the user program, and the socket is closed.
 
 The NCP sends a corresponding RFC packet to the destination host.
 

@@ -88,6 +88,7 @@ struct conn {
   conntype_t conn_type;
   pthread_mutex_t conn_lock;
   time_t conn_created;
+  u_int rfc_timeout;		    // seconds to wait for RFC response
   int conn_sock; // unix socket
   struct sockaddr_un conn_sockaddr; // to sendto
   struct conn_state *conn_state;

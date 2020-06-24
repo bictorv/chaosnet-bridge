@@ -1145,6 +1145,8 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate)
 static void
 send_rfc_pkt(struct conn *c)
 {
+  // count it as created when we send the first RFC pkt (for timeout handling)
+  c->conn_created = time(NULL);
   send_first_pkt(c, CHOP_RFC, CS_RFC_Sent);
 }
 
@@ -1439,6 +1441,43 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *d
 
 
 static void
+handle_option(struct conn *c, char *optname, char *val)
+{
+  if (ncp_debug) printf("NCP parsing RFC option \"%s\" value \"%s\"\n", optname, val);
+  if (strcmp(optname, "timeout") == 0) {
+    int to = 0;
+    if ((sscanf(val, "%d", &to) == 1) && (to > 0)) {
+      if (ncp_debug) printf(" setting rfc_timeout to %d\n", to);
+      c->rfc_timeout = to;
+    } else {
+      if (ncp_debug) printf(" bad value, not a positive int");
+      user_socket_los(c, "LOS Bad timeout value \"%s\" in RFC options", val);
+      return;
+    }
+  // @@@@ add more options as needed, maybe windowsize, retrans, etc?
+  } else {
+    if (ncp_debug) printf(" unknown option, LOSing\n");
+    user_socket_los(c, "LOS Unknown option \"%s\" in RFC line", optname);
+  }
+}
+
+static void 
+parse_rfc_line_options(struct conn *conn, char *beg, char *end) 
+{
+  char *eql = NULL, *comma = NULL, *vp = NULL;
+  // now parse the options=value
+  do {
+    if (comma != NULL) beg = comma+1; // not the first option
+    if ((eql = index(beg, '=')) != NULL) {
+      *eql = '\0';
+      vp = eql+1;
+      handle_option(conn, beg, vp);
+    } else
+      handle_option(conn, beg, "on");
+  } while ((comma = index(end, ',')) != NULL);
+}
+
+static void
 initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)  
 {
   u_short haddr = 0;
@@ -1450,7 +1489,26 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
     user_socket_los(conn, "LOS No contact name given in RFC line");
     return;
   }
+  if (hname[0] == '[') {
+    // beginning of options
+    char *beg = (char *)&hname[1], *end = index((char *)hname, ']');
+    if (end == NULL) {
+      user_socket_los(conn, "LOS syntax error in option parsing (%s)", &hname[1]);
+      return;
+    }
+    *end = '\0';
+    if (ncp_debug) printf("NCP about to parse options: \"%s\"\n", beg);
+    hname = (u_char *)(end+1);		     // skip options part
+    while (isspace(*hname)) hname++; // skip whitespace
+    space = (u_char *)index((char *)hname, ' ');
+    if (space == NULL) {
+      user_socket_los(conn, "LOS No contact name given in RFC line (%s)", hname);
+      return;
+    }
+    parse_rfc_line_options(conn, beg, end);
+  }
   *space = '\0';
+
   cname = &space[1];
 
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || (haddr <= 0x100) || (haddr > 0xfe00) || ((haddr & 0xff) == 0)) {
@@ -1463,7 +1521,7 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
       user_socket_los(conn, "LOS Too long hostname in RFC line: %lu", strlen((char *)hname));
       return;
     }
-    // @@@@ make default_chaos_domain a list, iterate until match
+    // chaos_domains is a list, iterate until match
     strcpy((char *)dname, (char *)hname);
     int hlen = strlen((char *)hname);
     char *eoh = (char *)dname+hlen;
@@ -1826,6 +1884,15 @@ retransmit_controlled_packets(struct conn *conn)
 	  if (ncp_debug) printf("%%%% Retrans %s %#x with acked %#x in state %s\n",
 				ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), 
 				cs->pktnum_sent_acked, state_name(cs->state));
+	}
+	if ((ch_opcode(pkt) == CHOP_RFC) && (conn->rfc_timeout > 0)
+	    && (time(NULL) - conn->conn_created > conn->rfc_timeout)) {
+	  // Note: more than rfc_timeout has passed. This is better than >= I think.
+	  if (ncp_debug) printf("NCP: RFC timeout (%ld > %d)\n", time(NULL) - conn->conn_created, conn->rfc_timeout);
+	  PTUNLOCKN(cs->send_mutex,"send_mutex");
+	  // this also cancels the conn
+	  user_socket_los(conn, "LOS Connection timed out (%d), host %#o not responding",
+			  conn->conn_rhost, conn->rfc_timeout);
 	}
 	if (!packet_uncontrolled(pkt)
 	    // don't retransmit OPN when we're already open
