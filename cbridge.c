@@ -37,6 +37,9 @@
 // TODO
 
 // #### clean up routing table issues
+// invent host-route protocol (RUTH? RBG?)
+
+// autoconf please
 
 // logging:
 // - lock to avoid mixed output from different threads
@@ -55,8 +58,7 @@
 // HOSTAB server?
 // - No clients except LMI but would be simpler for CADR than porting DNS?
 // - requires stream protocol (cf MIT AIM 628 sec 5.10)
-// - bite the bullet and implement stream server - externally - but then perhaps in ITS?
-// - or invent a HOSTTB connectionless protocol
+// x bite the bullet and implement stream server (see NCP)
 
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
@@ -156,6 +158,13 @@ void print_config_dns(void);
 void *dns_forwarder_thread(void *v);
 #endif
 
+// NCP
+extern int ncp_enabled;
+void *ncp_user_server(void *v);
+int parse_ncp_config_line(void);
+void packet_to_conn_handler(u_char *pkt, int len);
+void print_ncp_stats();
+
 time_t boottime;
 
 // Config stuff @@@@ some to be moved to respective module
@@ -181,7 +190,7 @@ void forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chao
 #endif
 
 // contacts
-void handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
+int handle_rfc(struct chaos_header *ch, u_char *data, int dlen);
 int make_routing_table_pkt(u_short dest, u_char *pkt, int pklen);
 
 // chudp
@@ -244,6 +253,47 @@ int mychaddr_on_net(u_short addr)
     if ((mychaddr[i] & 0xff00) == (addr & 0xff00))
       return mychaddr[i];
   return 0;
+}
+
+u_short find_closest_addr(u_short haddrs[], int naddrs)
+{
+  // search haddrs for the address closest to one of mine
+  // Simplest: just look for an addr on the same subnet as one of mine
+  int i, a;
+  if (naddrs <= 0) {
+    fprintf(stderr,"find_closest_addr called with %d addresses to search\n", naddrs);
+    exit(1);
+  }
+  if (naddrs == 1)
+    // only one choice
+    return haddrs[0];
+  for (i = 0; i < naddrs; i++) {
+    if ((a = mychaddr_on_net(haddrs[i])) != 0)
+      return haddrs[i];
+  }
+  // @@@@ how to do this properly?
+  // Example: MX-11 has three addresses: 440, 3040, 7001.
+  // Connecting from net 7, with a route over MX12 which is also on net 6, should use 3040 (on net 6) rather than 7001.
+  // Should not matter, but there seems to be a bug in cbridge(!) which matters in this case.
+
+  // default
+  return haddrs[0];
+}
+u_short find_my_closest_addr(u_short addr)
+{
+  // search mychaddrs for the address closest to the one given
+  // Simplest: just look for an addr on the same subnet
+  int i, a;
+  if (nchaddr == 1)
+    // only one choice
+    return mychaddr[0];
+  for (i = 0; i < nchaddr; i++) {
+    if ((mychaddr[i] & 0xff00) == (addr & 0xff00))
+      return mychaddr[i];
+  }
+  // @@@@ then find a route and use the local end of that
+  // default
+  return mychaddr[0];
 }
 
 void add_mychaddr(u_short addr)
@@ -592,20 +642,36 @@ ntohs_buf(u_short *ibuf, u_short *obuf, int len)
     *obuf++ = ntohs(*ibuf++);
 }
 
+// Note: this is for strings, not general data.
+int 
+get_packet_string(struct chaos_header *pkt, u_char *out, int outsize) 
+{
+  u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
+  int len = outsize < ch_nbytes(pkt) ? outsize : ch_nbytes(pkt);
+  ntohs_buf(dataw, (u_short *)out, len);
+  out[len] = '\0';
+  return len;
+}
+
 void
 handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad)
 {
+  if (ch_opcode(ch) == CHOP_RUT)
+    // RUT is handled separately
+    return;
   if (ch_opcode(ch) == CHOP_RFC) {
     if (verbose)
       fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
 	      ch_opcode_name(ch_opcode(ch)),
 	      dchad);
     // see what contact they look for
-    handle_rfc(ch, data, dlen);
+    if (!handle_rfc(ch, data, dlen)) {
+      packet_to_conn_handler(data, dlen);
+    }
   }
-  else
+  else {    
     if (verbose) {
-      fprintf(stderr,"%s pkt for self (%#o) received, not forwarding",
+      fprintf(stderr,"%s pkt for self (%#o) received",
 	      ch_opcode_name(ch_opcode(ch)),
 	      dchad);
       if (ch_opcode(ch) == CHOP_RFC) {
@@ -624,6 +690,8 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
       } else
 	fprintf(stderr,"\n");
     }
+    packet_to_conn_handler(data, dlen);
+  }
 }
 
 // **** Bridging between links
@@ -883,7 +951,8 @@ rut_sender(void *v)
 	if (debug) fprintf(stderr,"Making RUT pkt for net %#o\n", i);
 	if ((c = make_routing_table_pkt(i<<8, &pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(rt, pkt, c);
-	}
+	} else if (debug)
+	  fprintf(stderr," no RUT data to send for net %#o\n", i);
       }
     }
     /* And to all individual hosts */
@@ -896,7 +965,8 @@ rut_sender(void *v)
 	if ((c = make_routing_table_pkt(rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr,
 					&pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(rt, pkt, c);
-	}
+	} else if (debug)
+	  fprintf(stderr," no RUT data to send for link %d\n", i);
       }
     }
 
@@ -911,6 +981,12 @@ void send_chaos_pkt(u_char *pkt, int len)
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short dchad = ch_destaddr(cha);
 
+  if (is_mychaddr(dchad)) {
+    // shortcut. We don't need to update FC or link stats.
+    handle_pkt_for_me(cha, pkt, len, dchad);
+    return;
+  }
+
   struct chroute *rt = find_in_routing_table(dchad, 0, 0);
 
   if (rt == NULL) {
@@ -922,8 +998,8 @@ void send_chaos_pkt(u_char *pkt, int len)
   if (ch_srcaddr(cha) == 0)
     set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
-  if (verbose) fprintf(stderr,"Sending pkt (%s) from me (%#o) to %#o (pkt dest %#o) %s dest %#o %s bridge %#o myaddr %#o\n",
-		       ch_opcode_name(ch_opcode(cha)),
+  if (verbose) fprintf(stderr,"Sending pkt %#x (%s) from me (%#o) to %#o (pkt dest %#o) %s dest %#o %s bridge %#o myaddr %#o\n",
+		       ch_packetno(cha), ch_opcode_name(ch_opcode(cha)),
 		       ch_srcaddr(cha), dchad,
 		       ch_destaddr(cha),
 		       rt_linkname(rt->rt_link),
@@ -1433,6 +1509,9 @@ parse_config_line(char *line)
     return parse_ether_config_line();
   }
 #endif
+  else if (strcasecmp(tok, "ncp") == 0) {
+    return parse_ncp_config_line();
+  }
   else if (strcasecmp(tok, "route") == 0) {
     return parse_route_config();
   }
@@ -1464,6 +1543,7 @@ parse_config(char *cfile)
 	}
       }
     }
+    fclose(config);
   }
 }
 
@@ -1552,6 +1632,8 @@ print_stats(int sig)
 #endif
   print_link_stats();
   print_host_stats();
+
+  print_ncp_stats();
 }
 
 void
@@ -1783,6 +1865,14 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
     if (pthread_create(&threads[ti++], NULL, &reparse_link_host_names_thread, NULL) < 0) {
       perror("pthread_create(reparse_link_host_names_thread)");
+      exit(1);
+    }
+  }
+
+  if (ncp_enabled) {
+    if (verbose) fprintf(stderr,"Starting NCP\n");
+    if (pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL) < 0) {
+      perror("pthread_create(ncp_user_server)");
       exit(1);
     }
   }

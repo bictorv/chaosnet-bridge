@@ -37,7 +37,7 @@
 #if CHAOS_ETHERP
 #ifndef ETHER_BPF
 // use BPF rather than sockaddr_ll, e.g. for MacOS
-#if __APPLE__
+#if __APPLE__ || __OpenBSD__
 #define ETHER_BPF 1
 #else
 #define ETHER_BPF 0
@@ -62,7 +62,11 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <net/if_arp.h>
+#if __OpenBSD__
+#include <netinet/if_ether.h>
+#else
 #include <net/ethernet.h>
+#endif
 #include <ifaddrs.h>
 #if CHAOS_ETHERP
 #if ETHER_BPF
@@ -86,6 +90,9 @@
 
 #define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"FAILED TO LOCK\n")
 #define PTUNLOCK(x) if (pthread_mutex_unlock(&x) != 0) fprintf(stderr,"FAILED TO UNLOCK\n")
+
+#define PTLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_lock(&x)) != 0) fprintf(stderr,"FAILED TO LOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
+#define PTUNLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_unlock(&x)) != 0) fprintf(stderr,"FAILED TO UNLOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
 
 // ==== Route/routing/link structures
 
@@ -272,6 +279,9 @@ extern struct chipdest chipdest[CHIPDEST_MAX];
 
 void send_chaos_pkt(u_char *pkt, int len);
 int is_mychaddr(u_short addr);
+int mychaddr_on_net(u_short addr);
+u_short find_closest_addr(u_short addrs[], int naddrs);
+u_short find_my_closest_addr(u_short addr);
 void add_mychaddr(u_short addr);
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);
@@ -280,13 +290,15 @@ struct chroute *add_to_routing_table(u_short dest, u_short braddr, u_short myadd
 
 void htons_buf(u_short *ibuf, u_short *obuf, int len);
 void ntohs_buf(u_short *ibuf, u_short *obuf, int len);
+int get_packet_string(struct chaos_header *pkt, u_char *out, int outsize);
+void print_buf(u_char *ucp, int cnt);
 void ch_dumpkt(u_char *ucp, int cnt);
 void dumppkt_raw(unsigned char *ucp, int cnt);
 unsigned int ch_checksum(const unsigned char *addr, int count);
 char *ip46_ntoa(struct sockaddr *sa, char *buf, int buflen);
 
-unsigned char *ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
-void ch_11_puts(unsigned char *out, unsigned char *in);
+int ch_11_gets(unsigned char *in, unsigned char *out, int maxlen);
+int ch_11_puts(unsigned char *out, unsigned char *in);
 char *ch_opcode_name(int op);
 
 #if CHAOS_TLS

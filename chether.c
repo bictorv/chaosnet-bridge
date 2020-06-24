@@ -251,7 +251,8 @@ static void get_my_ea() {
 }
 
 #if ETHER_BPF
-#define BPF_MTU CH_PK_MAXLEN // (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
+// #define BPF_MTU (BPF_WORDALIGN(CH_PK_MAXLEN) + BPF_WORDALIGN(sizeof(struct bpf_hdr)) + BPF_WORDALIGN(sizeof(struct ether_header)))
+#define BPF_MTU (BPF_WORDALIGN(1514) + BPF_WORDALIGN(sizeof(struct bpf_hdr)))
 
 // based on dpimp.c in klh10 by Ken Harrenstein
 /* Packet byte offsets for interesting fields (in network order) */
@@ -373,12 +374,14 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
   }
 #endif
   // Do echo my sent pkts back to me, please - this lets other BPF processes see them
+#ifdef BIOCSSEESENT
   x = 1;
   if (ioctl(fd, BIOCSSEESENT, (void *)&x) < 0) {
     perror("ioctl(BIOCSSEESENT)");
     close(fd);
     return -1;
   }
+#endif
   // Operate in Immediate Mode: process pkts as they arrive rather than wait for timeout or buffer full
   x = 1;
   if (ioctl(fd, BIOCIMMEDIATE, (void *)&x) < 0) {
@@ -645,7 +648,7 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
   iov[1].iov_len = packetlen;;
 
   if (packetlen+sizeof(struct ether_header) > BPF_MTU) {
-    fprintf(stderr,"send_packet: buf len %lu vs MTU %lu\n",
+    fprintf(stderr,"send_packet: buf len %lu > MTU %lu\n",
 	    packetlen+sizeof(struct ether_header), BPF_MTU);
   }
   // @@@@ skip if_fd param
@@ -682,6 +685,9 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
     return;
   else if (cc >= 0) {
     if (chether_debug || debug) fprintf(stderr,"send_packet sent only %d bytes\n", cc);
+  } else if ((errno == EHOSTUNREACH) || (errno == ENETDOWN) || (errno == ENETUNREACH)) {
+    // Ignore these errors.
+   if (chether_debug || debug) perror("send_packet");
   } else
     {
       perror("send_packet");
@@ -817,7 +823,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     return 0;			/* throw away packet */
   } else {
     rlen = bpf_header->bh_caplen - sizeof(struct ether_header);
-    // if (debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
+    // if (chether_debug) fprintf(stderr,"BPF: read %d bytes\n", rlen);
   }
 
   struct ether_header *eh = (struct ether_header *)(ether_bpf_buf + bpf_buf_offset + bpf_header->bh_hdrlen);
@@ -828,7 +834,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     for (i = 0; i < nchethdest; i++) {
       if ((&chethdest[i] != cd) && (memcmp(eh->ether_shost, chethdest[i].cheth_ea, 6) == 0)) {
 	if (chether_debug)
-	  fprintf(stderr,"Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
+	  fprintf(stderr,"%%%% Ether: dropping pkt sent from my ea on interface %d (%s)\n", i, chethdest[i].cheth_ifname);
 	return 0;
       }
     }
@@ -957,19 +963,24 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       else if (chether_debug || verbose) {
 	struct chaos_header *ch = (struct chaos_header *)buf;
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-#if 1
 	printf("Ethernet Chaos message received: %s from %#o to %#o\n",
 	       ch_opcode_name(ch_opcode(ch)), ch_srcaddr(ch), ch_destaddr(ch));
-#else
-	printf(" Opcode: %o (%s), unused: %o\n FC: %o, Nbytes %d.\n",
-		ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-		ch->ch_unused,
-		ch_fc(ch), ch_nbytes(ch));
-	printf(" Dest host: %o, index %o\n Source host: %o, index %o\n",
-		ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
-	printf(" Packet #%o\n Ack #%o\n",
-		ch_packetno(ch), ch_ackno(ch));
+	if ((ch_opcode(ch) == 0) || ((ch_opcode(ch) > CHOP_BRD) && (ch_opcode(ch) < CHOP_DAT))) {
+	  if (chether_debug) {
+	    printf("BOGUS OPCODE, discarding\n");
+#if 1
+	    printf(" Opcode: %#o (%s), unused: %#x\n FC: %d, Nbytes %d.\n",
+		   ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
+		   ch->ch_opcode_u.ch_opcode_s.ch_unused,
+		   ch_fc(ch), ch_nbytes(ch));
+	    printf(" Dest host: %#o, index %#o\n Source host: %#o, index %#o\n",
+		   ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
+	    printf(" Packet %#x\n Ack %#x\n",
+		   ch_packetno(ch), ch_ackno(ch));
 #endif
+	  }
+	  return 0;
+	}
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
       }
 #if 0
@@ -1256,8 +1267,13 @@ void * ether_input(void *v)
 	}	/* end of ARP case */
 	if ((chethdest[i].cheth_chfd > 0) && FD_ISSET(chethdest[i].cheth_chfd, &rfd)) {
 	  // Read a Chaos packet, peeking ether address for ARP optimization
-	  if ((len = get_packet(&chethdest[i], chethdest[i].cheth_chfd, (u_char *)&data, sizeof(data))) < 0)
+	  len = get_packet(&chethdest[i], chethdest[i].cheth_chfd, (u_char *)&data, sizeof(data));
+	  if (len < 0) {
+	    fprintf(stderr,"%%%% Ether: get_packet for if %s fd %d returned %d\n",
+		    chethdest[i].cheth_ifname, chethdest[i].cheth_chfd, len);
+	    // something is really bad, return from thread
 	    return NULL;
+	  }
 	  // if (chether_debug || debug) fprintf(stderr,"ether RCV %d bytes on %s\n", len, chethdest[i].cheth_ifname);
 	  if (len == 0)
 	    continue;

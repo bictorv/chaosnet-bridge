@@ -32,9 +32,6 @@ int do_dns_forwarding = 0;
 static char chaos_dns_server[4*3+3+1] = CHAOS_DNS_SERVER;
 static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 
-// resolver state, shared between threads (maybe a bad idea)
-struct __res_state chres;
-
 // consumer/producer lock and semaphores
 static pthread_mutex_t dns_lock = PTHREAD_MUTEX_INITIALIZER;
 static sem_t dns_thread_writer, *dns_thread_writerp;
@@ -58,6 +55,7 @@ static int chreq_rix = 0;			/* read index */
 // not thread safe: extern int h_errno;
 
 static void dns_describe_packet(u_char *pkt, int len);
+static void init_chaos_dns_state(res_state statp);
 
 // called by handle_rfc for an RFC to the "DNS" contact
 void
@@ -155,19 +153,19 @@ truncate_dns_pkt(u_char *pkt, int len)
     if (ns_msg_count(m, i) > 0) {
       // calculate length of section
       int l = (((i < ns_s_max-1) && (m._sections[i+1] != NULL)) ? m._sections[i+1] : ns_msg_end(m)) - m._sections[i];
-      if (size + l > 488) {
+      if (size + l > CH_PK_MAX_DATALEN) {
 	// this section is too long, truncate where in it
 	// Look at RRs, add them one by one while under 488
 	u_char *p = (u_char *)m._sections[i];	
 	int nrr = 0;
-	while ((size < 488) && (size < len)) {
+	while ((size < CH_PK_MAX_DATALEN) && (size < len)) {
 	  // skip over a RR, finding length of the RR
 	  int rrlen = ns_skiprr(p, ns_msg_end(m), i, 1);
 	  if (rrlen < 0) {
 	    fprintf(stderr,"Failed skipping RR!\n");
 	    return -1;
 	  }
-	  if (size + rrlen < 488) {
+	  if (size + rrlen < CH_PK_MAX_DATALEN) {
 	    // this RR is OK to include
 	    nrr++;
 	    size += rrlen;
@@ -205,11 +203,15 @@ truncate_dns_pkt(u_char *pkt, int len)
 void *
 dns_forwarder_thread(void *v)
 {
+  // resolver state, local to each thread
+  struct __res_state chres;
   res_state statp = &chres;
   u_char answer[NS_PACKETSZ*4];	/* fit ridiculous amounts to avoid ns_initparse breaking */
   int anslen;
   u_char ans[CH_PK_MAXLEN];	/* incl header+trailer */
   struct chaos_header *ap = (struct chaos_header *)&ans;
+
+  init_chaos_dns_state(statp);
 
   while (1) {
     // wait for someting to do
@@ -248,7 +250,7 @@ dns_forwarder_thread(void *v)
 
       // Check that the answer fits in a Chaos pkt
       // libresolv seems to handle truncation to 512 bytes, but here we need manual truncation to 488.
-      if (anslen > 488) {
+      if (anslen > CH_PK_MAX_DATALEN) {
 	// test case: amnesia.lmi.com. on pi3
 	if (trace_dns) fprintf(stderr,"%% DNS: answer doesn't fit in Chaos ANS, truncating\n");
 
@@ -305,6 +307,8 @@ dns_forwarder_thread(void *v)
 int
 dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
 {
+  // resolver state, local to each thread
+  struct __res_state chres;
   res_state statp = &chres;
   char qstring[12+6];
   u_char answer[NS_PACKETSZ];
@@ -312,6 +316,8 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   ns_msg m;
   ns_rr rr;
   int i, offs;
+
+  init_chaos_dns_state(statp);
 
   // note that chaos_address_domain should NOT end with dot.
   sprintf(qstring,"%o.%s.", chaddr, chaos_address_domain);
@@ -368,6 +374,8 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
 int 
 dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 {
+  // resolver state, local to each thread
+  struct __res_state chres;
   res_state statp = &chres;
   char a_dom[NS_MAXDNAME];
   int a_addr;
@@ -377,6 +385,8 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   ns_msg m;
   ns_rr rr;
   int i, ix = 0, offs;
+
+  init_chaos_dns_state(statp);
 
   sprintf(qstring,"%s.", namestr);
 
@@ -431,12 +441,31 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   }
   return ix;
 }
+static void 
+init_chaos_dns_state(res_state statp) 
+{
+  // initialize resolver library
+  if (res_ninit(statp) < 0) {
+    fprintf(stderr,"Can't init statp\n");
+    exit(1);
+  }
+  // make sure to make recursive requests
+  statp->options |= RES_RECURSE;
+  // change nameserver
+  if (inet_aton(chaos_dns_server, &statp->nsaddr_list[0].sin_addr) < 0) {
+    perror("inet_aton (chaos_dns_server does not parse)");
+    exit(1);
+  } else {
+    statp->nsaddr_list[0].sin_family = AF_INET;
+    statp->nsaddr_list[0].sin_port = htons(53);
+    statp->nscount = 1;
+  }
+  // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
+}
 
 void
 init_chaos_dns(int do_forwarding)
 {
-  res_state statp = &chres;
-
   if (do_forwarding) {
     // init lock and semaphores
     pthread_mutex_init(&dns_lock, NULL);
@@ -463,24 +492,6 @@ init_chaos_dns(int do_forwarding)
     dns_thread_writerp = &dns_thread_writer;
 #endif
   }
-
-  // initialize resolver library
-  if (res_ninit(statp) < 0) {
-    fprintf(stderr,"Can't init statp\n");
-    exit(1);
-  }
-  // make sure to make recursive requests
-  statp->options |= RES_RECURSE;
-  // change nameserver
-  if (inet_aton(chaos_dns_server, &statp->nsaddr_list[0].sin_addr) < 0) {
-    perror("inet_aton (chaos_dns_server does not parse)");
-    exit(1);
-  } else {
-    statp->nsaddr_list[0].sin_family = AF_INET;
-    statp->nsaddr_list[0].sin_port = htons(53);
-    statp->nscount = 1;
-  }
-  // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
 }
 
 // **** for parsing/printing config
@@ -537,7 +548,11 @@ parse_dns_config_line()
 void
 print_config_dns()
 {
+  // resolver state, local to each thread
+  struct __res_state chres;
   res_state statp = &chres;
+  init_chaos_dns_state(statp);
+
   printf("DNS config:\n Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
 	 chaos_dns_server, chaos_address_domain, trace_dns ? "on" : "off");
   if (trace_dns) {
@@ -656,9 +671,13 @@ void dumppkt_raw(unsigned char *ucp, int cnt);
 static void
 dns_describe_packet(u_char *pkt, int len)
 {
+  // resolver state, local to each thread
+  struct __res_state chres;
   res_state statp = &chres;
   ns_msg m;
   ns_rr rr;
+
+  init_chaos_dns_state(statp);
 
   if (ns_initparse(pkt, len, &m) < 0) {
     fprintf(stderr,"ns_initparse failure code %d: %s\n",statp->res_h_errno, hstrerror(statp->res_h_errno));
