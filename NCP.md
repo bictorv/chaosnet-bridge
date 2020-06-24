@@ -9,7 +9,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 | setting | description |
 | --- | --- |
 |`enabled`| used to enable/disable the NCP - default is `no` (disabled).|
-|`domain`| used for specifying the default DNS domain for RFC arg parsing - default is `chaosnet.net`. |
+|`domain`| used for specifying the default DNS domains for RFC arg parsing, as a comma-separated list. **NOTE** that there must be no spaces around the comma! Default (if none are specified) is `chaosnet.net`.|
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128.|
 |`finishwait`| specifies time to wait for ACK of final EOF pkt when closing conn - default 5000 ms.|

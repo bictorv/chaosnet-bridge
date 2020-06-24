@@ -20,8 +20,7 @@
 // - Document it better
 //
 // add statistics struct, for (new) PEEK protocol to report
-// domain search list config - here or in dns?
-// write client library (but see named.py for how simple it is)
+// write client library (but see named.py for how simple it is, not needed really?)
 
 #include <stdlib.h>
 #include <ctype.h>
@@ -62,7 +61,8 @@ static char chaos_socket_directory[PATH_MAX];
 // default domain for host lookups
 #if CHAOS_DNS
 #define DEFAULT_CHAOS_DOMAIN "chaosnet.net"
-static char default_chaos_domain[NS_MAXDNAME];
+static char **chaos_domains = NULL;
+static int number_of_chaos_domains = 0;
 #endif
 // default retransmission interval
 static int default_retransmission_interval = DEFAULT_RETRANSMISSION_INTERVAL;
@@ -96,9 +96,6 @@ parse_ncp_config_line()
   int val = 0;
 
   strcpy(chaos_socket_directory,DEFAULT_CHAOS_SOCKET_DIRECTORY); // default
-#if CHAOS_DNS
-  strcpy(default_chaos_domain,DEFAULT_CHAOS_DOMAIN); // default
-#endif
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     val = 0;
     if (strcmp(tok,"socketdir") == 0) {
@@ -111,16 +108,29 @@ parse_ncp_config_line()
 	strcat(chaos_socket_directory, "/");
       }
 #if CHAOS_DNS
-    } else if (strcmp(tok,"domain") == 0) {
+    } else if ((strcmp(tok,"domain") == 0) || (strcmp(tok,"domains") == 0)) {
+      char *sp, *ep;
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"ncp: no domain specified\n"); return -1; }
-      strncpy(default_chaos_domain, tok, sizeof(default_chaos_domain));
-      if ((strlen(default_chaos_domain) < sizeof(default_chaos_domain)) &&
-	  (default_chaos_domain[strlen(default_chaos_domain)-1] == '.')) {
-	fprintf(stderr,"ncp: fixing domain to remove final '%c' from \"%s\"\n", 
-		default_chaos_domain[strlen(default_chaos_domain)-1], default_chaos_domain);
-	default_chaos_domain[strlen(default_chaos_domain)-1] = '\0';
+      for (sp = tok, ep = index(tok, ','); ep != NULL; sp = ep+1, ep = index(ep+1, ',')) {
+	// look for comma-separated domain list
+	chaos_domains = realloc(chaos_domains, (number_of_chaos_domains+1) * sizeof(char *));
+	if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); exit(1); }
+	*ep = '\0';
+	if (strlen(sp) == 0) {
+	  fprintf(stderr,"Syntax error in \"domain\" setting - empty domain\n");
+	  return -1;
+	}
+	chaos_domains[number_of_chaos_domains++] = strdup(sp);
       }
+      // add the single one, or the last one
+      if (strlen(sp) == 0) {
+	fprintf(stderr,"Syntax error in \"domain\" setting - empty domain\n");
+	return -1;
+      }
+      chaos_domains = realloc(chaos_domains, (number_of_chaos_domains+1) * sizeof(char *));
+      if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); exit(1); }
+      chaos_domains[number_of_chaos_domains++] = strdup(sp);
 #endif
     } else if (strcmp(tok,"retrans") == 0) {
       tok = strtok(NULL, " \t\r\n");
@@ -191,19 +201,31 @@ parse_ncp_config_line()
       return -1;
     }
   }
+#if CHAOS_DNS
+  if (number_of_chaos_domains == 0) {
+    // add default domain
+    chaos_domains = malloc(sizeof(char *));
+    if (chaos_domains != NULL) 
+      chaos_domains[number_of_chaos_domains++] = DEFAULT_CHAOS_DOMAIN;
+  }
+#endif
   if (verbose || ncp_debug) {
-    printf("NCP is %s. Socket directory \"%s\", default domain \"%s\", retrans %d, window %d, eofwait %d, finishwait %d, debug %d %s, trace %d %s\n", 
+    printf("NCP is %s. Socket directory \"%s\", retrans %d, window %d, eofwait %d, finishwait %d, debug %d %s, trace %d %s\n", 
 	   ncp_enabled ? "enabled" : "disabled",
 	   chaos_socket_directory, 
-#if CHAOS_DNS
-	   default_chaos_domain,
-#else
-	   "(no DNS)",
-#endif
 	   default_retransmission_interval, default_window_size,
 	   eof_wait_timeout, finish_wait_timeout,
 	   ncp_debug, (ncp_debug > 0) ? "on" : "off",
 	   ncp_trace, (ncp_trace > 0) ? "on" : "off");
+#if CHAOS_DNS
+    if (number_of_chaos_domains > 0) {
+      int i;
+      printf(" %d configured domain%s: ", number_of_chaos_domains, number_of_chaos_domains == 1 ? "" : "s");
+      for (i = 0; i < number_of_chaos_domains; i++)
+	printf("%s%s", chaos_domains[i], i < number_of_chaos_domains-1 ? ", " : "");
+      printf("\n");
+    }
+#endif
   }
   return 0;
 }
@@ -1443,13 +1465,26 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
     }
     // @@@@ make default_chaos_domain a list, iterate until match
     strcpy((char *)dname, (char *)hname);
-    if ((strlen((char *)dname)+strlen(default_chaos_domain)+1+1 < sizeof(dname)) &&
-	(index((char *)dname, '.') == NULL)) {
-      strcat((char *)dname, ".");
-      strcat((char *)dname, default_chaos_domain);
-    }
-    if ((naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4)) <= 0) {
-      user_socket_los(conn, "LOS no addrs of name \"%s\" found", dname);
+    int hlen = strlen((char *)hname);
+    char *eoh = (char *)dname+hlen;
+    if (index((char *)hname, '.') == NULL) {
+      int i;
+      // add a period
+      *eoh++ = '.';
+      for (i = 0; i < number_of_chaos_domains; i++) {
+	// make sure it's terminated
+	dname[sizeof(dname)-1] = '\0';
+	strncpy(eoh, chaos_domains[i], sizeof(dname)-hlen-1-1);
+	if (ncp_debug) printf("NCP DNS trying \"%s\"\n", dname);
+	if ((naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4)) > 0) {
+	  if (ncp_debug) printf("NCP DNS found %d addrs\n", naddrs);
+	  break;
+	}
+      }
+    } else 
+      naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4);
+    if (naddrs <= 0) {
+      user_socket_los(conn, "LOS no addrs of name \"%s\" found", hname);
       return;
     } else {
       // Pick one which is closest, if one is
