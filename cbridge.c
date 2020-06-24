@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017-2019 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2020 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,7 +20,7 @@
    PDP10 emulator by Ken Harrenstien). */
 
 /* Bridge program for various Chaosnet implementations.
-   Should support as many as desired of
+   Support many link-layer implementations:
    - Chaos-over-Ethernet
    - CHUDP (Chaos-over-UDP, used by klh10/its)
    - Chaos-over-TLS (using two bytes of record length)
@@ -28,6 +28,8 @@
    - Chaos-over-IP (IP address mapping, used by pdp10x)
      see also "Cisco's implementation of Chaosnet", same type of mapping
      https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
+
+   Also implements the transport layer (Network Control Program), see ncp.c and NCP.md
 
    Does not hack BRD packets (yet), but noone seems to use them anyway?
 */
@@ -58,7 +60,7 @@
 // HOSTAB server?
 // - No clients except LMI but would be simpler for CADR than porting DNS?
 // - requires stream protocol (cf MIT AIM 628 sec 5.10)
-// x bite the bullet and implement stream server (see NCP)
+// Can now be done externally using NCP.
 
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
