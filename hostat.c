@@ -338,6 +338,7 @@ main(int argc, char *argv[])
   if ((cnt = recv(sock, buf, sizeof(buf), 0)) < 0) {
     perror("recv"); exit(1);
   }
+  buf[cnt] = '\0';
   nl = index((char *)buf, '\n');
   if (nl != NULL) {
     *nl = '\0';
