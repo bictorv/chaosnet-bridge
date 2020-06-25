@@ -191,9 +191,11 @@ Setting up the connection is as for `chaos_stream`:
 
 After that, packets are sent and received with a 4-byte binary header:
 
-| opcode | 0 | lenMSB | lenLSB |
+| byte 0 | b 1 | b 2 | b 3|
+| --- | --- | --- | --- |
+| opcode | 0 | lenLSB | lenMSB |
 
-followed by the data of the packet, with the length indicated by the len bytes.  Data lengths can not be more than 488 bytes.
+followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes.
 
 The user program will never see any STS, SNS, EOF, MNT, BRD, or RUT packets.
 
