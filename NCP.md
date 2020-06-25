@@ -11,8 +11,9 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 |`enabled`| used to enable/disable the NCP - default is `no` (disabled).|
 |`domain`| used for specifying the default DNS domains for RFC arg parsing, as a comma-separated list. **NOTE** that there must be no spaces around the comma! Default (if none are specified) is `chaosnet.net`.|
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
-|`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128.|
-|`finishwait`| specifies time to wait for ACK of final EOF pkt when closing conn - default 5000 ms.|
+|`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128. (ITS uses only 5, and a max of 64, while CADR and Lambda Lisp machine systems use 013, and max 128. Symbolics uses a max of 50.)|
+|`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 1000 ms.|
+|`finishwait`| specifies the time to wait for a half-open conn (OPN Sent) to become Open (thus allowing final retransmissions) while finishing it. Default 5000 ms. (You probably don't want to mess with this.)|
 |`socketdir`| specifies the directory where to put the socket file(s), `chaos_stream` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
@@ -64,16 +65,32 @@ If the user program acts as a client, it opens the socket and writes
 `RFC `[*options*] *host* *contactname* *args*
 
 (followed by LF or CRLF), where
-- [*options*] (including the square brackets!) is optional, and specifies options for the connection. So far the only option is timeout=*%d* to specify a (positive) timeout value for opening the connection. If it times out, a `LOS Connection timed out` response is given to the user program.
+- [*options*] (including the square brackets!) is optional, and specifies (a comma-separated list of) options for the connection. 
 - *host* is either the name or the (octal!) address of the host to be contacted,
-- *contactname* is the contact name, such as `FINGER`, `TIME` or `STATUS`, and
-- *args* are optional arguments, such as a user name for `FINGER`. The *args* are separated from *contactname* with a single space.
+- *contactname* is the contact name, such as `NAME`, `UPTIME`, `TIME` or `STATUS`, and
+- *args* are optional arguments, such as a user name for `NAME`. The *args* are separated from *contactname* with a single space.
+
+The NCP sends a corresponding RFC packet to the destination host.
+
+#### Options:
+So far there is only one:
+- `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a time out, a `LOS Connection timed out` response is given to the user program.
+
+#### Examples:
+- `RFC time.chaosnet.net TIME`
+    - basic example: returns an ANS with the (binary) current time (try `hostat time.chaosnet.net time` to get it legibly)
+- `RFC up.update.uu.se NAME /W bv`
+    - args example: gets "whois" info about bv@up
+- `RFC [timeout=3] 3402 STATUS`
+    - options example: tries to get the status of host 3402 (octal) but with a timeout of 3 seconds. Note the explicit square brackets.
+- `rfc 3040 dump-routing-table`
+    - it's all case-insensitive (contact names are made uppercase). (Try `hostat 3040 dump-routing-table` for legible output.)
+
+#### Responses
 
 Any errors in parsing the RFC line (etc) result in a
 `LOS `*reason*
 line given to the user program, and the socket is closed.
-
-The NCP sends a corresponding RFC packet to the destination host.
 
 When a response is received from the destination host, it is either an OPN or CLS packet. The NCP informs the user program by writing on its socket:
 
@@ -139,9 +156,12 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 
 ## TODO
 
-Implement fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
-
-Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need chaos_seqpacket though (below).
+- [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
+- [ ] Add a bit of statistics counters, and implement a PEEK protocol to show the state of cbridge (including the things reported by the `-s` command line option)|
+- [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
+- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need `chaos_seqpacket` though (below).
+- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/) (also needs chaos_seqpacket).
+- [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language (also needs chaos_seqpacket).
 
 ## Future idea? chaos_seqpacket
 

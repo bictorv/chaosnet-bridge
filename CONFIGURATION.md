@@ -8,6 +8,7 @@ See also the [example configurations](EXAMPLES.md).
 | --- | --- |
 | -d  | turns on debug (lots of it) |
 | -v  | turns on verbose (less detail) |
+| -s | print stats every 15 seconds, including routing tables, link states, ARP tables...|
 | -t  | turns on TLS debug (lots). Same effect as enabling the `debug` option to `tls`, see below. |
 | -c *cf* | reads config from file *cf*, default cbridge.conf |
 

@@ -567,6 +567,7 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
     memcpy(&conn->conn_sockaddr, sa, (sa_len > sizeof(conn->conn_sockaddr) ? sizeof(conn->conn_sockaddr) : sa_len));
   conn->conn_state = cs;
   conn->retransmission_interval = default_retransmission_interval;
+  conn->rfc_timeout = CONNECTION_TIMEOUT;
   conn->conn_created = time(NULL);
 
   if (ncp_debug) print_conn("Made new", conn, 1);
@@ -1433,6 +1434,7 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *d
   conn->conn_lhost = ch_destaddr(ch);
   conn->conn_lidx = make_fresh_index();
   conn->conn_state->pktnum_received_highest = ch_packetno(ch);
+  conn->conn_created = time(NULL);
   // conn->conn_state->state = CS_RFC_Received;
   PTUNLOCKN(conn->conn_lock,"conn_lock");
   if (ncp_debug) print_conn("Initiated from RFC pkt:", conn, 0);
@@ -1444,7 +1446,7 @@ static void
 handle_option(struct conn *c, char *optname, char *val)
 {
   if (ncp_debug) printf("NCP parsing RFC option \"%s\" value \"%s\"\n", optname, val);
-  if (strcmp(optname, "timeout") == 0) {
+  if (strcasecmp(optname, "timeout") == 0) {
     int to = 0;
     if ((sscanf(val, "%d", &to) == 1) && (to > 0)) {
       if (ncp_debug) printf(" setting rfc_timeout to %d\n", to);
