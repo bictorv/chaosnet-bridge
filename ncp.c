@@ -428,13 +428,13 @@ static void
 print_conn(char *leader, struct conn *conn, int alsostate)
 {
   time_t now = time(NULL);
-  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld sock %d %s\n",
+  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld t/o %d sock %d %s\n",
 	 leader,
 	 conn, conn_type_name(conn),
 	 conn->conn_contact,
 	 conn->conn_rhost, conn->conn_ridx,
 	 conn->conn_lhost, conn->conn_lidx,
-	 conn_state_name(conn), now - conn->conn_created,
+	 conn_state_name(conn), now - conn->conn_created, conn->rfc_timeout,
 	 conn->conn_sock, conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
@@ -1893,8 +1893,8 @@ retransmit_controlled_packets(struct conn *conn)
 	  if (ncp_debug) printf("NCP: RFC timeout (%ld > %d)\n", time(NULL) - conn->conn_created, conn->rfc_timeout);
 	  PTUNLOCKN(cs->send_mutex,"send_mutex");
 	  // this also cancels the conn
-	  user_socket_los(conn, "LOS Connection timed out (%d), host %#o not responding",
-			  conn->conn_rhost, conn->rfc_timeout);
+	  user_socket_los(conn, "LOS Connection timed out (after %d s), host %#o not responding",
+			  conn->rfc_timeout, conn->conn_rhost);
 	}
 	if (!packet_uncontrolled(pkt)
 	    // don't retransmit OPN when we're already open

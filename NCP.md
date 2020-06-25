@@ -141,6 +141,8 @@ To handle new RFCs (while handling one, or after) your user program needs to ope
 
 # Internals
 
+There is one thread handling user processes opening the socket, starting new connections.
+
 Each connection uses three threads:
 1. one to handle data from the connection to the user socket,
 1. one to handle data from the socket to the connection, and
@@ -150,30 +152,53 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried.
+The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried, but since foreign data in UNC packets are uncontrolled (not in order) it doesn't make sense - however in `chaos_seqpacket` below it would.
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
 ## TODO
 
-- [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
-- [ ] Add a bit of statistics counters, and implement a PEEK protocol to show the state of cbridge (including the things reported by the `-s` command line option)|
+### Internals:
+- [ ] Add a bit of statistics counters for conns
 - [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
+- [ ] Implement FWD (redirect the connection invisibly? See `RECEIVE-FWD` in Lambda code.).
+- [ ] Implement broadcast (both address-zero and BRD).
+
+### Applications:
+- [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option)
+- [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
+- [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
+- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table).
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need `chaos_seqpacket` though (below).
 - [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/) (also needs chaos_seqpacket).
 - [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language (also needs chaos_seqpacket).
+
 
 ## Future idea? chaos_seqpacket
 
 This is a socket of type `SOCK_SEQPACKET`.
 
-As above, but the NCP and the user program exchanges packets with a four-byte text header (rather than a binary Chaosnet header) consisting of the three-letter opcode followed by a space.
+As above, but the NCP and the user program exchange packets rather than just a stream of data. The packets have a 4-byte header (no need for the full Chaosnet header at the transport layer).
 
-The exceptions are
-`RFC `*rhost* *args*
-`LOS `*reason*
-`CLS `*reason*
+Setting up the connection is as for `chaos_stream`:
+1. `RFC `*rhost* *args*
+    - or `LSN `*contact*
+1. Response:
+	- `LOS `*reason*
+	- `CLS `*reason*
+	- `ANS `*length*
+	- `OPN Connection to host `%o` opened`
 
-The user program will never see any STS, SNS, MNT or RUT packets, and any such packets from the user program are ignored.
+After that, packets are sent and received with a 4-byte binary header:
 
-The NCP handles flow control, but DAT packets are delivered individually to the user program, and such DAT packets from the user program are not allowed to be more than 488 (decimal) bytes.
+| opcode | 0 | lenMSB | lenLSB |
+
+followed by the data of the packet, with the length indicated by the len bytes.  Data lengths can not be more than 488 bytes.
+
+The user program will never see any STS, SNS, EOF, MNT, BRD, or RUT packets.
+
+The user program can never send any such packets, and also no RFC, OPN, or BRD packets.
+
+The NCP handles flow control, but DAT packets (and other controlled packets) are delivered individually in order to the user program.
+
+Implementation should be fairly easy given the flow control is already in place, it's just a new flavor of `conn_to_sock` and `conn_from_sock` handlers (how to read and package input from the socket, and how to present the packets to the socket). The `conn_to_net` just works.
