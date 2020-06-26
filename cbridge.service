@@ -1,0 +1,18 @@
+# /etc/systemd/system/cbridge.service
+[Unit]
+Description=Chaosnet bridge
+Documentation=https://github.com/bictorv/chaosnet-bridge
+Requires=network-online.target
+Wants=nss-lookup.target
+After=network-online.target
+After=nss-lookup.target
+
+[Service]
+# YOU NEED TO UPDATE THE PATHS HERE MANUALLY
+Type=simple
+WorkingDirectory=/home/pi/chaosnet-bridge/
+ExecStartPre=/home/pi/chaosnet-bridge/firewall.sh
+ExecStart=/home/pi/chaosnet-bridge/cbridge-starter.sh
+
+[Install]
+WantedBy=multi-user.target
