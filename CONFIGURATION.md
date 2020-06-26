@@ -101,7 +101,7 @@ For links, you need to specify what link layer implementation is used for it.
 Note that while links implicitly define a (static) route to the subnet/host,
 you can only have a CHUDP link to a host, not directly to a subnet;
 you may need an additional route definition for the subnet.
-(See the MX-11 [example config](EXAMPLES.md).)
+(See the MX-11 [example config](EXAMPLES.md#example-mx-11).)
 
 Some link types can only be to hosts (CHUDP, TLS client) and some can only be to subnets (Ether).
 
