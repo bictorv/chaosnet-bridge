@@ -465,7 +465,7 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
 
   // Find source route, and dispatch the packet
   struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-  forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+  forward_chaos_pkt(srcrt,
 		    srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 		    chdata, chlen, LINK_IP);
 }

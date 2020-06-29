@@ -435,7 +435,7 @@ void * chudp_sock_input(void *v)
       } else
 	srcaddr = ch_srcaddr(ch);
       struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-      forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+      forward_chaos_pkt(srcrt,
 			srcrt != NULL ? srcrt->rt_cost : RTCOST_ASYNCH,
 			(u_char *)ch, len, LINK_CHUDP);
     } else

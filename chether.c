@@ -21,6 +21,12 @@
 
 /* **** Chaos-over-Ethernet functions **** */
 
+// Slightly less efficent, but useful information:
+// - add a fake "hardware trailer" based on sender MAC and ARP info
+#ifndef USE_CHAOS_ETHER_TRAILER
+#define USE_CHAOS_ETHER_TRAILER 0
+#endif
+
 // ARP stuff
 #ifndef ETHERTYPE_CHAOS
 # define ETHERTYPE_CHAOS 0x0804
@@ -74,6 +80,10 @@ static struct charp_ent charp_list[CHARP_MAX];
 static int charp_len = 0;			/* cf CHARP_MAX */
 
 static void get_my_ea(void);
+#if USE_CHAOS_ETHER_TRAILER
+static u_short find_arp_entry_for_ea(u_char *eaddr);
+#endif
+void print_arp_table();
 
 void
 print_config_ether() 
@@ -751,8 +761,8 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 {
   int i, rlen;
   u_short protocol;
-  u_int64_t src_mac = 0;		// let's hope a 48-bit mac fits
-
+  u_char src_mac[ETHER_ADDR_LEN];
+  
 #if ETHER_BPF
   // Based on 3com.c in LambdaDelta by Daniel Seagraves & Barry Silverman
   // see https://github.com/dseagrav/ld
@@ -840,11 +850,14 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     }
   }
 
+  memcpy(src_mac, eh->ether_shost, ETHER_ADDR_LEN);
+#if 0
   for (i = 0; i < ETHER_ADDR_LEN-1; i++) {
     src_mac |= eh->ether_shost[i];
     src_mac = src_mac<<8;
   }
   src_mac |= eh->ether_shost[i];
+#endif
 
 #else // not BPF
   struct sockaddr_ll sll;
@@ -870,11 +883,14 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
   }
 #endif
 
+  memcpy(src_mac, sll.sll_addr, ETHER_ADDR_LEN);
+#if 0
   for (i = 0; i < sll.sll_halen-1; i++) {
     src_mac |= sll.sll_addr[i];
     src_mac = src_mac<<8;
   }
   src_mac |= sll.sll_addr[i];
+#endif
 
 #endif // ETHER_BPF
   if (rlen < 0)
@@ -954,7 +970,39 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       }
     }
     else if (protocol == htons(ETHERTYPE_CHAOS)) {
-      if (debug) {
+      // Oh dear, this might slow things down a bit,
+      // but I really would like the LASTCN stats to know who sent it last
+#if USE_CHAOS_ETHER_TRAILER
+      u_short trailer_from = find_arp_entry_for_ea((u_char *)&src_mac);
+      if ((trailer_from != 0) 
+	  // it fits
+	  && (rlen + CHAOS_HW_TRAILERSIZE < buflen)
+	  // it's not already there
+	  // && (rlen < CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE)
+	  ) {
+	// add trailer
+	if (chether_debug) printf("Ether: adding fake hw trailer for %%#llx = Chaos %#o\n", // ether_ntoa((struct ether_addr *)src_mac),
+				  trailer_from);
+	if (rlen % 2) rlen++; // align
+	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[rlen];
+	tr->ch_hw_srcaddr = trailer_from;
+	tr->ch_hw_destaddr = ntohs(ch_destaddr((struct chaos_header *)buf));
+	tr->ch_hw_checksum = ntohs(ch_checksum(buf, rlen+2*sizeof(u_short)));
+	rlen += CHAOS_HW_TRAILERSIZE;
+      } 
+      else if (chether_debug && (trailer_from == 0))
+	print_arp_table();
+#if 1
+      else if (chether_debug) {
+	printf("Ether: NOT adding trailer: from %#o, fits %s, already there %s (%d %lu)\n",
+	       trailer_from,
+	       (rlen + CHAOS_HW_TRAILERSIZE < buflen) ? "yes" : "no",
+	       (rlen < CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE) ? "yes" : "no",
+	       rlen, CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE);
+      }
+#endif
+#endif // USE_CHAOS_ETHER_TRAILER
+      if (debug || chether_debug) {
 	printf("Ethernet Chaos message:\n");
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
 	ch_dumpkt(buf, rlen);
@@ -1048,6 +1096,38 @@ static u_char *find_arp_entry(u_short daddr)
   return NULL;
 }
 
+#if USE_CHAOS_ETHER_TRAILER
+static u_short find_arp_entry_for_ea(u_char *eaddr)
+{
+  int i;
+  // if (chether_debug || debug) fprintf(stderr,"Looking for ARP entry for %#llx, ARP table len %d\n", eaddr, charp_len);
+
+  if (charp_len == 0)
+    return 0;
+
+  PTLOCK(charp_lock);
+  for (i = 0; i < charp_len; i++)
+    if (memcmp(charp_list[i].charp_eaddr, eaddr, ETHER_ADDR_LEN) == 0) {
+#if 0
+      if ((charp_list[i].charp_age != 0)
+	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
+	if (chether_debug || verbose) fprintf(stderr,"Found ARP entry for %#llx but it is too old (%lu s)\n",
+			     eaddr, (time(NULL) - charp_list[i].charp_age));
+	PTUNLOCK(charp_lock);
+	return 0;
+      }
+#endif
+#if 0
+      if (chether_debug || debug) fprintf(stderr,"Found ARP entry for %#llx\n", eaddr);
+#endif
+      PTUNLOCK(charp_lock);
+      return charp_list[i].charp_chaddr;
+    }
+  PTUNLOCK(charp_lock);
+  return 0;
+}
+#endif // USE_CHAOS_ETHER_TRAILER
+
 #if 0
 // Find my chaos address on the ether link #### check config that there are no conflicting addrs?
 static u_short find_ether_chaos_address() {
@@ -1128,6 +1208,40 @@ send_chaos_arp_reply(struct chethdest *cd, u_short dchaddr, u_char *deaddr, u_sh
   send_packet(cd, cd->cheth_arpfd, ETHERTYPE_ARP, deaddr, ETHER_ADDR_LEN, req, sizeof(req));
 }
 
+static void 
+add_to_arp(u_short schad, u_char *sead) 
+{
+  /* Now see if we should add this to our Chaos ARP list */
+  PTLOCK(charp_lock);
+  int i, found = 0;
+  for (i = 0; i < charp_len; i++)
+    if (charp_list[i].charp_chaddr == schad) {
+      found = 1;
+      charp_list[i].charp_age = time(NULL);  // update age
+      if (memcmp(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN) != 0) {
+	memcpy(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN);
+	if (chether_debug || verbose) {
+	  fprintf(stderr,"ARP: Changed MAC addr for %#o\n", schad);
+	  print_arp_table();
+	}
+      } else
+	if (chether_debug || verbose) {
+	  fprintf(stderr,"ARP: Updated age for %#o\n", schad);
+	  print_arp_table();
+	}
+      break;
+    }
+  /* It's not in the list already, is there room? */
+  if (!found && charp_len < CHARP_MAX) {
+    if (chether_debug || verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
+    charp_list[charp_len].charp_chaddr = schad;
+    charp_list[charp_len].charp_age = time(NULL);
+    memcpy(&charp_list[charp_len++].charp_eaddr, sead, ETHER_ADDR_LEN);
+    if (verbose) print_arp_table();
+  }
+  PTUNLOCK(charp_lock);
+}
+
 static void handle_arp_input(struct chethdest *cd, u_char *data, int dlen)
 {
   // if (chether_debug || debug) fprintf(stderr,"Handle ARP\n");
@@ -1170,35 +1284,7 @@ static void handle_arp_input(struct chethdest *cd, u_char *data, int dlen)
       }
     }
   }
-  /* Now see if we should add this to our Chaos ARP list */
-  PTLOCK(charp_lock);
-  int i, found = 0;
-  for (i = 0; i < charp_len; i++)
-    if (charp_list[i].charp_chaddr == schad) {
-      found = 1;
-      charp_list[i].charp_age = time(NULL);  // update age
-      if (memcmp(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN) != 0) {
-	memcpy(&charp_list[i].charp_eaddr, sead, ETHER_ADDR_LEN);
-	if (chether_debug || verbose) {
-	  fprintf(stderr,"ARP: Changed MAC addr for %#o\n", schad);
-	  print_arp_table();
-	}
-      } else
-	if (chether_debug || verbose) {
-	  fprintf(stderr,"ARP: Updated age for %#o\n", schad);
-	  print_arp_table();
-	}
-      break;
-    }
-  /* It's not in the list already, is there room? */
-  if (!found && charp_len < CHARP_MAX) {
-    if (chether_debug || verbose) printf("ARP: Adding new entry for Chaos %#o\n", schad);
-    charp_list[charp_len].charp_chaddr = schad;
-    charp_list[charp_len].charp_age = time(NULL);
-    memcpy(&charp_list[charp_len++].charp_eaddr, sead, ETHER_ADDR_LEN);
-    if (verbose) print_arp_table();
-  }
-  PTUNLOCK(charp_lock);
+  add_to_arp(schad, sead);
 }
 
 static void arp_input(struct chethdest *cd, int arpfd, u_char *data, int dlen) {
@@ -1220,7 +1306,8 @@ static void arp_input(struct chethdest *cd, int arpfd, u_char *data, int dlen) {
 }
 
 
-void * ether_input(void *v)
+void * 
+ether_input(void *v)
 {
   int i;
 
@@ -1279,11 +1366,13 @@ void * ether_input(void *v)
 	    continue;
 	  ntohs_buf((u_short *)cha, (u_short *)cha, len);
 	  if (debug) ch_dumpkt((u_char *)&data, len);
-#if 1 // At least LMI Lambda does not include (a valid) chaosnet trailer
+#if !USE_CHAOS_ETHER_TRAILER 
+	  // At least LMI Lambda does not include (a valid) chaosnet trailer
 	  // (not even constructs one) but we read more than the packet size shd be
 	  if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE)
 	    len = ch_nbytes(cha)+CHAOS_HEADERSIZE;
-#else // what we would have done...
+#else  // what we would have done...
+	  // @@@@ very often the length is more than expected even without trailer, so can't use it blindly
 	  if (len >= ch_nbytes(cha)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE) {
 	    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	    // check for bogus/ignorable trailer or checksum.
@@ -1305,8 +1394,8 @@ void * ether_input(void *v)
 		PTLOCK(linktab_lock);
 		linktab[schad>>8].pkt_crcerr++;
 		PTUNLOCK(linktab_lock);
-#endif
 		continue;
+#endif
 	      }
 	    } else if (chether_debug || debug)
 	      fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Ether\n",
@@ -1315,7 +1404,7 @@ void * ether_input(void *v)
 #endif // 0
 	  // check where it's coming from
 	  u_short srcaddr;
-#if 0 // #### see above
+#if USE_CHAOS_ETHER_TRAILER // see above
 	  if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
 	    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	    srcaddr = tr->ch_hw_srcaddr;
@@ -1323,7 +1412,7 @@ void * ether_input(void *v)
 #endif
 	    srcaddr = ch_srcaddr(cha);
 	  struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-	  forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+	  forward_chaos_pkt(srcrt,
 			    srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			    (u_char *)&data, len, LINK_ETHER);  /* forward to appropriate links */
 	}
@@ -1343,7 +1432,9 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
 
   if (chether_debug || debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
   // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
+#if !USE_CHAOS_ETHER_TRAILER
   dlen -= CHAOS_HW_TRAILERSIZE;
+#endif
   htons_buf((u_short *)ch, (u_short *)ch, dlen);
   for (i = 0; i < nchethdest; i++) {
     if (dchad == 0) {		/* broadcast */
@@ -1362,7 +1453,7 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
 	// Ether link for this subnet
 	u_char *eaddr = find_arp_entry(idchad);
 	if (eaddr != NULL) {
-	  if (chether_debug || debug) fprintf(stderr,"Forward: Sending on ether %s from %#o to %#o\n", chethdest[i].cheth_ifname, schad, idchad);
+	  if (chether_debug || debug) fprintf(stderr,"Forward: Sending on ether %s from %#o to %#o len %d\n", chethdest[i].cheth_ifname, schad, idchad, dlen);
 	  send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eaddr, ETHER_ADDR_LEN, data, dlen);
 	  done = 1;
 	  break;

@@ -257,7 +257,7 @@ void * unix_input(void *v)
 	continue;
       }
       struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
-      forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+      forward_chaos_pkt(srcrt,
 			srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			pkt, len, LINK_UNIXSOCK);
     }

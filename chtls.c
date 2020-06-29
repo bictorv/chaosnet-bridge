@@ -715,6 +715,12 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
   // Aborted (on output):
   //  "The number of transmissions to this subnet aborted by
   //  collisions or because the receiver was busy."
+  if ((chaddr >> 8) == 0) {
+    fprintf(stderr,"TLS: bad call to tls_please_reopen_tcp: td %p tls_addr %#o (%#x), inputp %d, name \"%s\"\n",
+	    td, chaddr, chaddr, inputp, td->tls_name);
+    print_tlsdest_config();
+    return;
+  }
   PTLOCK(linktab_lock);
   if (inputp)
     linktab[chaddr>>8].pkt_lost++;
@@ -1171,7 +1177,7 @@ void * tls_input(void *v)
 				     srcaddr, tindex, srcrt->rt_dest);
 
 	    // forward to destination
-	    forward_chaos_pkt(srcrt != NULL ? srcrt->rt_dest : -1,
+	    forward_chaos_pkt(srcrt,
 			      srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
 			      (u_char *)&data, len, LINK_TLS);  /* forward to appropriate links */
 	  } else {

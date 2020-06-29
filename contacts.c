@@ -291,7 +291,8 @@ status_responder(u_char *rfc, int len)
 
   int maxentries = 12;		// max 244 words in a Chaos pkt, 16 for Node name, 18 per entry below
   // Low-order half of 32-bit word comes first
-  for (i = 0; i < 256 && maxentries > 0; i++) {
+  // By the way: There is no subnet 0.
+  for (i = 1; i < 256 && maxentries > 0; i++) {
     if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)
 	 || (linktab[i].pkt_aborted != 0) || (linktab[i].pkt_lost != 0)) {
       maxentries--;

@@ -769,24 +769,34 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   }
 }
 
-void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
+void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
 {
   struct chaos_header *ch = (struct chaos_header *)data;
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
 
-  u_short schad = ch_srcaddr(ch);  /* source */
-  if (dlen >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
-    // use hw trailer if available
-    if (schad != 0) {
-      schad = htons(tr->ch_hw_srcaddr);
-    }
-  }
+  u_short schad = 0;		   /* source (for hosttab) */
   u_short dchad = ch_destaddr(ch);  /* destination */
   u_char fwc = ch_fc(ch);	/* forwarding count */
 
-  if (src >= 0) {
+  if (dlen >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
+    // use hw trailer if available
+    schad = htons(tr->ch_hw_srcaddr);
+  } else if (src != NULL) {
+    // if it's a direct link, and the source is on my subnet, use it
+    if (RT_DIRECT(src) && ((ch_srcaddr(ch) & 0xff00) == (src->rt_myaddr & 0xff00)))
+      schad = ch_srcaddr(ch);
+    else if (RT_BRIDGED(src))
+      // else use the bridge's address
+      schad = src->rt_braddr;
+    else {
+      // don't know an address, so use the link type instead as an indication (cf dump-routing-table)
+      schad = (u_short)src->rt_link;
+      // assert(schad < 0400);
+    }
+  }
+  if (src != NULL) {
     PTLOCK(linktab_lock);
-    linktab[src>>8].pkt_in++;
+    linktab[(src->rt_dest)>>8].pkt_in++;
     PTUNLOCK(linktab_lock);
     PTLOCK(hosttab_lock);
     struct hostat *he = find_hostat_entry(ch_srcaddr(ch));
@@ -795,15 +805,15 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
     he->hst_last_hop = schad;
     PTUNLOCK(hosttab_lock);
   } else if (debug)
-    fprintf(stderr,"No source given in forward from %#o to %#o\n",
+    fprintf(stderr,"No source route given in forward from %#o to %#o\n",
 	    schad, dchad);
 
   fwc++;
   if (fwc > CH_FORWARD_MAX) {	/* over-forwarded */
     if (verbose) fprintf(stderr,"%%%% Dropping over-forwarded pkt for %#o\n", dchad);
-    if (src >= 0) {
+    if (src != NULL) {
       PTLOCK(linktab_lock);
-      linktab[src>>8].pkt_rejected++;
+      linktab[(src->rt_dest)>>8].pkt_rejected++;
       PTUNLOCK(linktab_lock);
     }
     return;
@@ -817,7 +827,7 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
     // Should not happen. Unless Unix sockets.
     if (src_linktype != LINK_UNIXSOCK) {
       if (verbose) fprintf(stderr,"Dropping pkt from self to %#o (src %#o - hw %#o, link %s) \n",
-			   dchad, src, ntohs(tr->ch_hw_srcaddr), 
+			   dchad, ch_srcaddr(ch), ntohs(tr->ch_hw_srcaddr), 
 			   rt_linkname(src_linktype));
       if (debug) ch_dumpkt(data, dlen);
     }
@@ -865,9 +875,9 @@ void forward_chaos_pkt(int src, u_char cost, u_char *data, int dlen, u_char src_
     forward_chaos_pkt_on_route(rt, data, dlen);
   } else {
     if (verbose) fprintf(stderr,"Can't find route to %#o\n", dchad);
-    if (src >= 0) {
+    if (src != NULL) {
       PTLOCK(linktab_lock);
-      linktab[src>>8].pkt_rejected++;
+      linktab[(src->rt_dest)>>8].pkt_rejected++;
       PTUNLOCK(linktab_lock);
     }
   }    
