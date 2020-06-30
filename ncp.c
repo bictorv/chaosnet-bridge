@@ -1248,7 +1248,7 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
     } else {
       if ((opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
 	if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
-	send_basic_pkt_with_data(conn, opc, &buf[4], len);
+	send_basic_pkt_with_data(conn, opc, bp+4, len);
       } else
 	user_socket_los(conn,"Bad opcode %s in state %s, only LOS UNC DAT..DWD are OK", 
 			ch_opcode_name(opc), conn_state_name(conn));
