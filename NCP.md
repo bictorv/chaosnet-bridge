@@ -14,7 +14,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128. (ITS uses only 5, and a max of 64, while CADR and Lambda Lisp machine systems use 013, and max 128. Symbolics uses a max of 50.)|
 |`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 1000 ms.|
 |`finishwait`| specifies the time to wait for a half-open conn (OPN Sent) to become Open (thus allowing final retransmissions) while finishing it. Default 5000 ms. (You probably don't want to mess with this.)|
-|`socketdir`| specifies the directory where to put the socket file(s), `chaos_stream` - default is `/tmp`.|
+|`socketdir`| specifies the directory where to put the socket files, `chaos_stream` and `chaos_seqpacket` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
 
@@ -138,6 +138,45 @@ where *len* is the length in bytes (max 488) of the following *data* (which may 
 
 To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
 
+## chaos_seqpacket
+
+This is also a socket of type `SOCK_STREAM`.
+
+As above, but the NCP and the user program exchange packets rather than just a stream of data. The packets have a 4-byte header (no need for the full Chaosnet header at the transport layer).
+
+Packets are sent and received with a 4-byte binary header:
+
+| byte 0 | b 1 | b 2 | b 3|
+| --- | --- | --- | --- |
+| opcode | 0 | lenLSB | lenMSB |
+
+followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes. Note that `LSN` packets can be used, where the data is the contact name to listen to. Note also that RFC packets have slightly different data from the actual Chaosnet packets (see below).
+
+
+Setting up the connection is similar to `chaos_stream`:
+1. Set up: either
+    - send `RFC` with data being [*options*] *rhost* *contact* *args* (as for the RFC for `chaos_stream`)
+    - send `LSN` with data being *contact*
+1. Response: either
+    - receive `RFC` with data being *rhost* *args* (as for the RFC for `chaos_stream`)
+        - as response to `LSN`
+	- receive `ANS` with data being the answer data
+        - as response for RFC for Simple protocol
+	- receive `OPN` without data
+        - as response to RFC for Stream protocol
+	- receive `LOS` or `CLS` with data being *reason*
+1. If you sent or received an `OPN`:
+	- send and receive `DAT`, `DWD`, `UNC` packets
+
+When the Chaosnet connection is  closed by the other end, the user socket is also closed, and vice versa, so only use CLS as negative response to RFC.
+
+The user program will never see any STS, SNS, EOF, MNT, BRD, or RUT packets (so only sees RFC, OPN, CLS, LOS, UNC, DAT, DWD).
+
+The user program can never send any such packets (so only LSN, RFC, OPN, CLS, LOS, UNC, DAT, DWD).
+
+The NCP handles duplicates and flow control, and DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
+
+(Implementation was fairly easy given the flow control is already in place.)
 
 # Internals
 
@@ -152,7 +191,7 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried, but since foreign data in UNC packets are uncontrolled (not in order) it doesn't make sense - however in `chaos_seqpacket` below it would.
+The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried, but should be tested (using `chaos_seqpacket`).
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
@@ -174,38 +213,3 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language (also needs chaos_seqpacket).
 
 
-## Future idea? chaos_seqpacket
-
-This is a socket of type `SOCK_SEQPACKET`.
-
-As above, but the NCP and the user program exchange packets rather than just a stream of data. The packets have a 4-byte header (no need for the full Chaosnet header at the transport layer).
-
-Setting up the connection is as for `chaos_stream`:
-1. Set up:
-    - `RFC `*rhost* *contact* *args*
-    - `LSN `*contact*
-1. Response:
-    - `RFC `*rhost* *args*
-        - for `LSN`
-	- `ANS `*length*
-        - for RFC for Simple protocol
-	- `OPN Connection to host `%o` opened`
-        - for RFC for Stream protocol
-	- `LOS `*reason*
-	- `CLS `*reason*
-
-After that, when the connection is in the Open state, packets are sent and received with a 4-byte binary header:
-
-| byte 0 | b 1 | b 2 | b 3|
-| --- | --- | --- | --- |
-| opcode | 0 | lenLSB | lenMSB |
-
-followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes.
-
-The user program will never see any RFC, OPN, ANS, CLS, STS, SNS, EOF, MNT, BRD, or RUT packets (so only sees LOS, UNC, DAT, DWD).
-
-The user program can never send any such packets (so only LOS, UNC, DAT, DWD).
-
-The NCP handles flow control, but DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
-
-Implementation should be fairly easy given the flow control is already in place, it's just a new flavor of `conn_to_sock` and `conn_from_sock` handlers (how to read and package input from the socket, and how to present the packets to the socket). The `conn_to_net` just works.

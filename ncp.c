@@ -1225,12 +1225,17 @@ static int
 packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt) 
 {
   u_char *bp = buf;
-  int opc, len = 0;
+  int opc, zero, len = 0;
   while (cnt > 0) {
     opc = bp[0];
-    assert(bp[1] == 0);
+    zero = bp[1];
     len = bp[2];
     len |= bp[3]<<8;
+    if ((opc == 0) || ((opc > CHOP_BRD) && (opc < CHOP_DAT)) || (zero != 0) || (len > CH_PK_MAX_DATALEN)) {
+      if (ncp_debug) printf("NCP socket_to_conn_packet_handler: bad opc %#o, zero nonzero (%d), or len too big (%d)\n", opc, zero, len);
+      user_socket_los(conn,"Bad packet format (%#o %d %d)", opc, zero, len);
+      return -1;
+    }
     if (cnt-4 < len) {
       if (ncp_debug) printf("NCP Packet: read from socket didn't get a full packet (opcode %s len %d have %d)\n", 
 			    ch_opcode_name(opc), len, cnt);
@@ -1476,7 +1481,7 @@ user_socket_los(struct conn *conn, char *fmt, ...)
     data[0] = CHOP_LOS; data[1] = 0;
     data[2] = len & 0xff; data[3] = len >> 8;
     if (write(conn->conn_sock, data, len+4) < 0) {
-      // never mind, at this stage
+      // never mind, at this stage, since we're closing down
       if (ncp_debug) perror("write(user_socket_los)");
     }
   }
@@ -2419,6 +2424,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       set_conn_state(conn, cs->state, CS_CLS_Received, 0);
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
+    // @@@@ add FWD handling
     case CHOP_ANS:
       // let user read the answer, and nothing more
       receive_data_for_conn(ch_opcode(ch), conn, ch);
@@ -2720,31 +2726,37 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
   return cnt;
 }
 
+static int 
+get_ans_bytes_and_send(struct conn *conn, int anslen, u_char *buf, int buflen, int cnt) 
+{
+  if (cnt >= anslen) {
+    // the buffer holds the whole ANS data
+    send_ans_pkt(conn, buf, anslen);
+    return anslen;
+  } else {
+    // read more bytes
+    int ncnt = 0;
+    u_char *bp = buf+cnt;
+    while (cnt < anslen) {
+      ncnt = receive_or_die(conn, bp, buflen-cnt);
+      if (ncnt < 0)
+	return ncnt;
+      cnt += ncnt;
+      bp += ncnt;
+    }
+    // read all the rest, use it
+    send_ans_pkt(conn, buf, anslen);
+    return anslen;
+  }
+}
+
 static int
-get_ans_bytes_and_send(struct conn *conn, int anslen, u_char *buf, int buflen, int cnt)
+get_ans_string_and_send(struct conn *conn, int anslen, u_char *buf, int buflen, int cnt)
 {
   u_char *nl = (u_char *)index((char *)buf, '\n');
   if (nl != NULL) {
     nl++; // skip \n
-    if (cnt-(nl-buf) >= anslen) {
-      // the buffer holds the whole ANS data
-      send_ans_pkt(conn, nl, anslen);
-      return anslen;
-    } else {
-      // read more bytes
-      int ncnt = 0;
-      u_char *bp = buf+cnt;
-      while (cnt-(nl-buf) < anslen) {
-	ncnt = receive_or_die(conn, bp, buflen-cnt);
-	if (ncnt < 0)
-	  return ncnt;
-	cnt += ncnt;
-	bp += ncnt;
-      }
-      // read all the rest, use it
-      send_ans_pkt(conn, nl, anslen);
-      return anslen;
-    }
+    return get_ans_bytes_and_send(conn, anslen, buf, buflen, cnt);
   } else {
     user_socket_los(conn, "No newline after ANS length?");
     set_conn_state(conn, conn->conn_state->state, CS_Inactive, 0);
@@ -2797,15 +2809,8 @@ socket_to_conn_stream_handler(struct conn *conn)
       send_opn_pkt(conn);
       if (dlen > 0) {
 	if (ncp_debug) printf("Adding extra DATa length %d: \"%.8s\"...\n", dlen, nl);
-	if (conn->conn_type == CT_Stream)
-	  // just use the data as is
-	  send_basic_pkt_with_data(conn, CHOP_DAT, (u_char *)nl, dlen);
-	else if (conn->conn_type == CT_Packet) {
-	  // parse the data as below
-	  if (dlen > 4) 
-	    return packet_conn_parse_and_send_bytes(conn, (u_char *)nl, dlen);
-	  else if (ncp_debug) printf("NCP socket_to_conn_stream_handler: got only %d bytes after OPN command, discarding\n", dlen);
-	}
+	// just use the data as is
+	send_basic_pkt_with_data(conn, CHOP_DAT, (u_char *)nl, dlen);
       }
     }
     else if (strncasecmp((char *)buf,"CLS ", 4) == 0) {
@@ -2817,15 +2822,14 @@ socket_to_conn_stream_handler(struct conn *conn)
       // done here
       return 0;
     }
+    // @@@@ add "FWD" handling
     else if  ((strncasecmp((char *)buf,"ANS ", 4) == 0) 
 	      || ((strncasecmp((char *)buf,"ANS", 3) == 0) && ((buf[3] == '\r') || (buf[3] == '\n')))) {
-      // @@@@ this is really a Simple protocol then, maybe switch type even if it sort of ends here anyway?
-      // conn->conn_type = CT_Simple;
       int anslen = 0;
-      if (ncp_debug) printf("Stream cmd \"%s\", switching to Simple\n", buf);
+      if (ncp_debug) printf("Stream cmd \"%s\"\n", buf);
       if (sscanf((char *)&buf[4], "%d", &anslen) == 1) {
 	if ((anslen >= 0) && (anslen <= CH_PK_MAX_DATALEN)) {
-	  if (get_ans_bytes_and_send(conn, anslen, buf, sizeof(buf), cnt) < 0)
+	  if (get_ans_string_and_send(conn, anslen, buf, sizeof(buf), cnt) < 0)
 	    return -1;
 	  else
 	    // finished by sending ANS
@@ -2843,12 +2847,7 @@ socket_to_conn_stream_handler(struct conn *conn)
     }
   }
   else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
-    if (conn->conn_type == CT_Stream) {
-      stream_conn_send_data_chunks(conn, buf, cnt);
-    } else if (conn->conn_type == CT_Packet) {
-      // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD)
-      return packet_conn_parse_and_send_bytes(conn, buf, cnt);
-    }
+    stream_conn_send_data_chunks(conn, buf, cnt);
   }
 #if 1
   // @@@@ shit happens - but debug this!
@@ -2869,6 +2868,103 @@ socket_to_conn_stream_handler(struct conn *conn)
     user_socket_los(conn, "%s", errbuf);
     set_conn_state(conn, cs->state, CS_Inactive, 0);
     return -1;
+  }
+  // success
+  return 1;
+}
+
+static int
+socket_to_conn_packet_handler(struct conn *conn)
+{
+  struct conn_state *cs = conn->conn_state;
+  int cnt;
+  u_char *cname, *buf, sbuf[CH_PK_MAXLEN], pkt[CH_PK_MAXLEN];
+  int buflen = sizeof(sbuf);
+  struct chaos_header *ch = (struct chaos_header *)pkt;
+
+  memset(sbuf, 0, CH_PK_MAXLEN);
+  buf = sbuf;
+
+  cnt = receive_or_die(conn, buf, buflen);
+  if (ncp_debug) printf("socket_to_conn_packet_handler: read %d bytes from %s\n", cnt, conn_sockaddr_path(conn));
+
+  while (cnt > 0) {
+    int opc = buf[0], zero = buf[1];
+    int len = buf[2] | (buf[3]<<8);
+    if ((opc == 0) || ((opc > CHOP_BRD) && (opc < CHOP_DAT)) || (zero != 0) || (len > CH_PK_MAX_DATALEN)) {
+      if (ncp_debug) printf("NCP socket_to_conn_packet_handler: bad opc %#o, zero nonzero (%d), or len too big (%d)\n", opc, zero, len);
+      user_socket_los(conn,"Bad packet format (%#o %d %d)", opc, zero, len);
+      return -1;
+    }
+    if (len+4 > cnt) {
+      if (ncp_debug) printf("NCP Packet: read from socket didn't get a full packet (opcode %s len %d have %d)\n", 
+			    ch_opcode_name(opc), len, cnt);
+      // get some more input, but only what we need
+      memmove(sbuf, buf, cnt);
+      if (ncp_debug) printf("NCP Packet: reading %d more bytes to get a full 4+%d chunk at %p (diff %ld)\n", 
+			    (len+4)-cnt, len, &buf[cnt], &buf[cnt]-buf);
+      cnt += receive_or_die(conn, buf+cnt, (len+4)-cnt);
+    }
+    if (cs->state == CS_Inactive) {
+      // In inactive state, the first thing from the user socket is RFC or LSN
+      if (opc == CHOP_LSN) {
+	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+	memcpy(argbuf, &buf[4], len);
+	argbuf[len] = '\0';
+	cname = parse_contact_name(argbuf);
+	if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
+	add_listener(conn, cname);	// also changes state
+      } else if (opc == CHOP_RFC) {
+	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+	memcpy(argbuf, &buf[4], len);
+	argbuf[len] = '\0';
+	if (ncp_debug) printf("Packet \"RFC %s\"\n", argbuf);
+	initiate_conn_from_rfc_line(conn,argbuf,len);
+      }
+    }
+    else if (cs->state == CS_RFC_Received) {
+      // After receiving RFC, the first thing from the user socket is in "string command" form
+      if (opc == CHOP_OPN) {
+	if (ncp_debug) printf("Packet OPN len %d\n", len);
+	send_opn_pkt(conn);
+      }
+      else if (opc == CHOP_CLS) {
+	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+	memcpy(argbuf, &buf[4], len);
+	argbuf[len] = '\0';
+	if (ncp_debug) printf("Packet cmd \"CLS %s\"\n", argbuf);
+	send_cls_pkt(conn, (char *)argbuf);
+	// done here
+	return 0;
+      }
+      // @@@@ add FWD handling
+      else if (opc == CHOP_ANS) {
+	if (ncp_debug) printf("Packet cmd \"ANS\"\n");
+	if (get_ans_bytes_and_send(conn, len, &buf[4], sizeof(buf)-4, cnt-4) < 0)
+	  return -1;
+	else
+	  // finished by sending ANS
+	  return 0;
+      }
+    }
+    else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
+      // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD)
+      return packet_conn_parse_and_send_bytes(conn, buf, cnt);
+    }
+    else if (cs->state != CS_Inactive) {
+      char errbuf[512];
+      sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, LSN, OPN, CLS, ANS, or wrong state: %s", 
+	      cnt, conn_state_name(conn), ch_opcode_name(buf[0]));
+      fprintf(stderr,"%s\n", errbuf);
+      send_los_pkt(conn,"Local error. We apologize for the incovenience.");
+      // return a LOS to the user: bad request - not RFC or LSN
+      user_socket_los(conn, "%s", errbuf);
+      set_conn_state(conn, cs->state, CS_Inactive, 0);
+      return -1;
+    }
+    // consumed some buffer
+    cnt -= len+4;
+    buf += len+4;
   }
   // success
   return 1;
@@ -2903,11 +2999,15 @@ socket_to_conn_handler(void *arg)
   case CT_Packet:
     while (1) {
       int v;
-      if ((v = socket_to_conn_stream_handler(conn)) == 0) {
-	if (ncp_debug) print_conn("Stream done",conn,1);
+      if (conn->conn_type == CT_Stream)
+	v = socket_to_conn_stream_handler(conn);
+      else
+	v = socket_to_conn_packet_handler(conn);
+      if (v == 0) {
+	if (ncp_debug) print_conn("Conn done",conn,1);
 	finish_stream_conn(conn);
       } else if (v < 0) {
-	if (ncp_debug) print_conn("Stream error",conn,1);
+	if (ncp_debug) print_conn("Conn error",conn,1);
 	if (ncp_debug) printf("%%%%%%%% NCP %p (%s) exiting\n", conn, conn_thread_name(conn));
 	return NULL;
       }
@@ -2926,7 +3026,9 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   u_char *pk = (u_char *)pkt;
   u_char *data = &pk[CHAOS_HEADERSIZE];
   char buf[CH_PK_MAXLEN+256];
-  int i, len = 0;
+  int i, opc, len = 0;
+
+  opc = ch_opcode(pkt);
 
   if (conn->conn_type != CT_Simple) {
     // Update state
@@ -2942,8 +3044,9 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 		cs->pktnum_read_highest, ch_packetno(pkt));
     }
   }
+
   if (((cs->state == CS_Listening) || (cs->state == CS_RFC_Received))
-      && (ch_opcode(pkt) == CHOP_RFC)) {
+      && (opc == CHOP_RFC)) {
 #if CHAOS_DNS
     char fhost[NS_MAXDNAME];
 #else
@@ -2959,40 +3062,29 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     get_packet_string(pkt, (u_char *)args, sizeof(args));
     if (ncp_debug) printf("NCP rfc data: \"%s\"\n", args);
     if ((space = index(args, ' ')) != NULL) 
-      sprintf(buf, "RFC %s%s\r\n", fhost, space);
+      sprintf(buf, "%s%s", fhost, space);
     else
-      sprintf(buf, "RFC %s\r\n", fhost);
+      sprintf(buf, "%s", fhost);
     len = strlen(buf);
-    if (ncp_debug) printf("To socket %s (%d bytes): %s", conn_sockaddr_path(conn), len, buf);
+    if (ncp_debug) printf("To socket %s (%d bytes): RFC %s\n", conn_sockaddr_path(conn), len, buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
   } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_ANS)) {
     trace_conn("Answered", conn);
-    sprintf(buf, "ANS %d\r\n", ch_nbytes(pkt));
-    if (ncp_debug) printf("To socket %s: %s", conn_sockaddr_path(conn), buf);
-    len = strlen(buf);
+    len = ch_nbytes(pkt);
     // might be non-string data
-    ntohs_buf((u_short *)data, (u_short *)&buf[len], ch_nbytes(pkt));
-    len += ch_nbytes(pkt);
+    ntohs_buf((u_short *)data, (u_short *)buf, len);
+    if (ncp_debug) printf("To socket %s: ANS %d\n", conn_sockaddr_path(conn), len);
     set_conn_state(conn, CS_RFC_Sent, CS_Answered, 0);
-  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open)) && (ch_opcode(pkt) == CHOP_OPN)) {
-    // @@@@ don't like this - avoid retransmissions
-    sprintf(buf, "OPN Connection to host %#o opened\r\n", ch_srcaddr(pkt));
-    if (ncp_debug) printf("To socket %s: %s", conn_sockaddr_path(conn), buf);
-    len = strlen(buf);
-  } else if ((ch_opcode(pkt) == CHOP_LOS) || (ch_opcode(pkt) == CHOP_CLS)) {
+  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open))
+	     && (opc == CHOP_OPN)) {
+    if (ncp_debug) printf("To socket %s: OPN", conn_sockaddr_path(conn));
+    len = 0;
+  } else if ((opc == CHOP_LOS) || (opc == CHOP_CLS)) {
     if (ncp_debug) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
 			  conn_state_name(conn), ch_nbytes(pkt));
-    if (conn->conn_type == CT_Stream) {
-      sprintf(buf, "%s ", ch_opcode_name(ch_opcode(pkt)));
-      get_packet_string(pkt, (u_char *)&buf[4], sizeof(buf)-4-3);
-      strcat(buf, "\r\n");
-      len = 4+ch_nbytes(pkt)+2;
-    } else if (conn->conn_type == CT_Packet) {
-      packet_conn_header_from_pkt(conn, pkt, (u_char *)buf);
-      get_packet_string(pkt, (u_char *)&buf[4], sizeof(buf)-4);
-      len = 4+ch_nbytes(pkt);
-    }
-    if (ncp_debug) printf("To socket %s (len %d): %s\n", conn_sockaddr_path(conn), len, (conn->conn_type == CT_Stream) ? buf : "[data]");
+    get_packet_string(pkt, (u_char *)buf, sizeof(buf)-4-3);
+    len = ch_nbytes(pkt);
+    if (ncp_debug) printf("To socket %s (len %d): %.12s...\n", conn_sockaddr_path(conn), len, buf);
     if (ch_opcode(pkt) == CHOP_LOS)
       set_conn_state(conn, cs->state, CS_LOS_Received, 0);
     else if (ch_opcode(pkt) == CHOP_CLS) {
@@ -3002,20 +3094,14 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       }
       set_conn_state(conn, cs->state, CS_CLS_Received, 0);
     }
-  } else if ((ch_opcode(pkt) == CHOP_EOF) && (cs->state == CS_Open)) {
+  } else if ((opc == CHOP_EOF) && (cs->state == CS_Open)) {
     finish_stream_conn(conn);
   } else if (((cs->state == CS_Open) || (cs->state == CS_Finishing))
-	     && (ch_opcode(pkt) >= CHOP_DAT) && (ch_opcode(pkt) < CHOP_DWD)) {
+	     && (opc >= CHOP_DAT) && (opc < CHOP_DWD)) {
     if (ncp_debug) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
 			  ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
-    if (conn->conn_type == CT_Stream) {
-      ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
-      len = ch_nbytes(pkt);
-    } else if (conn->conn_type == CT_Packet) {
-      packet_conn_header_from_pkt(conn, pkt, (u_char *)buf);
-      ntohs_buf((u_short *)data, (u_short *)(&buf[4]), ch_nbytes(pkt));
-      len = ch_nbytes(pkt)+4;
-    }
+    ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
+    len = ch_nbytes(pkt);
     // @@@@ please also handle CHOP_DWD?
   } else {
     fprintf(stderr,"%%%% Bad pkt in conn_to_socket_pkt_handler: pkt %#x opcode %s in state %s, highest %#x\n",
@@ -3025,7 +3111,41 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   }
 
   if (len > 0) {	     // Something to write to the user socket?
-    if (write(conn->conn_sock, buf, len) < 0) {
+    u_char obuf[CH_PK_MAXLEN+128];
+    if (conn->conn_type == CT_Stream) {
+      // add text line, unless data
+      int olen;
+      switch (opc) {
+      case CHOP_ANS:
+	sprintf((char *)obuf,"ANS %d\r\n", len);
+	olen = strlen((char *)obuf);
+	memcpy(&obuf[olen], buf, len);
+	len += olen+2;
+	break;
+      case CHOP_RFC:
+	sprintf((char *)obuf,"RFC %s\r\n", buf);
+	len += 4+2;
+	break;
+      case CHOP_OPN:
+	sprintf((char *)obuf,"OPN Connection to host %#o opened\r\n", ch_srcaddr(pkt));
+	len = strlen((char *)obuf);
+	break;
+      case CHOP_LOS: case CHOP_CLS:
+	sprintf((char *)obuf, "%s ", ch_opcode_name(opc));
+	strncpy((char *)obuf, buf, len);
+	strcpy((char *)&obuf[len+4], "\r\n");
+	len += 4+2;
+	break;
+      default:
+	memcpy(obuf, buf, len);
+      }
+    } else if (conn->conn_type == CT_Packet) {
+      // add 4-byte header
+      packet_conn_header_from_pkt(conn, pkt, (u_char *)obuf);
+      memcpy(&obuf[4], buf, len);
+      len += 4;
+    }
+    if (write(conn->conn_sock, obuf, len) < 0) {
       if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
 	socket_closed_for_conn(conn);
       } else {
