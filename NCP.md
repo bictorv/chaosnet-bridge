@@ -170,7 +170,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
 - [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table).
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need `chaos_seqpacket` though (below).
-- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/) (also needs chaos_seqpacket).
+- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee) (also needs chaos_seqpacket).
 - [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language (also needs chaos_seqpacket).
 
 
@@ -181,15 +181,20 @@ This is a socket of type `SOCK_SEQPACKET`.
 As above, but the NCP and the user program exchange packets rather than just a stream of data. The packets have a 4-byte header (no need for the full Chaosnet header at the transport layer).
 
 Setting up the connection is as for `chaos_stream`:
-1. `RFC `*rhost* *args*
-    - or `LSN `*contact*
+1. Set up:
+    - `RFC `*rhost* *contact* *args*
+    - `LSN `*contact*
 1. Response:
+    - `RFC `*rhost* *args*
+        - for `LSN`
+	- `ANS `*length*
+        - for RFC for Simple protocol
+	- `OPN Connection to host `%o` opened`
+        - for RFC for Stream protocol
 	- `LOS `*reason*
 	- `CLS `*reason*
-	- `ANS `*length*
-	- `OPN Connection to host `%o` opened`
 
-After that, packets are sent and received with a 4-byte binary header:
+After that, when the connection is in the Open state, packets are sent and received with a 4-byte binary header:
 
 | byte 0 | b 1 | b 2 | b 3|
 | --- | --- | --- | --- |
@@ -197,10 +202,10 @@ After that, packets are sent and received with a 4-byte binary header:
 
 followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes.
 
-The user program will never see any STS, SNS, EOF, MNT, BRD, or RUT packets.
+The user program will never see any RFC, OPN, ANS, CLS, STS, SNS, EOF, MNT, BRD, or RUT packets (so only sees LOS, UNC, DAT, DWD).
 
-The user program can never send any such packets, and also no RFC, OPN, or BRD packets.
+The user program can never send any such packets (so only LOS, UNC, DAT, DWD).
 
-The NCP handles flow control, but DAT packets (and other controlled packets) are delivered individually in order to the user program.
+The NCP handles flow control, but DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
 
 Implementation should be fairly easy given the flow control is already in place, it's just a new flavor of `conn_to_sock` and `conn_from_sock` handlers (how to read and package input from the socket, and how to present the packets to the socket). The `conn_to_net` just works.
