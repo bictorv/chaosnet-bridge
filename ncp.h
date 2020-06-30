@@ -31,7 +31,7 @@
 typedef enum conntype {
   CT_Simple,			/* RFC-ANS type */
   CT_Stream,			/* Unstructured stream */
-  // NYI  CT_Binary,			/* Packet-oriented stream */
+  CT_Packet,			/* Packet-oriented stream */
 } conntype_t;
 
 // Conn states
