@@ -87,6 +87,7 @@ static void add_output_pkt(struct conn *c, struct chaos_header *pkt);
 static void socket_closed_for_simple_conn(struct conn *conn);
 static void retransmit_controlled_packets(struct conn *conn);
 static void user_socket_los(struct conn *conn, char *fmt, ...);
+static int receive_or_die(struct conn *conn, u_char *buf, int buflen);
 
 // parse a configuration file line:
 // ncp socketdir /var/run debug on domain ams.chaosnet.net trace on
@@ -1216,32 +1217,66 @@ packet_conn_header_from_pkt(struct conn *conn, struct chaos_header *pkt, u_char 
   out[2] = ch_nbytes(pkt) & 0xff;
   // msb
   out[3] = ch_nbytes(pkt) >> 8;
+  if (ncp_debug) printf("NCP Packet: made header %#o (%s) %d %#x %#x (nbytes %#x)\n", 
+			out[0], ch_opcode_name(out[0]), out[1], out[2], out[3], ch_nbytes(pkt));
 }
 
 static int
 packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt) 
 {
   u_char *bp = buf;
+  int opc, len = 0;
   while (cnt > 0) {
-    int opc = bp[0];
+    opc = bp[0];
     assert(bp[1] == 0);
-    int len = bp[2];
+    len = bp[2];
     len |= bp[3]<<8;
     if (cnt-4 < len) {
-      fprintf(stderr,"NCP: oh dear, socket didn't get a full packet (opcode %s len %d have %d)\n", 
-	      ch_opcode_name(opc), len, cnt);
-      return -1;
+      if (ncp_debug) printf("NCP Packet: read from socket didn't get a full packet (opcode %s len %d have %d)\n", 
+			    ch_opcode_name(opc), len, cnt);
+      // move what we have, so there is space
+      if (ncp_debug) printf("NCP Packet: moving %d bytes from %p to %p (diff %ld)\n", 
+			    cnt, bp, buf, bp-buf);
+      memmove(buf, bp, cnt);
+      bp = buf;
+      // read just what we need
+      if (ncp_debug) printf("NCP Packet: reading %d more bytes to get a full 4+%d chunk at %p (diff %ld)\n", 
+			    (len+4)-cnt, len, &buf[cnt], &buf[cnt]-buf);
+      cnt += receive_or_die(conn, &buf[cnt], (len+4)-cnt);
+      // go back and try parsing it again
+      continue;
     } else {
-      if ((opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) 
+      if ((opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
+	if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
 	send_basic_pkt_with_data(conn, opc, &buf[4], len);
-      else
+      } else
 	user_socket_los(conn,"Bad opcode %s in state %s, only LOS UNC DAT..DWD are OK", 
 			ch_opcode_name(opc), conn_state_name(conn));
     }
     cnt -= (4+len);
+    bp += (4+len);
   }
   return 1;
 }
+
+//// stream conn stuff
+static void 
+stream_conn_send_data_chunks(struct conn *conn, u_char *bp, int cnt) 
+{
+  // Just plain data, pack it up and send it. OK if Open_Sent, just queue the data for output.
+  // Break it up in packet chunks if necessary
+  while (cnt > CH_PK_MAX_DATALEN) {
+    if (ncp_debug) printf("NCP sending max data chunk: %.10s ...\n", bp);
+    send_basic_pkt_with_data(conn, CHOP_DAT, bp, CH_PK_MAX_DATALEN);
+    bp += CH_PK_MAX_DATALEN;
+    cnt -= CH_PK_MAX_DATALEN;
+  }
+  if (cnt > 0) {
+    if (ncp_debug) printf("NCP sending remaining data chunk (%d): %.10s ...\n", cnt, bp);
+    send_basic_pkt_with_data(conn, CHOP_DAT, bp, cnt);
+  }
+}
+
 
 //////////////// shutting things down
 
@@ -1419,7 +1454,6 @@ socket_closed_for_conn(struct conn *conn)
 static void 
 user_socket_los(struct conn *conn, char *fmt, ...)
 {
-  // @@@@ hack CT_Packet here
   u_char data[CH_PK_MAX_DATALEN];
   char *dp;
   va_list args;
@@ -1657,15 +1691,14 @@ ncp_user_server(void *v)
   int simplesock, streamsock;
   fd_set rfd;
   int i, len, sval, maxfd, fd;
-#define NCP_NUMSOCKS 2
-  int fds[NCP_NUMSOCKS];
+  int *fds;
   struct slist { int socktype; char *sockname; conntype_t sockconn; }
   socklist[] = {
 #if USE_CHAOS_SIMPLE
     { SOCK_DGRAM,"chaos_simple", CT_Simple },
 #endif
     { SOCK_STREAM,"chaos_stream", CT_Stream },
-    { SOCK_SEQPACKET, "chaos_packet", CT_Packet },
+    { SOCK_STREAM, "chaos_packet", CT_Packet }, // SOCK_SEQPACKET doesn't seem to be what I really want
     {0, NULL, 0}};
 
 #if __APPLE__
@@ -1678,13 +1711,13 @@ ncp_user_server(void *v)
 
   maxfd = 0;
 
+  for (i = 0; socklist[i].sockname != NULL; i++);
+  fds = malloc(i * sizeof(int));
+  if (fds == NULL) { perror("malloc(fds)"); exit(1); }
+
   for (i = 0; socklist[i].sockname != NULL; i++) {
     fds[i] = make_named_socket(socklist[i].socktype, socklist[i].sockname);
     if (fds[i] > maxfd) maxfd = fds[i];
-  }
-  if (i >= NCP_NUMSOCKS) {
-    fprintf(stderr,"not enough room for sockets - increase NCP_NUMSOCKS to %d\n", i);
-    exit(1);
   }
 
   // accept, select etc
@@ -2683,7 +2716,7 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
 			      conn_thread_name(conn), conn_type_name(conn), conn->conn_sock, sval, cnt);
     socket_closed_for_conn(conn);
     return -1;
-  }
+  } else if (ncp_debug > 1) printf("== receive_or_die read %d bytes (buflen %d)\n", cnt, buflen);
   return cnt;
 }
 
@@ -2811,19 +2844,7 @@ socket_to_conn_stream_handler(struct conn *conn)
   }
   else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
     if (conn->conn_type == CT_Stream) {
-      // Just plain data, pack it up and send it. OK if Open_Sent, just queue the data for output.
-      // Break it up in packet chunks if necessary
-      u_char *bp = buf;
-      while (cnt > CH_PK_MAX_DATALEN) {
-	if (ncp_debug) printf("NCP sending max data chunk: %.10s ...\n", bp);
-	send_basic_pkt_with_data(conn, CHOP_DAT, bp, CH_PK_MAX_DATALEN);
-	bp += CH_PK_MAX_DATALEN;
-	cnt -= CH_PK_MAX_DATALEN;
-      }
-      if (cnt > 0) {
-	if (ncp_debug) printf("NCP sending remaining data chunk (%d): %.10s ...\n", cnt, bp);
-	send_basic_pkt_with_data(conn, CHOP_DAT, bp, cnt);
-      }
+      stream_conn_send_data_chunks(conn, buf, cnt);
     } else if (conn->conn_type == CT_Packet) {
       // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD)
       return packet_conn_parse_and_send_bytes(conn, buf, cnt);
@@ -2833,6 +2854,8 @@ socket_to_conn_stream_handler(struct conn *conn)
   // @@@@ shit happens - but debug this!
   else if ((cnt == 2) && (strncmp((char *)buf,"\r\n",2) == 0)) {
     // ignore
+    fprintf(stderr,"@@@@ NCP shit happened: CRLF read, ignoring\n");
+    print_conn("@@ ", conn, 1);
     ;
   }
 #endif
@@ -2905,7 +2928,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   char buf[CH_PK_MAXLEN+256];
   int i, len = 0;
 
-  if (conn->conn_type == CT_Stream) {
+  if (conn->conn_type != CT_Simple) {
     // Update state
     if (!packet_uncontrolled(pkt)) {
       if (pktnum_less(cs->pktnum_read_highest, ch_packetno(pkt)))
@@ -2951,7 +2974,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     ntohs_buf((u_short *)data, (u_short *)&buf[len], ch_nbytes(pkt));
     len += ch_nbytes(pkt);
     set_conn_state(conn, CS_RFC_Sent, CS_Answered, 0);
-  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_OPN)) {
+  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open)) && (ch_opcode(pkt) == CHOP_OPN)) {
+    // @@@@ don't like this - avoid retransmissions
     sprintf(buf, "OPN Connection to host %#o opened\r\n", ch_srcaddr(pkt));
     if (ncp_debug) printf("To socket %s: %s", conn_sockaddr_path(conn), buf);
     len = strlen(buf);
@@ -2982,6 +3006,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     finish_stream_conn(conn);
   } else if (((cs->state == CS_Open) || (cs->state == CS_Finishing))
 	     && (ch_opcode(pkt) >= CHOP_DAT) && (ch_opcode(pkt) < CHOP_DWD)) {
+    if (ncp_debug) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
+			  ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
     if (conn->conn_type == CT_Stream) {
       ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
       len = ch_nbytes(pkt);
@@ -3068,7 +3094,7 @@ start_conn(struct conn *conn)
     perror("?? pthread_create(conn user write handler)");
     exit(1);
   }
-  if (conn->conn_type == CT_Stream) {
+  if (conn->conn_type != CT_Simple) {
     if (pthread_create(&conn->conn_to_net_thread, NULL, &conn_to_packet_stream_handler, conn) < 0) {
       perror("?? pthread_create(conn_to_packet_stream_handler)");
       exit(1);
