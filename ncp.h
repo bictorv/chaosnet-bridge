@@ -31,7 +31,7 @@
 typedef enum conntype {
   CT_Simple,			/* RFC-ANS type */
   CT_Stream,			/* Unstructured stream */
-  // NYI  CT_Binary,			/* Packet-oriented stream */
+  CT_Packet,			/* Packet-oriented stream */
 } conntype_t;
 
 // Conn states
@@ -89,6 +89,7 @@ struct conn {
   pthread_mutex_t conn_lock;
   time_t conn_created;
   u_int rfc_timeout;		    // seconds to wait for RFC response
+  int follow_forward;		    // whether to follow FWD transparently
   int conn_sock; // unix socket
   struct sockaddr_un conn_sockaddr; // to sendto
   struct conn_state *conn_state;
