@@ -102,6 +102,11 @@ def name_server():
                 args = data[4:].rstrip().split(b' ')
                 if debug:
                     print(datetime.now(),'got RFC from {!s} with args {!r}'.format(args[0],args[1:]))
+                # Play with this if you like
+                if False and debug:
+                    sock.sendall(packet_header(Opcode.FWD, 2)+bytes([0o3143 & 0xff, int(0o3143/256)]))
+                    sock.close()
+                    return
                 sock.sendall(packet_header(Opcode.OPN, 0))
                 t = threading.Thread(target=give_finger_response,args=(sock, args[1:])).start()
             else:

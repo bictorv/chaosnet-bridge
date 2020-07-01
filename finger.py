@@ -59,6 +59,8 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
     if timeout is not None:
         d = bytes(("[timeout={:d}] {} {}"+" {}"*len(args)).format(timeout,host,contact,*args),"ascii")
     else:
+        # Play with this option.
+        # d = bytes(("[follow_forward=yes] {} {}"+" {}"*len(args)).format(host,contact,*args),"ascii")
         d = bytes(("{} {}"+" {}"*len(args)).format(host,contact,*args),"ascii")
     if packetp:
         if debug:
@@ -72,13 +74,17 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
         # Receive max 488 data bytes, 16 to fit "ANS 488\r\n" (so 9 would be enough)
         data = sock.recv(488+16)
         if packetp:
+            dlen = data[2] + data[3]*256
             if data[0] == Opcode.ANS:
-                dlen = data[2] + data[3]*256
                 return data[4:dlen+4]
             elif data[0] == Opcode.OPN:
                 return sock
             elif timeout is not None and data[0] == Opcode.LOS and data[4:].startswith(b"Connection timed out"):
                 return None
+            elif data[0] == Opcode.LOS or data[0] == Opcode.CLS:
+                print("{} {}".format(Opcode(data[0]).name, data[4:dlen+4]))
+            elif data[0] == Opcode.FWD:
+                print("Please connect to {:o} instead".format(data[4] + data[5]*256))
             else:
                 print("Unexpected response {} len {} ({})".format(Opcode(data[0]).name, data[2] + data[3]*256, data[4:]))
         else:
@@ -90,10 +96,12 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
                 return data[dstart:dstart+dlen]
             elif resp[0] == b"OPN":
                 return sock
-            elif timeout is not None and resp[0] == "LOS" and data[eol+1:].startswith(b"Connection timed out"):
+            elif timeout is not None and resp[0] == b"LOS" and data[eol+1:].startswith(b"Connection timed out"):
                 return None
+            elif resp[0] == b"LOS" or resp[0] == b"CLS":
+                print("{}".format(str(data[4:],"ascii").rstrip('\r\n ')))
             else:
-                print("Unexpected response {} len {}".format(resp[0],len(data)))
+                print("Unexpected response {} len {} ({})".format(resp[0],len(data), data))
     except socket.error:
         return None
 

@@ -14,6 +14,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128. (ITS uses only 5, and a max of 64, while CADR and Lambda Lisp machine systems use 013, and max 128. Symbolics uses a max of 50.)|
 |`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 1000 ms.|
 |`finishwait`| specifies the time to wait for a half-open conn (OPN Sent) to become Open (thus allowing final retransmissions) while finishing it. Default 5000 ms. (You probably don't want to mess with this.)|
+|`follow_forward`| specifies whether FWD responses should be transparently followed, i.e., result in the RFC being resent to the target host. Default `no`, can also be specified as an option to individual RFCs (see below).|
 |`socketdir`| specifies the directory where to put the socket files, `chaos_stream` and `chaos_seqpacket` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
@@ -73,8 +74,9 @@ If the user program acts as a client, it opens the socket and writes
 The NCP sends a corresponding RFC packet to the destination host.
 
 #### Options:
-So far there is only one:
+So far there are two:
 - `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a time out, a `LOS Connection timed out` response is given to the user program.
+- `follow_forward`=*yes/no* to specify whether a FWD response packet should be transparently followed, i.e., result in the RFC being redirected to the target host.
 
 #### Examples:
 - `RFC time.chaosnet.net TIME`
@@ -124,17 +126,19 @@ to the user program, where *rhost* is the remote host (name or octal address), a
 
 The user program is then supposed to handle the RFC and respond to it by either an OPN, ANS or CLS, as follows:
 
-`OPN` (or `OPN `*whatever*)
+#### `OPN` (or `OPN `*whatever*)
 causes the NCP to send an OPN packet to the remote host, and when it reponds with an STS packet, the connection is established as above.
 
-`CLS `*reason*
+#### `CLS `*reason*
 where *reason* is a single line of text, which results in the NCP sending a corresponding CLS packet to the remote host, and the connection is then closed - including the user socket.
 
-`ANS `*len*
+#### `ANS `*len*
 *data*
 
 where *len* is the length in bytes (max 488) of the following *data* (which may include any bytes). This results in the NCP sending an ANS packet to the remote host, with the supplied data, and then closing the socket.
 
+#### `FWD `*addr*
+where *addr* is an octal address, results in a FWD packet to the remote host, indicating it should instead send its RFC to that address.
 
 To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
 
@@ -172,13 +176,18 @@ Setting up the connection is similar to `chaos_stream`:
 
 When the Chaosnet connection is  closed by the other end, the user socket is also closed, and vice versa, so only use CLS as negative response to RFC.
 
-The user program will never see any STS, SNS, MNT, BRD, or RUT packets (so only sees RFC, OPN, EOF, DAT, DWD, CLS, LOS, UNC).
+The user program will never see any STS, SNS, MNT, BRD, or RUT packets (so only sees RFC, OPN, EOF, DAT, DWD, CLS, LOS, FWD, UNC).
 
-The user program can never send any such packets (so only LSN, RFC, OPN, EOF, DAT, DWD, CLS, LOS, UNC).
+The user program can never send any such packets (so only LSN, RFC, OPN, EOF, DAT, DWD, CLS, LOS, FWD, UNC).
 
 The NCP handles duplicates and flow control, and DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
 
 By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
+
+#### NOTE
+The data part of `RFC` and `FWD` packets are non-standard:
+- for RFC, it includes the remote host and (optional) options (see above).
+- for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
 
 # Internals
 
@@ -201,10 +210,6 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 
 ### Internals:
 - [ ] Add a bit of statistics counters for conns
-- [ ] Implement FWD (redirect the connection invisibly? See `RECEIVE-FWD` in Lambda code. Let it be configurable both per-NCP and per-conn.).
-	- change `conn_rhost` for conn, and `ch_destaddr` for all pkts on queues (should only be the one RFC there).
-	- for non-automatic, forward the FWD to the user socket
-	- also accept "FWD" and `CHOP_FWD` from user socket, in `RFC_Sent` state
 - [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
 - [ ] Implement broadcast (both address-zero and BRD).
 
@@ -213,8 +218,8 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
 - [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table).
-- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Would need `chaos_seqpacket` though (below).
-- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee) (also needs chaos_seqpacket).
-- [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language (also needs chaos_seqpacket).
+- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-)
+- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee).
+- [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.
 
 

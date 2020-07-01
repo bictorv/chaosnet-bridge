@@ -72,6 +72,8 @@ static int default_window_size = DEFAULT_WINSIZE;
 static int eof_wait_timeout = EOF_WAIT_TIMEOUT;
 // finish wait timeout
 static int finish_wait_timeout = FINISH_WAIT_TIMEOUT;
+// transparently follow FWD
+static int forward_transparently = 0;
 // debug/trace
 static int ncp_debug = 0;
 static int ncp_trace = 0;
@@ -162,6 +164,16 @@ parse_ncp_config_line()
       if (sscanf(tok, "%i", &val) != 1) { fprintf(stderr,"ncp: bad window value specified: %s\n", tok); return -1; }
       if ((val < 1) || (val > MAX_WINSIZE)) { fprintf(stderr,"ncp: bad window value specified: %d\n", val); return -1; }
       else default_window_size = val;
+    } else if (strcmp(tok, "follow_forward") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0)) {
+	forward_transparently = 1;
+      } else if ((strcasecmp(tok,"off") == 0) || (strcasecmp(tok,"no") == 0)) {
+	forward_transparently = 0;
+      } else {
+	fprintf(stderr,"ncp: bad 'follow_forward' arg %s specified\n", tok);
+	return -1;
+      }
     } else if (strcmp(tok, "debug") == 0) {
       tok = strtok(NULL, " \t\r\n");
       if ((tok == NULL) || (strcasecmp(tok,"on") == 0) || (strcasecmp(tok,"yes") == 0)) {
@@ -212,11 +224,12 @@ parse_ncp_config_line()
   }
 #endif
   if (verbose || ncp_debug) {
-    printf("NCP is %s. Socket directory \"%s\", retrans %d, window %d, eofwait %d, finishwait %d, debug %d %s, trace %d %s\n", 
+    printf("NCP is %s. Socket directory \"%s\", retrans %d, window %d, eofwait %d, finishwait %d, follow_forward %s, debug %d %s, trace %d %s\n", 
 	   ncp_enabled ? "enabled" : "disabled",
 	   chaos_socket_directory, 
 	   default_retransmission_interval, default_window_size,
 	   eof_wait_timeout, finish_wait_timeout,
+	   forward_transparently > 0 ? "on" : "off",
 	   ncp_debug, (ncp_debug > 0) ? "on" : "off",
 	   ncp_trace, (ncp_trace > 0) ? "on" : "off");
 #if CHAOS_DNS
@@ -437,13 +450,14 @@ static void
 print_conn(char *leader, struct conn *conn, int alsostate)
 {
   time_t now = time(NULL);
-  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld t/o %d sock %d %s\n",
+  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld t/o %d ff %d sock %d %s\n",
 	 leader,
 	 conn, conn_type_name(conn),
 	 conn->conn_contact,
 	 conn->conn_rhost, conn->conn_ridx,
 	 conn->conn_lhost, conn->conn_lidx,
 	 conn_state_name(conn), now - conn->conn_created, conn->rfc_timeout,
+	 conn->follow_forward,
 	 conn->conn_sock, conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
@@ -576,6 +590,7 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
     memcpy(&conn->conn_sockaddr, sa, (sa_len > sizeof(conn->conn_sockaddr) ? sizeof(conn->conn_sockaddr) : sa_len));
   conn->conn_state = cs;
   conn->retransmission_interval = default_retransmission_interval;
+  conn->follow_forward = forward_transparently;
   conn->rfc_timeout = CONNECTION_TIMEOUT;
   conn->conn_created = time(NULL);
 
@@ -753,7 +768,7 @@ find_existing_conn(struct chaos_header *ch)
     struct conn *c = cl->conn_conn;
     if ((c->conn_rhost == ch_srcaddr(ch)) &&
 	((c->conn_ridx == ch_srcindex(ch)) || // properly existing conn
-	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS))
+	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || (ch_opcode(ch) == CHOP_FWD))
 	  // half-existing conn where we don't know the remote index yet
 	  && (c->conn_ridx == 0))
 	 // uncontrolled pkt doesn't necessarily have a non-zero index, e.g. LOS for non-existing conn
@@ -1063,6 +1078,11 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
     case CHOP_DAT: case CHOP_RFC: case CHOP_CLS: case CHOP_LOS: case CHOP_ANS:
       htons_buf((u_short *)data, (u_short *)datao, len);
       break;
+    case CHOP_FWD:
+      // yes, this is cheating
+      set_ch_ackno(ch, data[0] | (data[1] << 8));
+      len = 0;
+      break;
     default:
       memcpy(datao, data, len);
     }
@@ -1176,6 +1196,19 @@ send_ans_pkt(struct conn *c, u_char *ans, int len)
 {
   send_basic_pkt_with_data(c, CHOP_ANS, ans, len);
   // ANS is uncontrolled, so just terminate
+  socket_closed_for_simple_conn(c);
+}
+
+static void
+send_fwd_pkt(struct conn *c, u_short addr)
+{
+  // this is abusing the args to send_basic_pkt_with_data...
+  u_char buf[2];
+  buf[0] = addr & 0xff;
+  buf[1] = addr >> 8;
+  if (ncp_debug) printf("NCP sending FWD to %#o\n", addr);
+  send_basic_pkt_with_data(c, CHOP_FWD, buf, 2);
+  // FWD is uncontrolled, so just terminate
   socket_closed_for_simple_conn(c);
 }
 
@@ -1514,6 +1547,50 @@ user_socket_los(struct conn *conn, char *fmt, ...)
 }
 
 //////////////// parsing rfcs
+
+#if CHAOS_DNS
+static u_short 
+dns_closest_address_or_los(struct conn *conn, u_char *hname) 
+{
+  u_char dname[NS_MAXDNAME];
+  u_short haddrs[4];
+  int naddrs = 0;
+    
+  if (strlen((char *)hname) >= sizeof(dname)) {
+    user_socket_los(conn, "Too long hostname: %lu", strlen((char *)hname));
+    return 0;
+  }
+  // chaos_domains is a list, iterate until match
+  strcpy((char *)dname, (char *)hname);
+  int hlen = strlen((char *)hname);
+  char *eoh = (char *)dname+hlen;
+  if (index((char *)hname, '.') == NULL) {
+    int i;
+    // add a period
+    *eoh++ = '.';
+    for (i = 0; i < number_of_chaos_domains; i++) {
+      // make sure it's terminated
+      dname[sizeof(dname)-1] = '\0';
+      strncpy(eoh, chaos_domains[i], sizeof(dname)-hlen-1-1);
+      if (ncp_debug) printf("NCP DNS trying \"%s\"\n", dname);
+      if ((naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4)) > 0) {
+	if (ncp_debug) printf("NCP DNS found %d addrs\n", naddrs);
+	break;
+      }
+    }
+  } else 
+    naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4);
+  if (naddrs <= 0) {
+    user_socket_los(conn, "No addrs of name \"%s\" found", hname);
+    return 0;
+  } else {
+    // Pick one which is closest, if one is
+    return find_closest_addr((u_short *)&haddrs, naddrs);
+  }
+}
+#endif // CHAOS_DNS
+
+
 // Read contact name from in, return a malloc()ed null-terminated copy
 u_char *
 parse_contact_name(u_char *in)
@@ -1589,6 +1666,18 @@ handle_option(struct conn *c, char *optname, char *val)
       return;
     }
   // @@@@ add more options as needed, maybe windowsize, retrans, etc?
+  } else if (strcasecmp(optname, "follow_forward") == 0) {
+    if ((strlen(val) == 0) || (strcasecmp(val,"yes") == 0) || (strcasecmp(val,"on") == 0)) {
+      if (ncp_debug) printf(" setting 1\n");
+      c->follow_forward = 1;
+    } else if ((strcasecmp(val,"off") == 0) || (strcasecmp(val,"no") == 0)) {
+      if (ncp_debug) printf(" setting 0\n");
+      c->follow_forward = 0;
+    } else {
+      if (ncp_debug) printf("Bad follow_forward value \"%s\"\n", val);
+      user_socket_los(c, "Bad follow_forward value \"%s\" in RFC options", val);
+      return;
+    }
   } else {
     if (ncp_debug) printf(" unknown option, LOSing\n");
     user_socket_los(c, "Unknown option \"%s\" in RFC line", optname);
@@ -1647,41 +1736,7 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
 
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || (haddr <= 0x100) || (haddr > 0xfe00) || ((haddr & 0xff) == 0)) {
 #if CHAOS_DNS
-    u_char dname[NS_MAXDNAME];
-    u_short haddrs[4];
-    int naddrs = 0;
-    
-    if (strlen((char *)hname) >= sizeof(dname)) {
-      user_socket_los(conn, "Too long hostname in RFC line: %lu", strlen((char *)hname));
-      return;
-    }
-    // chaos_domains is a list, iterate until match
-    strcpy((char *)dname, (char *)hname);
-    int hlen = strlen((char *)hname);
-    char *eoh = (char *)dname+hlen;
-    if (index((char *)hname, '.') == NULL) {
-      int i;
-      // add a period
-      *eoh++ = '.';
-      for (i = 0; i < number_of_chaos_domains; i++) {
-	// make sure it's terminated
-	dname[sizeof(dname)-1] = '\0';
-	strncpy(eoh, chaos_domains[i], sizeof(dname)-hlen-1-1);
-	if (ncp_debug) printf("NCP DNS trying \"%s\"\n", dname);
-	if ((naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4)) > 0) {
-	  if (ncp_debug) printf("NCP DNS found %d addrs\n", naddrs);
-	  break;
-	}
-      }
-    } else 
-      naddrs = dns_addrs_of_name(dname, (u_short *)&haddrs, 4);
-    if (naddrs <= 0) {
-      user_socket_los(conn, "No addrs of name \"%s\" found", hname);
-      return;
-    } else {
-      // Pick one which is closest, if one is
-      haddr = find_closest_addr((u_short *)&haddrs, naddrs);
-    }
+    haddr = dns_closest_address_or_los(conn, hname);
 #else
     // return a LOS to the user: bad host name '%s'
     user_socket_los(conn, "Bad host name \"%s\"", hname);
@@ -1776,6 +1831,29 @@ ncp_user_server(void *v)
     } else
       fprintf(stderr,"select: no FD_ISSET\n");
   }
+}
+
+static void
+forward_conn_transparently(struct conn *conn, u_short fw) 
+{
+  struct conn_state *cs = conn->conn_state;
+  PTLOCKN(conn->conn_lock,"conn_lock");
+  if (ncp_debug) printf("NCP transparent FWD to %#o\n", fw);
+  PTLOCKN(cs->send_mutex,"send_mutex");
+  struct pkt_elem *pk;
+  for (pk = pkqueue_first_elem(cs->send_pkts); pk != NULL; pk = pkqueue_next_elem(pk)) {
+    struct chaos_header *p = pkqueue_elem_pkt(pk);
+    if (ch_destaddr(p) == conn->conn_rhost) {
+      set_ch_destaddr(p,fw);
+    } else if (ncp_debug) 
+      printf("NCP FWD to %#x found unexpected destaddr %#x expected %#x\n",
+	     fw, ch_destaddr(p), conn->conn_rhost);
+  }
+  PTUNLOCKN(cs->send_mutex, "send_mutex");
+  // note: after this, any retransmissions of the FWD are discarded
+  // since they no longer match this conn.
+  conn->conn_rhost = fw;
+  PTUNLOCKN(conn->conn_lock,"conn_lock");
 }
 
 static void
@@ -2243,43 +2321,6 @@ conn_to_packet_stream_handler(void *v)
 //////////////// packet-to-conn network-to-conn
 // Gets packets from the network and passes them to the conn
 
-#if 0
-static void
-packet_to_conn_simple_handler(struct conn *conn, struct chaos_header *ch)
-{
-  struct conn_state *cs = conn->conn_state;
-
-  cs->time_last_received = time(NULL);
-
-  // for simple conns, this is quite simple
-  fprintf(stderr,"NYI packet_to_conn_simple_handler not really tested.\n");
-  exit(1);
-
-  if ((cs->state == CS_Listening) && (ch_opcode(ch) == CHOP_RFC)) {
-    // someone wants an answer
-    set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
-    add_input_pkt(conn, ch);
-  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(ch) == CHOP_ANS)) {
-    // this is the answer we wanted
-    set_conn_state(conn, CS_RFC_Sent, CS_Answered, 0);
-    add_input_pkt(conn, ch);
-  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(ch) == CHOP_CLS)) {
-    set_conn_state(conn, CS_RFC_Sent, CS_CLS_Received, 0);
-    add_input_pkt(conn, ch);
-  } else if (ch_opcode(ch) == CHOP_LOS) {
-    set_conn_state(conn, cs->state, CS_LOS_Received, 0);
-    add_input_pkt(conn, ch);
-  } else {
-    // garbage, ignore, complain, log it
-    fprintf(stderr,"%%%% Bad pkt in packet_to_conn_simple_handler: opcode %d (%s)\n", ch_opcode(ch), ch_opcode_name(ch_opcode(ch)));
-  }
-}
-#endif
-
-// For streams, it's more complex.
-// Data for stream has arrived from network (might be DAT, ANS, CLS, UNC, EOF)
-// Check window, maybe send an STS if it's full, store data in read_pkts or received_pkts_ooo
-// EOF: no data, needs special treatment (see 4.4 end-of-data, but this isn't really what happens)
 static void 
 receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 {
@@ -2298,6 +2339,10 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     if (ncp_debug) printf("Receive %s pkt (%#x)\n", ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt));
     add_input_pkt(conn, pkt);
     return;
+  }
+  if (opcode == CHOP_FWD) {
+    if (ncp_debug) printf("Receive %s pkt (%#x)\n", ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt));
+    add_input_pkt(conn, pkt);
   }
   if ((cs->read_pkts_controlled + cs->received_pkts_ooo_width) < cs->local_winsize) {
     // it fits in the window
@@ -2368,13 +2413,13 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     return;
   }
 
-  if ((ch_ackno(ch) != 0) && (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))) {
+  if ((ch_ackno(ch) != 0) && (ch_opcode(ch) != CHOP_FWD) && (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))) {
     // we got an ack update
     cs->pktnum_sent_acked = ch_ackno(ch);
     // clear out acked pkts from send_pkts
     discard_received_pkts_from_send_list(conn, ch_ackno(ch));
   }
-  if (cs->time_last_received == 0) {
+  if ((cs->time_last_received == 0) && (ch_opcode(ch) != CHOP_FWD)) {
     // if this is the first, make sure we realize we haven't already received it
     // mmm, but if pkts arrive out-of-order? the first for a conn should always be RFC or OPN.
     cs->pktnum_received_highest = pktnum_1minus(ch_packetno(ch));
@@ -2444,7 +2489,12 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       set_conn_state(conn, cs->state, CS_CLS_Received, 0);
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
-    // @@@@ add FWD handling
+    case CHOP_FWD:
+      if (conn->follow_forward)
+	forward_conn_transparently(conn, ch_ackno(ch));
+      else 
+	receive_data_for_conn(ch_opcode(ch), conn, ch);
+      break;
     case CHOP_ANS:
       // let user read the answer, and nothing more
       receive_data_for_conn(ch_opcode(ch), conn, ch);
@@ -2651,62 +2701,6 @@ packet_to_conn_handler(u_char *pkt, int len)
 
 //////////////// socket-to-conn
 
-#if 0 ////////////////
-static void
-socket_to_conn_simple_handler(struct conn *conn)
-{
-  int sock = conn->conn_sock;
-  int cnt, sval;
-  u_char *cname, buf[CH_PK_MAXLEN];
-  fd_set fds;
-
-  fprintf(stderr, "NYI socket_to_conn_simple_handler not really tested.\n");
-  exit(1);
-
-  memset(buf, 0, CH_PK_MAXLEN);
-
-  if ((cnt = recv(sock, (u_char *)&buf, sizeof(buf), 0)) < 0) {
-    if ((errno == EBADF) || (errno == ECONNRESET) || (errno == ETIMEDOUT)) {
-      socket_closed_for_simple_conn(conn);
-    } else {
-      perror("?? recv(socket_to_conn_simple_handler)");
-      exit(1);
-    }
-  }
-  if ((strncasecmp((char *)buf,"LSN ", 4) == 0) && (conn->conn_state->state == CS_Inactive)) {
-    cname = parse_contact_name(&buf[4]);
-    if (ncp_debug) printf("Simple \"LSN %s\", adding listener\n", cname);
-    add_listener(conn, cname);	// also changes state
-  } else if ((strncasecmp((char *)buf,"RFC ", 4) == 0) && (conn->conn_state->state == CS_Inactive)) {
-    // create conn and send off an RFC pkt
-    if (ncp_debug) printf("Simple \"%s\"\n", buf);
-    initiate_conn_from_rfc_line(conn,buf,cnt);
-  } else if ((strncasecmp((char *)buf, "ANS ", 4) == 0) && (conn->conn_state->state == CS_RFC_Received)) {
-    int len = 0;
-    u_char *data;
-    if ((sscanf((char *)&buf[4],"%d", &len) == 1) && (len > 0)) {
-      if (ncp_debug) printf("Simple ANS %d\n", len);
-      data = (u_char *)index((char *)&buf[4], '\n');
-      if ((data != NULL) && (len + (data-&buf[0]) <= cnt)) {
-	data++; // skip newline
-	send_ans_pkt(conn, data, len);
-      } else {
-	// @@@@ return a LOS: bad length
-	if (ncp_debug) printf("Simple ANS: bad length %d cnt %d\n", len, cnt);
-      }
-    } else {
-      // @@@@ return a LOS: bad length
-      if (ncp_debug) printf("Simple ANS: bad length \"%s\"\n", &buf[4]);
-    }
-  } else {
-    // @@@@ return a LOS to the user: bad request - not RFC or LSN
-    fprintf(stderr,"Bad request len %d from simple user in state %s: not RFC, LSN or ANS: %s\n", 
-	    cnt, conn_state_name(conn), buf);
-    set_conn_state(conn, conn->conn_state->state, CS_Inactive, 0);
-  }
-}
-#endif //////////////// 0
-
 static int 
 receive_or_die(struct conn *conn, u_char *buf, int buflen) 
 {
@@ -2847,7 +2841,24 @@ socket_to_conn_stream_handler(struct conn *conn)
       // done here
       return 0;
     }
-    // @@@@ add "FWD" handling
+    else if (strncasecmp((char *)buf,"FWD ", 4) == 0) {
+      u_short haddr;
+      char *eol = index((char *)&buf[4],'\r');
+      if (eol == NULL) eol = index((char *)&buf[4], '\n');
+      if (eol != NULL) *eol = '\0';
+      if (ncp_debug) printf("Stream cmd \"%s\"\n", buf);
+      if ((sscanf((char *)&buf[4],"%ho", &haddr) != 1) || (haddr <= 0x100) || (haddr > 0xfe00) || ((haddr & 0xff) == 0)) {
+#if CHAOS_DNS
+	haddr = dns_closest_address_or_los(conn, &buf[4]);
+#else
+	// return a LOS to the user: bad host name '%s'
+	user_socket_los(conn, "Bad host name \"%s\"", hname);
+	return;
+#endif
+      }
+      send_fwd_pkt(conn, haddr);
+      return 0;
+    }
     else if  ((strncasecmp((char *)buf,"ANS ", 4) == 0) 
 	      || ((strncasecmp((char *)buf,"ANS", 3) == 0) && ((buf[3] == '\r') || (buf[3] == '\n')))) {
       int anslen = 0;
@@ -2962,7 +2973,17 @@ socket_to_conn_packet_handler(struct conn *conn)
 	// done here
 	return 0;
       }
-      // @@@@ add FWD handling
+      else if (opc == CHOP_FWD) {
+	if (len == 2) {
+	  u_short haddr = buf[4] | (buf[5]<<8);
+	  send_fwd_pkt(conn, haddr);
+	  // done
+	  return 0;
+	} else {
+	  user_socket_los(conn, "Bad FWD length %d, expected 2", len);
+	  return -1;
+	}
+      }
       else if (opc == CHOP_ANS) {
 	if (ncp_debug) printf("Packet cmd \"ANS\"\n");
 	if (get_ans_bytes_and_send(conn, len, &buf[4], sizeof(buf)-4, cnt-4) < 0)
@@ -3008,17 +3029,6 @@ socket_to_conn_handler(void *arg)
     //  use socket_to_conn_simple_handler. If ANS/LOS/CLS, close and cancel/exit thread, if LSN/RFC continue.
     fprintf(stderr,"%%%% About to call socket_to_conn_simple_handler which isn't implemented\n");
     abort();
-#if 0
-    while (1) {
-      socket_to_conn_simple_handler(conn);
-      if ((cs->state == CS_Answered) || (cs->state == CS_LOS_Received) || (cs->state == CS_CLS_Received)) {
-	// our work is done
-	if (ncp_debug) print_conn("Simple done",conn,0);
-	// pthread_exit(NULL);
-	return NULL;
-      }
-    }
-#endif
     break;
   case CT_Stream:
   case CT_Packet:
@@ -3060,7 +3070,6 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       memcpy(&obuf[olen], buf, len);
       len += olen+2;
       break;
-    case CHOP_RFC:
       sprintf((char *)obuf,"RFC %s\r\n", buf);
       len += 4+2;
       break;
@@ -3070,9 +3079,23 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       break;
     case CHOP_LOS: case CHOP_CLS:
       sprintf((char *)obuf, "%s ", ch_opcode_name(opc));
-      strncpy((char *)obuf, (char *)buf, len);
+      strncpy((char *)&obuf[4], (char *)buf, len);
       strcpy((char *)&obuf[len+4], "\r\n");
       len += 4+2;
+      break;
+    case CHOP_FWD: {
+#if CHAOS_DNS
+      char fhost[NS_MAXDNAME];
+#else
+      char fhost[32];
+#endif
+#if CHAOS_DNS
+      if (dns_name_of_addr(ch_ackno(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
+#endif
+	sprintf((char *)fhost, "%#o", ch_ackno(pkt));
+      sprintf((char *)obuf, "FWD %s", fhost);
+      len = strlen((char *)obuf);
+    }
       break;
     default:
       memcpy(obuf, buf, len);
@@ -3149,6 +3172,11 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     ntohs_buf((u_short *)data, (u_short *)buf, len);
     if (ncp_debug) printf("To socket %s (%d bytes): [ANS]\n", conn_sockaddr_path(conn), len);
     set_conn_state(conn, CS_RFC_Sent, CS_Answered, 0);
+  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_FWD)) {
+    trace_conn("Forwarded", conn);
+    buf[0] = ch_ackno(pkt) & 0xff;
+    buf[1] = ch_ackno(pkt) >> 8;
+    len = 2;
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
     if (ncp_debug) printf("To socket %s: [OPN]", conn_sockaddr_path(conn));
