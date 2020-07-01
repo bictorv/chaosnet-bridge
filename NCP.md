@@ -21,7 +21,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/Chaosnet/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) to try a simple stream protocol, and [an example server program](named.py).
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/Chaosnet/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py).
 
 Example:
 ```
@@ -57,7 +57,7 @@ BV     @  Bjorn Victor           Last logout 06/02/20 21:50:32  No plan.
 
 This is a socket of type `SOCK_STREAM`.
 
-This socket is for "stream protocols" (see Section 4.1 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can also be used for Simple protocols (similar to UDP).
+This socket is for "stream protocols" (see [Section 4.1 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can also be used for Simple protocols (similar to UDP).
 
 ### Client opening
 
@@ -106,7 +106,7 @@ In the case of OPN, the NCP sets up a stream connection , handles flow control e
 
 Writes from the user program are packaged into DAT packets which are sent to the remote host (when the window allows), and DAT packets from the remote host are written to the user program. No character translation is done in the NCP, so the client needs to handle e.g. translation between "ascii newline" (012) and "lispm newline" (0212).
 
-When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in Section 4.4 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData), see below).
+When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in [Section 4.4 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData), see below).
 
 When the NCP receives a CLS, the user socket is closed. When the NCP receives an EOF, it is immediately acked.
 
@@ -169,6 +169,8 @@ Setting up the connection is similar to `chaos_stream`:
 	- receive `OPN` without data
         - as response to RFC for Stream protocol
 	- receive `LOS` or `CLS` with data being *reason*
+1. If you received an `RFC`:
+	- send an `OPN` (without data) or an `ANS` (with data)
 1. If you sent or received an `OPN`:
 	- send and receive `DAT`, `DWD`, `UNC` packets
 1. To be sure all data is acked before closing (for non-Simple conns)
@@ -202,7 +204,7 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet) in Chaosnet) is not even tried, but should be tested (using `chaos_seqpacket`).
+The foreign protocol type (see [Section 6 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
@@ -214,12 +216,10 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement broadcast (both address-zero and BRD).
 
 ### Applications:
-- [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option)
+- [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
 - [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
-- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table).
-- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-)
-- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee).
-- [ ] Instead, implement a new FILE (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.
-
-
+- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`.
+- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
+- [ ] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  Same goes for this.
+- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs seqpacket.
