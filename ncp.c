@@ -46,8 +46,8 @@
 #include <resolv.h>
 #endif
 
-// ms to wait for ack of EOF
-#define EOF_WAIT_TIMEOUT 1000
+// ms to wait for ack of final EOF
+#define EOF_WAIT_TIMEOUT (3*DEFAULT_RETRANSMISSION_INTERVAL)
 // ms to wait for conn to become Open from RFC_Received before closing it down
 #define FINISH_WAIT_TIMEOUT 5000
 
@@ -1104,6 +1104,8 @@ send_sns_pkt(struct conn *c)
 static int
 send_eof_pkt(struct conn *c)
 {
+  if (ncp_debug)
+    print_conn("Sending EOF for", c, 1);
   return send_basic_pkt(c, CHOP_EOF);
 }
 
@@ -1205,20 +1207,20 @@ send_cls_pkt(struct conn *c, char *msg)
 //// packet conn stuff
 
 static void
-packet_conn_header_from_pkt(struct conn *conn, struct chaos_header *pkt, u_char *out)
+packet_conn_header_from_pkt(struct conn *conn, int opc, u_char *out, int len)
 {
   if (conn->conn_type != CT_Packet) {
     fprintf(stderr,"packet_conn_header_from_pkt called with bad conn %p type %s\n", conn, conn_type_name(conn));
     abort();
   }
-  out[0] = ch_opcode(pkt);
+  out[0] = opc;
   out[1] = 0;
   // lsb
-  out[2] = ch_nbytes(pkt) & 0xff;
+  out[2] = len & 0xff;
   // msb
-  out[3] = ch_nbytes(pkt) >> 8;
+  out[3] = len >> 8;
   if (ncp_debug) printf("NCP Packet: made header %#o (%s) %d %#x %#x (nbytes %#x)\n", 
-			out[0], ch_opcode_name(out[0]), out[1], out[2], out[3], ch_nbytes(pkt));
+			out[0], ch_opcode_name(out[0]), out[1], out[2], out[3], len);
 }
 
 static int
@@ -1251,7 +1253,7 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
       // go back and try parsing it again
       continue;
     } else {
-      if ((opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
+      if ((opc == CHOP_EOF) || (opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
 	if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
 	send_basic_pkt_with_data(conn, opc, bp+4, len);
       } else
@@ -1341,26 +1343,24 @@ cancel_conn_threads(struct conn *conn)
 }
 
 static void
-finish_stream_conn(struct conn *conn)
+finish_stream_conn(struct conn *conn, int send_eof)
 {
+  struct conn_state *cs = conn->conn_state;
+  int wait_eof_ack = send_eof;
+  u_short eofpktnum = 0;
+  int timedout;
+  struct timespec to;
+  struct timeval tv;
+
   if (ncp_debug) printf("NCP conn %p (%s) finishing\n", conn, conn_thread_name(conn));
-  PTLOCKN(conn->conn_lock,"conn_lock");
   if (conn->conn_state->state == CS_Inactive) { // || (conn->conn_sock == -1)
     //trace_conn("Already finished", conn);
     if (ncp_debug) print_conn("Already finished", conn, 1);
-    PTUNLOCKN(conn->conn_lock, "conn_lock");
     cancel_conn_threads(conn);
     return;
   }
   trace_conn("Finishing", conn);
   if (ncp_debug) print_conn("Finishing", conn, 0);
-  // The description of the EOF/EOF/CLS sequence doesn't seem to match the LISPM implementation.
-  // Let's see if this works.
-  struct conn_state *cs = conn->conn_state;
-  u_short eofpktnum;
-  int timedout;
-  struct timespec to;
-  struct timeval tv;
 
   if (cs->state == CS_Open_Sent) { // ((cs->state == CS_RFC_Received) || (cs->state == CS_Open_Sent)) 
     // Wait a while for conn to open so pkts can get through
@@ -1373,37 +1373,56 @@ finish_stream_conn(struct conn *conn)
   }
   if (cs->state == CS_Open) {
     // finish conn: send eof, wait for it to be acked.
+    if (ncp_debug) printf("NCP %s finishing in state %s, retransmitting\n", 
+			  conn_thread_name(conn), conn_state_name(conn));
     set_conn_state(conn, CS_Open, CS_Finishing, 1);
     // try retransmission first, in anything remains
     retransmit_controlled_packets(conn);
-    eofpktnum = send_eof_pkt(conn);
-    // now wait.
-    // Use window updates from discard_received_pkts_from_send_list to check for acked pkts - this is a hack
-    PTLOCKN(cs->window_mutex,"window_mutex");
-
-    gettimeofday(&tv, NULL);
-    tv.tv_usec += eof_wait_timeout*1000;
-    while (tv.tv_usec > 1000000) {
-      tv.tv_sec++; tv.tv_usec -= 1000000;
+    // Also when eof has been sent already
+    if (!send_eof) {
+      PTLOCKN(cs->send_mutex,"send_mutex");
+      struct chaos_header *last = pkqueue_peek_last(cs->send_pkts);
+      if ((last != NULL) && (ch_opcode(last) == CHOP_EOF)) {
+	wait_eof_ack = 1;
+	eofpktnum = ch_packetno(last);
+	if (ncp_debug) printf("NCP %s finds last sent pkt is EOF %#x\n", conn_thread_name(conn), eofpktnum);
+      }
+      PTUNLOCKN(cs->send_mutex,"send_mutex");
     }
-    to.tv_sec = tv.tv_sec + 0;
-    to.tv_nsec = tv.tv_usec * 1000;
+    if (wait_eof_ack) {
+      if (ncp_debug) printf("NCP %s%s sending EOF, waiting for its ack\n",
+			    conn_thread_name(conn), send_eof ? "" : " not");
+      if (send_eof)
+	eofpktnum = send_eof_pkt(conn);
+      // now wait.
+      // Use window updates from discard_received_pkts_from_send_list to check for acked pkts - this is a hack
+      PTLOCKN(cs->window_mutex,"window_mutex");
 
-    timedout = 0;
+      gettimeofday(&tv, NULL);
+      tv.tv_usec += eof_wait_timeout*1000;
+      while (tv.tv_usec > 1000000) {
+	tv.tv_sec++; tv.tv_usec -= 1000000;
+      }
+      to.tv_sec = tv.tv_sec + 0;
+      to.tv_nsec = tv.tv_usec * 1000;
 
-    while ((timedout == 0) && pktnum_less(cs->pktnum_sent_acked, eofpktnum))
-      timedout = pthread_cond_timedwait(&cs->window_cond, &cs->window_mutex, &to);
-    if ((timedout < 0) && (timedout != ETIMEDOUT))
-      perror("?? pthread_cond_timedwait");
-    PTUNLOCKN(cs->window_mutex,"window_mutex");
+      timedout = 0;
 
-    if (ncp_debug) printf("NCP %s for %p done waiting for EOF ack\n", conn_thread_name(conn), conn);
+      while ((timedout == 0) && pktnum_less(cs->pktnum_sent_acked, eofpktnum))
+	timedout = pthread_cond_timedwait(&cs->window_cond, &cs->window_mutex, &to);
+      if ((timedout < 0) && (timedout != ETIMEDOUT))
+	perror("?? pthread_cond_timedwait");
+      PTUNLOCKN(cs->window_mutex,"window_mutex");
 
+      if (ncp_debug) printf("NCP %s for %p done waiting for EOF ack (%s)\n", conn_thread_name(conn), conn,
+			    timedout != 0 ? "timed out" : "acked");
+    }
     if (cs->state != CS_CLS_Received) {
       // unless CLS received, send a CLS
       send_cls_pkt(conn,"Bye bye");
     }
   }
+  PTLOCKN(conn->conn_lock, "conn_lock");
   int s = conn->conn_sock;
   // this signals to all (other) threads it's time to go home
   if (ncp_debug) printf("NCP %s for %p setting conn_sock to -1\n", conn_thread_name(conn), conn);
@@ -1444,7 +1463,8 @@ socket_closed_for_stream_conn(struct conn *conn)
   if (conn->conn_state->state == CS_Listening) {
     remove_listener_for_conn(conn);
   }
-  finish_stream_conn(conn);
+  // Only send EOF automatically for Stream conns - Packet conns have their own responsibility to handle them.
+  finish_stream_conn(conn, conn->conn_type == CT_Stream ? 1 : 0);
 }
 
 static void 
@@ -1595,7 +1615,7 @@ static void
 initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)  
 {
   u_short haddr = 0;
-  u_char *cname, *hname = &buf[4];
+  u_char *cname, *hname = buf;
 
   u_char *space = (u_char *)index((char *)hname,' ');
   if (space == NULL) {
@@ -2698,9 +2718,13 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
   while (((sock = conn->conn_sock) != -1) && (sval == 0)) {
     FD_ZERO(&fds);
     FD_SET(sock, &fds);
-    // @@@@ well, some interval? This works OK.
-    timeout.tv_sec = PROBE_INTERVAL;
-    timeout.tv_usec = 0;
+    // @@@@ well, some interval? The longer, more time until socket closure is discovered
+    timeout.tv_sec = 0;
+    timeout.tv_usec = conn->retransmission_interval*1000;
+    while (timeout.tv_usec > 1000000) {
+      timeout.tv_sec++; timeout.tv_usec -= 1000000;
+    }
+
     if ((sval = select(sock+1, &fds, NULL, NULL, &timeout)) < 0) {
       if (sval == EINTR) {
 	// timed out, try again
@@ -2792,7 +2816,7 @@ socket_to_conn_stream_handler(struct conn *conn)
     } else if (strncasecmp((char *)buf,"RFC ", 4) == 0) {
       // create conn and send off an RFC pkt
       if (ncp_debug) printf("Stream \"%s\"\n", buf);
-      initiate_conn_from_rfc_line(conn,buf,cnt);
+      initiate_conn_from_rfc_line(conn,&buf[4],cnt-4);
     }
   }
   else if (cs->state == CS_RFC_Received) {
@@ -2801,7 +2825,8 @@ socket_to_conn_stream_handler(struct conn *conn)
 	   || ((strncasecmp((char *)buf,"OPN", 3) == 0) && ((buf[3] == '\r') || (buf[3] == '\n')))) {
       char *nl = index((char *)buf,'\n');
       int dlen = 0;
-      if (nl != NULL) { 
+      if ((nl != NULL) && (nl-(char *)buf < cnt-1)) { 
+	// there was a \n and it's not the last byte
 	*nl++ = '\0';
 	dlen = cnt-strlen(nl)-1;
       }
@@ -2948,7 +2973,7 @@ socket_to_conn_packet_handler(struct conn *conn)
       }
     }
     else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
-      // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD)
+      // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD EOF)
       return packet_conn_parse_and_send_bytes(conn, buf, cnt);
     }
     else if (cs->state != CS_Inactive) {
@@ -3005,7 +3030,8 @@ socket_to_conn_handler(void *arg)
 	v = socket_to_conn_packet_handler(conn);
       if (v == 0) {
 	if (ncp_debug) print_conn("Conn done",conn,1);
-	finish_stream_conn(conn);
+	// Only send EOF automatically for Stream conns - Packet conns have their own responsibility to handle them.
+	finish_stream_conn(conn, conn->conn_type == CT_Stream);
       } else if (v < 0) {
 	if (ncp_debug) print_conn("Conn error",conn,1);
 	if (ncp_debug) printf("%%%%%%%% NCP %p (%s) exiting\n", conn, conn_thread_name(conn));
@@ -3018,6 +3044,54 @@ socket_to_conn_handler(void *arg)
 }
 
 //////////////// conn-to-socket
+
+static void
+send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, int len) 
+{
+  int opc = ch_opcode(pkt);
+  u_char obuf[CH_PK_MAXLEN+128];
+  if (conn->conn_type == CT_Stream) {
+    // add text line, unless data
+    int olen;
+    switch (opc) {
+    case CHOP_ANS:
+      sprintf((char *)obuf,"ANS %d\r\n", len);
+      olen = strlen((char *)obuf);
+      memcpy(&obuf[olen], buf, len);
+      len += olen+2;
+      break;
+    case CHOP_RFC:
+      sprintf((char *)obuf,"RFC %s\r\n", buf);
+      len += 4+2;
+      break;
+    case CHOP_OPN:
+      sprintf((char *)obuf,"OPN Connection to host %#o opened\r\n", ch_srcaddr(pkt));
+      len = strlen((char *)obuf);
+      break;
+    case CHOP_LOS: case CHOP_CLS:
+      sprintf((char *)obuf, "%s ", ch_opcode_name(opc));
+      strncpy((char *)obuf, (char *)buf, len);
+      strcpy((char *)&obuf[len+4], "\r\n");
+      len += 4+2;
+      break;
+    default:
+      memcpy(obuf, buf, len);
+    }
+  } else if (conn->conn_type == CT_Packet) {
+    // add 4-byte header
+    packet_conn_header_from_pkt(conn, opc, (u_char *)obuf, len);
+    memcpy(&obuf[4], buf, len);
+    len += 4;
+  }
+  if (write(conn->conn_sock, obuf, len) < 0) {
+    if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
+      socket_closed_for_conn(conn);
+    } else {
+      perror("?? write(conn_to_socket_pkt_handler)");
+      exit(1);
+    }
+  }
+}
 
 static void
 conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
@@ -3066,25 +3140,27 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     else
       sprintf(buf, "%s", fhost);
     len = strlen(buf);
-    if (ncp_debug) printf("To socket %s (%d bytes): RFC %s\n", conn_sockaddr_path(conn), len, buf);
+    if (ncp_debug) printf("To socket %s (%d bytes): [RFC] %s\n", conn_sockaddr_path(conn), len, buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
   } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_ANS)) {
     trace_conn("Answered", conn);
     len = ch_nbytes(pkt);
     // might be non-string data
     ntohs_buf((u_short *)data, (u_short *)buf, len);
-    if (ncp_debug) printf("To socket %s: ANS %d\n", conn_sockaddr_path(conn), len);
+    if (ncp_debug) printf("To socket %s (%d bytes): [ANS]\n", conn_sockaddr_path(conn), len);
     set_conn_state(conn, CS_RFC_Sent, CS_Answered, 0);
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
-    if (ncp_debug) printf("To socket %s: OPN", conn_sockaddr_path(conn));
-    len = 0;
+    if (ncp_debug) printf("To socket %s: [OPN]", conn_sockaddr_path(conn));
+    // not actual length, just noting there is data to be sent
+    len = 1;
   } else if ((opc == CHOP_LOS) || (opc == CHOP_CLS)) {
-    if (ncp_debug) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
-			  conn_state_name(conn), ch_nbytes(pkt));
+    if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
+			      conn_state_name(conn), ch_nbytes(pkt));
     get_packet_string(pkt, (u_char *)buf, sizeof(buf)-4-3);
     len = ch_nbytes(pkt);
-    if (ncp_debug) printf("To socket %s (len %d): %.12s...\n", conn_sockaddr_path(conn), len, buf);
+    if (ncp_debug) printf("To socket %s (len %d): [%s] %.12s...\n", conn_sockaddr_path(conn), len, 
+			  ch_opcode_name(opc), buf);
     if (ch_opcode(pkt) == CHOP_LOS)
       set_conn_state(conn, cs->state, CS_LOS_Received, 0);
     else if (ch_opcode(pkt) == CHOP_CLS) {
@@ -3095,11 +3171,18 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       set_conn_state(conn, cs->state, CS_CLS_Received, 0);
     }
   } else if ((opc == CHOP_EOF) && (cs->state == CS_Open)) {
-    finish_stream_conn(conn);
+    // we received an EOF - just ack it and pass to user (for CT_Packet)
+    // When the other end gets the ACK, they might CLS the conn.
+    if (ncp_debug)
+      printf("EOF %#x received, sending STS. Highest rec %#x, read %#x\n", 
+	     ch_packetno(pkt), cs->pktnum_received_highest, cs->pktnum_read_highest);
+    send_sts_pkt(conn);
+    if (conn->conn_type == CT_Packet)
+      len = 1;			// fake marker, like for OPN, to make the message go to the socket
   } else if (((cs->state == CS_Open) || (cs->state == CS_Finishing))
 	     && (opc >= CHOP_DAT) && (opc < CHOP_DWD)) {
-    if (ncp_debug) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
-			  ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
+    if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
+			      ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
     ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
     len = ch_nbytes(pkt);
     // @@@@ please also handle CHOP_DWD?
@@ -3111,48 +3194,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   }
 
   if (len > 0) {	     // Something to write to the user socket?
-    u_char obuf[CH_PK_MAXLEN+128];
-    if (conn->conn_type == CT_Stream) {
-      // add text line, unless data
-      int olen;
-      switch (opc) {
-      case CHOP_ANS:
-	sprintf((char *)obuf,"ANS %d\r\n", len);
-	olen = strlen((char *)obuf);
-	memcpy(&obuf[olen], buf, len);
-	len += olen+2;
-	break;
-      case CHOP_RFC:
-	sprintf((char *)obuf,"RFC %s\r\n", buf);
-	len += 4+2;
-	break;
-      case CHOP_OPN:
-	sprintf((char *)obuf,"OPN Connection to host %#o opened\r\n", ch_srcaddr(pkt));
-	len = strlen((char *)obuf);
-	break;
-      case CHOP_LOS: case CHOP_CLS:
-	sprintf((char *)obuf, "%s ", ch_opcode_name(opc));
-	strncpy((char *)obuf, buf, len);
-	strcpy((char *)&obuf[len+4], "\r\n");
-	len += 4+2;
-	break;
-      default:
-	memcpy(obuf, buf, len);
-      }
-    } else if (conn->conn_type == CT_Packet) {
-      // add 4-byte header
-      packet_conn_header_from_pkt(conn, pkt, (u_char *)obuf);
-      memcpy(&obuf[4], buf, len);
-      len += 4;
-    }
-    if (write(conn->conn_sock, obuf, len) < 0) {
-      if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
-	socket_closed_for_conn(conn);
-      } else {
-	perror("?? write(conn_to_socket_pkt_handler)");
-	exit(1);
-      }
-    }
+    if ((opc == CHOP_OPN) || (opc == CHOP_EOF)) len = 0; // fake len given
+    send_to_user_socket(conn, pkt, (u_char *)buf, len);
   }
   // free the packet, which was malloc:ed in add_input_pkt
   free(pkt);
@@ -3194,7 +3237,8 @@ conn_to_socket_handler(void *arg)
       if ((cs->state == CS_CLS_Received) || (cs->state == CS_Host_Down) ||
 	  (cs->state == CS_LOS_Received) || (cs->state == CS_Answered)) {
 	if (ncp_debug) printf("NCP c_t_s connection finishing, state %s\n", state_name(cs->state));
-	finish_stream_conn(conn);
+	// Don't send EOF, we're already pretty closed.
+	finish_stream_conn(conn, 0);
       }
       break;
     }

@@ -104,9 +104,9 @@ In the case of OPN, the NCP sets up a stream connection , handles flow control e
 
 Writes from the user program are packaged into DAT packets which are sent to the remote host (when the window allows), and DAT packets from the remote host are written to the user program. No character translation is done in the NCP, so the client needs to handle e.g. translation between "ascii newline" (012) and "lispm newline" (0212).
 
-When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in Section 4.4 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData)..
+When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in Section 4.4 in [Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData), see below).
 
-When the NCP receives an EOF or CLS, the user socket is closed.
+When the NCP receives a CLS, the user socket is closed. When the NCP receives an EOF, it is immediately acked.
 
 The NCP attempts to remove the user socket file after it is closed, to keep the place tidy.
 
@@ -167,16 +167,18 @@ Setting up the connection is similar to `chaos_stream`:
 	- receive `LOS` or `CLS` with data being *reason*
 1. If you sent or received an `OPN`:
 	- send and receive `DAT`, `DWD`, `UNC` packets
+1. To be sure all data is acked before closing (for non-Simple conns)
+	- send an `EOF` packet last
 
 When the Chaosnet connection is  closed by the other end, the user socket is also closed, and vice versa, so only use CLS as negative response to RFC.
 
-The user program will never see any STS, SNS, EOF, MNT, BRD, or RUT packets (so only sees RFC, OPN, CLS, LOS, UNC, DAT, DWD).
+The user program will never see any STS, SNS, MNT, BRD, or RUT packets (so only sees RFC, OPN, EOF, DAT, DWD, CLS, LOS, UNC).
 
-The user program can never send any such packets (so only LSN, RFC, OPN, CLS, LOS, UNC, DAT, DWD).
+The user program can never send any such packets (so only LSN, RFC, OPN, EOF, DAT, DWD, CLS, LOS, UNC).
 
 The NCP handles duplicates and flow control, and DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
 
-(Implementation was fairly easy given the flow control is already in place.)
+By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
 
 # Internals
 
@@ -199,8 +201,11 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 
 ### Internals:
 - [ ] Add a bit of statistics counters for conns
+- [ ] Implement FWD (redirect the connection invisibly? See `RECEIVE-FWD` in Lambda code. Let it be configurable both per-NCP and per-conn.).
+	- change `conn_rhost` for conn, and `ch_destaddr` for all pkts on queues (should only be the one RFC there).
+	- for non-automatic, forward the FWD to the user socket
+	- also accept "FWD" and `CHOP_FWD` from user socket, in `RFC_Sent` state
 - [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
-- [ ] Implement FWD (redirect the connection invisibly? See `RECEIVE-FWD` in Lambda code.).
 - [ ] Implement broadcast (both address-zero and BRD).
 
 ### Applications:
