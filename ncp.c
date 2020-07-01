@@ -768,7 +768,8 @@ find_existing_conn(struct chaos_header *ch)
     struct conn *c = cl->conn_conn;
     if ((c->conn_rhost == ch_srcaddr(ch)) &&
 	((c->conn_ridx == ch_srcindex(ch)) || // properly existing conn
-	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || (ch_opcode(ch) == CHOP_FWD))
+	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || 
+	   (ch_opcode(ch) == CHOP_FWD) || (ch_opcode(ch) == CHOP_CLS))
 	  // half-existing conn where we don't know the remote index yet
 	  && (c->conn_ridx == 0))
 	 // uncontrolled pkt doesn't necessarily have a non-zero index, e.g. LOS for non-existing conn
@@ -3070,6 +3071,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       memcpy(&obuf[olen], buf, len);
       len += olen+2;
       break;
+    case CHOP_RFC:
       sprintf((char *)obuf,"RFC %s\r\n", buf);
       len += 4+2;
       break;
