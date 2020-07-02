@@ -81,6 +81,7 @@ struct conn_state {
   u_short pktnum_sent_highest;
   u_short pktnum_sent_acked;	// last we got ack for
   time_t time_last_received;	// for probing
+  time_t time_last_probed;
 };
 
 // static parts

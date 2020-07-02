@@ -461,13 +461,14 @@ print_conn(char *leader, struct conn *conn, int alsostate)
 	 conn->conn_sock, conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
-    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld\n",
+    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld probe %ld\n",
 	   leader, cs->pktnum_made_highest,
 	   cs->foreign_winsize, cs->window_available, pkqueue_length(cs->read_pkts), cs->read_pkts_controlled,
 	   pkqueue_length(cs->received_pkts_ooo), 
 	   cs->pktnum_read_highest, cs->pktnum_received_highest, 
 	   pkqueue_length(cs->send_pkts), cs->pktnum_sent_highest, cs->pktnum_sent_acked,
-	   cs->time_last_received > 0 ? now - cs->time_last_received : -1);
+	   cs->time_last_received > 0 ? now - cs->time_last_received : -1,
+	   cs->time_last_probed > 0 ? now - cs->time_last_probed : -1);
   }
 }
 
@@ -556,6 +557,8 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
   cs->window_available = DEFAULT_WINSIZE;
   cs->pktnum_sent_highest = make_fresh_index(); // initialize
   cs->pktnum_made_highest = cs->pktnum_sent_highest;
+  cs->time_last_received = 0;
+  cs->time_last_probed = 0;
 
   // condition vars, locks
   if (pthread_mutex_init(&cs->conn_state_lock, NULL) != 0)
@@ -2202,12 +2205,18 @@ probe_connection(struct conn *conn)
 		    now.tv_sec - cs->time_last_received);
   } else if ((cs->state != CS_Open) && (cs->state != CS_Finishing)) {
     // don't send SNS unless conn is open
-  } else if ((cs->time_last_received != 0) && (now.tv_sec - cs->time_last_received > LONG_PROBE_INTERVAL)) {
+  } else if ((cs->time_last_received != 0) 
+	     && (now.tv_sec - cs->time_last_received > LONG_PROBE_INTERVAL)
+	     && (now.tv_sec - cs->time_last_probed > LONG_PROBE_INTERVAL)) {
     // haven't received for quite some time, send a SNS probe
     if ((cs->state == CS_Open) || (cs->state == CS_Finishing)) {
+      // don't probe all the time
+      cs->time_last_probed = now.tv_sec;
       if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, sending SNS\n",
 			    conn, conn_state_name(conn),
 			    now.tv_sec - cs->time_last_received);
+      // @@@@ should also detect if there is no route to the destination anymore?
+      // Let send_chaos_pkt return fail/success, and handle it here?
       send_sns_pkt(conn);
     }
   } else if (pktnum_less(cs->pktnum_sent_acked, cs->pktnum_sent_highest)) {
