@@ -556,21 +556,28 @@ update_route_costs()
   // update the cost of all dynamic routes by their age,
   // according to AIM 628 p15.
   int i;
-  u_int costinc;
+  u_int costinc = 0;
+  static time_t lasttime = 0;
+  // last time we updated the routing costs
+  if (lasttime == 0) lasttime = time(NULL);
 
   PTLOCK(rttbl_lock);
   for (i = 0; i < 256; i++) {
     if (rttbl_net[i].rt_type == RT_DYNAMIC) {
-      /* Age by 1 every 4 seconds, max limit, but not fir direct or asynch (cf AIM 628 p15) */
-      costinc = (time(NULL) - rttbl_net[i].rt_cost_updated)/4;
-      if (debug) fprintf(stderr,"RUT to %d, cost %d => %d\n",i,
-			 rttbl_net[i].rt_cost, rttbl_net[i].rt_cost+costinc);
-      if ((rttbl_net[i].rt_cost + costinc) > RTCOST_HIGH)
-	rttbl_net[i].rt_cost = RTCOST_HIGH;
-      else
-	rttbl_net[i].rt_cost += costinc;
+      /* Age by 1 every 4 seconds, max limit, but not for direct or asynch (cf AIM 628 p15) */
+      costinc = (time(NULL) - lasttime)/4;
+      if (costinc > 0) {
+	if (debug) fprintf(stderr,"RUT to %d, cost %d => %d\n",i,
+			   rttbl_net[i].rt_cost, rttbl_net[i].rt_cost+costinc);
+	if ((rttbl_net[i].rt_cost + costinc) > RTCOST_HIGH)
+	  rttbl_net[i].rt_cost = RTCOST_HIGH;
+	else
+	  rttbl_net[i].rt_cost += costinc;
+      }
     }
   }
+  if (costinc > 0)
+    lasttime = time(NULL);
   PTUNLOCK(rttbl_lock);
 }
 

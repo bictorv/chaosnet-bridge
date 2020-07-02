@@ -2215,8 +2215,9 @@ probe_connection(struct conn *conn)
       if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, sending SNS\n",
 			    conn, conn_state_name(conn),
 			    now.tv_sec - cs->time_last_received);
-      // @@@@ should also detect if there is no route to the destination anymore?
+      // Could also detect if there is no route to the destination anymore?
       // Let send_chaos_pkt return fail/success, and handle it here?
+      // But the routing tables take about half an hour to get outdated (to RTCOST_HIGH), so no point.
       send_sns_pkt(conn);
     }
   } else if (pktnum_less(cs->pktnum_sent_acked, cs->pktnum_sent_highest)) {
