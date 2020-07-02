@@ -2639,6 +2639,9 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
     }
   } else if ((ch_opcode(ch) >= CHOP_DAT) || (ch_opcode(ch) == CHOP_OPN) 
 	     || (ch_opcode(ch) == CHOP_STS) || (ch_opcode(ch) == CHOP_SNS)) {
+    // don't send LOS for someone who doesn't know who they are talking to
+    if (ch_destindex(ch) == 0)
+      return NULL;
     // send LOS: No such connection at this host
     if (ncp_debug) printf("No conn found for %s %#x from <%#o,%#x> for <%#o,%#x>\n",
 			  ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
