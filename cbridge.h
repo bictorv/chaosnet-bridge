@@ -283,6 +283,8 @@ int mychaddr_on_net(u_short addr);
 u_short find_closest_addr(u_short addrs[], int naddrs);
 u_short find_my_closest_addr(u_short addr);
 void add_mychaddr(u_short addr);
+int valid_chaos_host_address(u_short addr);
+
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);
 

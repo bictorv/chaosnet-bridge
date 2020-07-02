@@ -51,7 +51,7 @@ parse_tls_config_line()
     } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
-      if ((sscanf(tok, "%ho", &tls_myaddr) != 1) || (tls_myaddr < 0x100) || (tls_myaddr > 0xfeff) || ((tls_myaddr & 0xff) == 0)) {
+      if ((sscanf(tok, "%ho", &tls_myaddr) != 1) || !valid_chaos_host_address(tls_myaddr)) {
 	fprintf(stderr,"tls: bad octal value %s for myaddr specified\n", tok);
 	return -1;
       }

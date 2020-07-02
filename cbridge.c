@@ -308,6 +308,12 @@ void add_mychaddr(u_short addr)
   }
 }
 
+int valid_chaos_host_address(u_short addr)
+{
+  // both subnet and host part must be non-zero
+  return ((addr > 0xff) && ((addr & 0xff) != 0));
+}
+
 void print_link_stats() 
 {
   int i;
@@ -1071,7 +1077,7 @@ parse_route_params(struct chroute *rt, u_short addr)
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
       tok = strtok(NULL," \t\r\n");
-      if (sscanf(tok,"%ho",&sval) != 1) {
+      if ((sscanf(tok,"%ho",&sval) != 1) || !valid_chaos_host_address(sval)) {
 	fprintf(stderr,"bad octal myaddr value %s\n", tok);
 	return -1;
       }
@@ -1145,10 +1151,18 @@ parse_route_config()
     return -1;
   }
   if (subnetp) {
+    if ((addr == 0) || (addr > 0xff)) {
+      fprintf(stderr,"bad subnet number \"%s\"\n", tok);
+      return -1;
+    } 
     rt = &rttbl_net[addr];
     rt->rt_dest = addr<<8;
   } else {
     rt = &rttbl_host[rttbl_host_len++];
+    if (!valid_chaos_host_address(addr)) {
+      fprintf(stderr,"bad route address \"%s\"\n", tok);
+      return -1;
+    }
     // #### should handle errors better and discard allocated rttbl_host entry
     rt->rt_dest = addr;
   }
@@ -1166,7 +1180,7 @@ parse_route_config()
     fprintf(stderr,"bad route config (%#o): no bridge addr\n", addr);
     return -1;
   }
-  if (sscanf(tok,"%ho",&sval) != 1) {
+  if ((sscanf(tok,"%ho",&sval) != 1) || !valid_chaos_host_address(sval)) {
     fprintf(stderr,"bad octal bridge value %s\n", tok);
     return -1;
   }
@@ -1186,7 +1200,7 @@ parse_link_args(struct chroute *rt, u_short addr)
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
       tok = strtok(NULL," \t\r\n");
-      if (sscanf(tok,"%ho",&sval) != 1) {
+      if ((sscanf(tok,"%ho",&sval) != 1) || !valid_chaos_host_address(sval)) {
 	fprintf(stderr,"bad octal myaddr value %s\n", tok);
 	return -1;
       }
@@ -1380,11 +1394,19 @@ parse_link_config()
     fprintf(stderr,"bad octal value %s\n", tok);
     return -1;
   }
-  if (subnetp)
+  if (subnetp) {
+    if ((addr == 0) || (addr > 0xff)) {
+      fprintf(stderr,"bad subnet number \"%s\"\n", tok);
+      return -1;
+    }
     rt->rt_dest = addr<<8;
-  else
+  } else {
+    if (!valid_chaos_host_address(addr)) {
+      fprintf(stderr,"bad host address \"%s\"\n", tok);
+      return -1;
+    }
     rt->rt_dest = addr;
-
+  }
   if (parse_link_args(rt, addr) < 0)
     return -1;
 
@@ -1462,18 +1484,19 @@ parse_config_line(char *line)
   if (strcasecmp(tok, "chaddr") == 0) {
     tok = strtok(NULL," \t\r\n");
     if (tok != NULL) {
+      u_short sval;
       if (nchaddr >= NCHADDR)
 	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
 		NCHADDR);
-      else if (sscanf(tok,"%ho",&mychaddr[nchaddr++]) != 1) {
-	mychaddr[--nchaddr] = 0;
+      else if (sscanf(tok,"%ho",&sval) != 1) {
 	fprintf(stderr,"chaddr: bad octal argument %s\n",tok);
 	return -1;
-      } else if (((mychaddr[nchaddr-1]>>8) == 0) || ((mychaddr[nchaddr-1]>>8) > 0xfe) || ((mychaddr[nchaddr-1]&0xff) == 0)) {
-	fprintf(stderr,"chaddr: bad address %#o (both net and host part must be non-zero)\n", mychaddr[nchaddr-1]);
+      } else if (!valid_chaos_host_address(sval)) {
+	fprintf(stderr,"chaddr: bad address %#o (both net and host part must be non-zero)\n", sval);
 	return -1;
       } else if (verbose)
-	printf("Using default Chaos address %#o\n", mychaddr[nchaddr-1]);
+	printf("Using default Chaos address %#o\n", sval);
+      mychaddr[nchaddr++] = sval;
     }
     return 0;
   }

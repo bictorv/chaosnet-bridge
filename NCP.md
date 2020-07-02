@@ -154,7 +154,18 @@ Packets are sent and received with a 4-byte binary header:
 | --- | --- | --- | --- |
 | opcode | 0 | lenLSB | lenMSB |
 
-followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes. Note that `LSN` packets can be used, where the data is the contact name to listen to. Note also that RFC packets have slightly different data from the actual Chaosnet packets (see below).
+followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes. Note that `LSN` packets can be used, where the data is the contact name to listen to. Note also that RFC and FWD packets have slightly different data from the actual Chaosnet packets (see below).
+
+| Opcode | Data | Type |
+| --- | --- |
+| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional |
+| RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
+| LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
+| ANS | *data* | binary (not interpreted by NCP) |
+| LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
+| DAT, DWD, UNC | *data*  | binary (not interpreted by NCP) |
+| EOF, OPN | none | |
+| FWD | *addr* | LSB, MSB of forwarding address |
 
 
 Setting up the connection is similar to `chaos_stream`:
@@ -176,7 +187,7 @@ Setting up the connection is similar to `chaos_stream`:
 1. To be sure all data is acked before closing (for non-Simple conns)
 	- send an `EOF` packet last
 
-When the Chaosnet connection is  closed by the other end, the user socket is also closed, and vice versa, so only use CLS as negative response to RFC.
+When the Chaosnet connection is  closed by the other end, the user socket is also closed, and vice versa, so you only need to use CLS as negative response to RFC.
 
 The user program will never see any STS, SNS, MNT, BRD, or RUT packets (so only sees RFC, OPN, EOF, DAT, DWD, CLS, LOS, FWD, UNC).
 
@@ -213,6 +224,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 ### Internals:
 - [ ] Add a bit of statistics counters for conns
 - [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
+- [ ] Reconsider how uncontrolled packets are handled, so they can "bypass" the controlled ones in delivery to user.
 - [ ] Implement broadcast (both address-zero and BRD).
 
 ### Applications:

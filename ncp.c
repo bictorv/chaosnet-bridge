@@ -1735,7 +1735,7 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
 
   cname = &space[1];
 
-  if ((sscanf((char *)hname, "%ho", &haddr) != 1) || (haddr <= 0x100) || (haddr > 0xfe00) || ((haddr & 0xff) == 0)) {
+  if ((sscanf((char *)hname, "%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
 #if CHAOS_DNS
     haddr = dns_closest_address_or_los(conn, hname);
 #else
@@ -2331,6 +2331,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 
   if (packet_uncontrolled(pkt)) {
     // uncontrolled pkts always fit the window
+    // @@@@ well, keep a lid on it
     if (ncp_debug) printf("Receive uncontrolled pkt (%s)\n", ch_opcode_name(ch_opcode(pkt)));
     add_input_pkt(conn, pkt);
     return;
@@ -2848,7 +2849,7 @@ socket_to_conn_stream_handler(struct conn *conn)
       if (eol == NULL) eol = index((char *)&buf[4], '\n');
       if (eol != NULL) *eol = '\0';
       if (ncp_debug) printf("Stream cmd \"%s\"\n", buf);
-      if ((sscanf((char *)&buf[4],"%ho", &haddr) != 1) || (haddr <= 0x100) || (haddr > 0xfe00) || ((haddr & 0xff) == 0)) {
+      if ((sscanf((char *)&buf[4],"%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
 #if CHAOS_DNS
 	haddr = dns_closest_address_or_los(conn, &buf[4]);
 #else
