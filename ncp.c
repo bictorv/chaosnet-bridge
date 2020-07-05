@@ -30,6 +30,8 @@
 #include <sys/time.h>
 #include <sys/param.h>
 #include <stdarg.h>
+#include <sys/socket.h>
+#include <fcntl.h>
 #include <assert.h>
 
 #include "cbridge.h"
@@ -391,6 +393,19 @@ make_named_socket(int socktype, char *path)
       exit(1);
     }
   }
+  // no signal, just error, please!
+#ifdef F_SETNOSIGPIPE
+  if (fcntl(sock, F_SETNOSIGPIPE, 1) == -1)  { perror("fcntl(pipe)"); exit(1); }
+#else
+#ifdef SO_NOSIGPIPE
+  int set = 1;
+  setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+#else
+#ifndef MSG_NOSIGNAL
+  #warn No way to disable SIGPIPE
+#endif
+#endif
+#endif
   return sock;
 }
 
@@ -1537,9 +1552,17 @@ user_socket_los(struct conn *conn, char *fmt, ...)
     if (len > CH_PK_MAX_DATALEN) len = CH_PK_MAX_DATALEN;
     data[0] = CHOP_LOS; data[1] = 0;
     data[2] = len & 0xff; data[3] = len >> 8;
-    if (write(conn->conn_sock, data, len+4) < 0) {
+    if (
+#ifdef MSG_NOSIGNAL
+	send(conn->conn_sock, data, len+4, MSG_NOSIGNAL)
+#else
+	write(conn->conn_sock, data, len+4)
+#endif
+	< 0) {
       // never mind, at this stage, since we're closing down
-      if (ncp_debug) perror("write(user_socket_los)");
+      if ((ncp_debug) && !((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF))) {
+        perror("write(user_socket_los)");
+      }
     }
   }
   close(conn->conn_sock);
@@ -3122,7 +3145,13 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
     memcpy(&obuf[4], buf, len);
     len += 4;
   }
-  if (write(conn->conn_sock, obuf, len) < 0) {
+  if (
+#ifdef MSG_NOSIGNAL
+      send(conn->conn_sock, obuf, len, MSG_NOSIGNAL)
+#else
+      write(conn->conn_sock, obuf, len)
+#endif
+      < 0) {
     if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
       socket_closed_for_conn(conn);
     } else {
