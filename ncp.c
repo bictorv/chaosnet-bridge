@@ -399,7 +399,7 @@ make_named_socket(int socktype, char *path)
 #else
 #ifdef SO_NOSIGPIPE
   int set = 1;
-  setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int)) < 0) { perror("setsockopt(pipe)"); exit(1); }
 #else
 #ifndef MSG_NOSIGNAL
   #warn No way to disable SIGPIPE

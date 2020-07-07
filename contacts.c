@@ -390,7 +390,7 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
   int slen;
   char *cname = (char *)malloc(datalen+1);
   if (cname == NULL) { perror("malloc(handle_rfc)"); abort(); }
-  slen = get_packet_string(ch, cname, datalen);
+  slen = get_packet_string(ch, (u_char *)cname, datalen);
   char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);
