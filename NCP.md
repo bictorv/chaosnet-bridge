@@ -231,7 +231,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
 - [ ] Implement a fabulous web-based Chaosnet display using HOSTAT, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
-- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`.
+- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there).
 - [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
 - [ ] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  Same goes for this.
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs seqpacket.
