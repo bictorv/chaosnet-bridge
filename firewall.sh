@@ -20,12 +20,12 @@ CHUDP_port=`cat cbridge.conf | grep -v ';' | grep -e '^chudp' | awk '{ print $2 
 if [ "x$CHUDP_port" = "x" ]; then
     CHUDP_port=42042
 fi
-echo "Using CHUDP port ${CHUDP_port}"
 CHUDP_sources=`cat cbridge.conf | grep -v ';' | grep 'link chudp' | awk '{ print $3 }'`
 if [ "x$CHUDP_sources" = "x" ]; then
     # No chudp links, done
     exit
 fi
+echo "Using CHUDP port ${CHUDP_port}"
 
 if [ "$CHAIN" != "INPUT" ]; then
     # create a new chain
