@@ -9,6 +9,7 @@
 enum { CHOP_RFC=1, CHOP_OPN, CHOP_CLS, CHOP_FWD, CHOP_ANS, CHOP_SNS, CHOP_STS,
        CHOP_RUT, CHOP_LOS, CHOP_LSN, CHOP_MNT, CHOP_EOF, CHOP_UNC, CHOP_BRD };
 
+#define CHOP_ACK 0177 // Note: extension for the NCP Packet socket
 #define CHOP_DAT 0200
 #define CHOP_DWD 0300
 

@@ -1371,7 +1371,7 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
 	  // @@@@ invent an ACK pkt to send to the socket?
 	  u_char ackpkt[CHAOS_HEADERSIZE];
 	  struct chaos_header *pkt = (struct chaos_header *)ackpkt;
-	  set_ch_opcode(pkt, CHOP_DAT-1); // CHOP_ACK = CHOP_DAT-1
+	  set_ch_opcode(pkt, CHOP_ACK);
 	  set_ch_nbytes(pkt, 0);
 	  send_to_user_socket(conn, pkt, ackpkt, 0);
 	}

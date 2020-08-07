@@ -64,6 +64,9 @@ ch_opcode_name(int op)
       return "bogus0";
     else if (op <= CHOP_BRD && op > 0)
       return ch_opc[op];
+    else if (op == CHOP_ACK)
+      // Note: extension for the NCP Packet socket
+      return "ACK";
     else if ((op >= CHOP_DAT) && (op < CHOP_DWD)) {
       if (op == CHOP_DAT)
 	return "DAT";
