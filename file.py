@@ -1104,6 +1104,11 @@ if __name__ == '__main__':
         except BrokenPipeError as e:
             print("[Connection already down: {}]".format(e))
     if ncp:
+        if ncp.dataconn:
+            try:
+                ncp.dataconn.close()
+            except BrokenPipeError:
+                pass
         try:
             ncp.close()
         except BrokenPipeError:
