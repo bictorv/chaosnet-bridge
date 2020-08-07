@@ -23,6 +23,9 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 
 The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/Chaosnet/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py).
 
+There is also [a simple client program for the FILE protocol](file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems.
+
+
 Example:
 ```
 $ nc -c -U /tmp/chaos_stream
@@ -202,6 +205,11 @@ The data part of `RFC` and `FWD` packets are non-standard:
 - for RFC, it includes the remote host and (optional) options (see above).
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
 
+#### NOTE further
+If an `EOF` packet sent from the user program to the NCP has the data "wait" (four bytes), the NCP will send the EOF packet (without data) on the Chaosnet, await the packet to be acked, and send a special `ACK` packet (opcode 0177) to the user program when either the EOF packet is acked, or the `eofwait` timeout occurs. 
+
+This is sometimes necessary for complex protocols, such as [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file).
+
 # Internals
 
 There is one thread handling user processes opening the socket, starting new connections.
@@ -233,5 +241,5 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
 - [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there).
 - [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
-- [ ] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  Same goes for this.
+- [x] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  Same goes for this.
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs seqpacket.

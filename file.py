@@ -677,6 +677,7 @@ class File(NCPConn):
                     file=sys.stderr)
         return dict(truename=truename, created=crdt, length=max(length,content), binary=binp)
 
+    # See directory option DIRECTORIES-ONLY instead
     def all_directories(self, fname=None):
         if self.dnsinfo and self.dnsinfo['os'] == 'ITS':
             # ITS: space dirname-using-six-positions-with-space-filler RETURN
