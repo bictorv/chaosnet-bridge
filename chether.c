@@ -1057,7 +1057,7 @@ void print_arp_table()
     printf("Chaos ARP table:\n"
 	   "Chaos\tEther\t\t\tAge (s)\n");
     for (i = 0; i < charp_len; i++)
-      printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu\n",
+      printf("%#o\t\%02X:%02X:%02X:%02X:%02X:%02X\t%lu%s\n",
 	     charp_list[i].charp_chaddr,
 	     charp_list[i].charp_eaddr[0],
 	     charp_list[i].charp_eaddr[1],
@@ -1065,7 +1065,8 @@ void print_arp_table()
 	     charp_list[i].charp_eaddr[3],
 	     charp_list[i].charp_eaddr[4],
 	     charp_list[i].charp_eaddr[5],
-	     (time(NULL) - charp_list[i].charp_age));
+	     (time(NULL) - charp_list[i].charp_age), 
+	     (time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE ? " (old)" : "");
   }
 }
 
