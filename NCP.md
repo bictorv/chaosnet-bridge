@@ -160,15 +160,18 @@ Packets are sent and received with a 4-byte binary header:
 followed by the *n* bytes of data of the packet, where *n* is the length indicated by the len bytes.  Data lengths can not be more than 488 bytes. Note that `LSN` packets can be used, where the data is the contact name to listen to. Note also that RFC and FWD packets have slightly different data from the actual Chaosnet packets (see below).
 
 | Opcode | Data | Type |
-| --- | --- |
+| --- | --- | --- |
 | RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional |
 | RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
+| OPN (sent) | none | |
+| OPN (rcvd) | *rhost* | which is FQDN or octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
 | ANS | *data* | binary (not interpreted by NCP) |
 | LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
 | DAT, DWD, UNC | *data*  | binary (not interpreted by NCP) |
-| EOF, OPN | none | |
+| EOF | none | or when sending, optionally the string "wait" (four bytes) |
 | FWD | *addr* | LSB, MSB of forwarding address |
+| ACK | none | received from NCP as response to "EOF wait", when th EOF is acked or an eofwait timeout happens |
 
 
 Setting up the connection is similar to `chaos_stream`:
@@ -180,7 +183,7 @@ Setting up the connection is similar to `chaos_stream`:
         - as response to `LSN`
 	- receive `ANS` with data being the answer data
         - as response for RFC for Simple protocol
-	- receive `OPN` without data
+	- receive `OPN` with data being the remote host (name or address)
         - as response to RFC for Stream protocol
 	- receive `LOS` or `CLS` with data being *reason*
 1. If you received an `RFC`:
