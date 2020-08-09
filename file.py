@@ -18,6 +18,7 @@
 # and its/src/syseng/file.591, its/src/sysen2/cftp.475
 
 # TODO
+# Complain if ostype unknown, implement command to set it
 # Split better in classes/modules/files
 # Improve exception handling
 # Handle binary file transfers (needs NCP hacking, DWD)
@@ -293,6 +294,14 @@ class NCPConn:
         elif opc != Opcode.OPN:
             print("Unexpected RFC response for {} from {}: {} {} (wanted OPN)".format(contact,host, Opcode(opc).name, data), file=sys.stderr)
             return False
+        if debug:
+            print("OPN {!r}".format(data), file=sys.stderr)
+        if self.ostype == None and host != str(data,'ascii'):
+            if debug:
+                print("Checking DNS info for {}".format(str(data,'ascii')), file=sys.stderr)
+            self.dnsinfo = dns_info_for(str(data,'ascii'))
+            self.host = self.dnsinfo['name'] if self.dnsinfo and 'name' in self.dnsinfo else str(data,'ascii')
+            self.ostype = self.dnsinfo['os'] if self.dnsinfo and 'os' in self.dnsinfo else None
         self.active = True
         self.contact = contact
         return True
@@ -315,6 +324,8 @@ class NCPConn:
             # Raise exception
             return None
         else:
+            if debug:
+                print("RFC {!r}".format(data), file=sys.stderr)
             self.send_packet(Opcode.OPN,"")
             return rh
         
@@ -423,16 +434,19 @@ class File(NCPConn):
                     print("WH for {} and {} done, sending EOF and closing, returning {}".format(instream,ncp,nbytes), file=sys.stderr)
                 # Need to wait for EOF to be acked - extend NCP protocol by data in EOF pkt, which is normally not there
                 ncp.send_packet(Opcode.EOF,"wait")
+                print("!", file=sys.stderr, end='', flush=True)
                 # @@@@ but we notice the waiting only by delaying the next pkt!
                 # @@@@ so, invent an ACK pkt as response to EOF+wait
                 opc, d = ncp.get_packet()
                 if opc != Opcode.ACK:
                     raise FileError(b'BUG', bytes("unexpected opcode in response to EOF+wait: {} ({})".format(Opcode(opc).name, d), "ascii"))
+                print("\n", end='', file=sys.stderr, flush=True)
                 ncp.send_packet(Opcode.SMARK,"")
                 return nbytes
             d = codecs.encode(d,'lispm')
             nbytes += len(d)
             ncp.send_packet(Opcode.DAT, d)
+            print(".", file=sys.stderr, end='', flush=True)
 
     # send_command(tid, fh, cmd, options = on same line as cmd, args = on consecutive lines)
     def send_command(self, tid, fh, cmd, options=[], args=[]):
