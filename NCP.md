@@ -201,14 +201,17 @@ The NCP handles duplicates and flow control, and DAT and DWD packets are deliver
 By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
 
 #### NOTE
-The data part of `RFC` and `FWD` packets are non-standard:
+The data part of `RFC`, `OPN` and `FWD` packets are non-standard:
 - for RFC, it includes the remote host and (optional) options (see above).
+- for OPN, it includes the remote host (as FQDN or octal address)
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
 
 #### NOTE further
 If an `EOF` packet sent from the user program to the NCP has the data "wait" (four bytes), the NCP will send the EOF packet (without data) on the Chaosnet, await the packet to be acked, and send a special `ACK` packet (opcode 0177) to the user program when either the EOF packet is acked, or the `eofwait` timeout occurs. 
 
 This is sometimes necessary for complex protocols, such as [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file).
+
+Note, again, that the data part of EOF is always empty when sent over Chaosnet, and that the ACK packet is never sent over Chaosnet - only between the NCP and the user program.
 
 # Internals
 

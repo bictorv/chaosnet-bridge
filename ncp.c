@@ -372,13 +372,42 @@ make_named_socket(int socktype, char *path)
 {
   int sock, slen;
   struct sockaddr_un local;
+  struct stat stb;
   
   local.sun_family = AF_UNIX;
   strcpy(local.sun_path, chaos_socket_directory);
   strcat(local.sun_path, path);
-  if (unlink(local.sun_path) < 0) {
-    if (ncp_debug) perror("?? unlink(chaos_sockfile)");
-  }
+  slen = strlen(local.sun_path)+ 1 + sizeof(local.sun_family);
+
+  // if the socket file exists, try connecting to it, and if it succeeds, complain and terminate
+  if (stat(local.sun_path, &stb) == 0) {
+    if ((stb.st_mode & S_IFMT) == S_IFSOCK) {
+      if (ncp_debug) fprintf(stderr,"stat(%s) successful, trying to connect\n", local.sun_path);
+      if ((sock = socket(AF_UNIX, socktype, 0)) < 0) {
+	perror("socktype(AF_UNIX)");
+	exit(1);
+      }
+      if (connect(sock, (struct sockaddr *)&local, slen) == 0) {
+	fprintf(stderr,"?? Warning: server socket \"%s\" already exists and is active - avoid running two cbridge processes!\n",
+		local.sun_path);
+	exit(1);
+      } else if (ncp_debug) {
+	fprintf(stderr,"Info: connect to \"%s\": %s\n", local.sun_path, strerror(errno));
+      }
+      // don't need this anymore
+      close(sock);
+    } else 
+      fprintf(stderr,"%% socket file %s exists but is not a socket (mode %#o), removing it\n",
+	      local.sun_path, (stb.st_mode & S_IFMT));
+    // it didn't respond, try removing it
+    if (unlink(local.sun_path) < 0) {
+      fprintf(stderr,"?? failed to unlink \"%s\": %s\n", local.sun_path, strerror(errno));
+      exit(1);
+    } else if (ncp_debug) 
+      fprintf(stderr,"NCP unlinked old socket file %s\n", local.sun_path);
+  } else if (ncp_debug)
+    fprintf(stderr,"Info: failed to stat \"%s\": %s\n", local.sun_path, strerror(errno));
+  // it doesn't exist at this point
   
   if ((sock = socket(AF_UNIX, socktype, 0)) < 0) {
     perror("?? socket(AF_UNIX)");
@@ -2613,7 +2642,11 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     break;
   case CS_Open:
     // In the Open state, only EOF, LOS, CLS and the DAT pkts are OK
-    if ((ch_opcode(ch) != CHOP_EOF) && (ch_opcode(ch) != CHOP_LOS) 
+    if (ch_opcode(ch) == CHOP_OPN) {
+      // maybe the STS went missing, so resend it - doesn't hurt
+      send_sts_pkt(conn);
+      break;
+    } else if ((ch_opcode(ch) != CHOP_EOF) && (ch_opcode(ch) != CHOP_LOS) 
 	&& (ch_opcode(ch) != CHOP_CLS) && (ch_opcode(ch) < CHOP_DAT)) {
       // note error (we handle STS SNS above)
       if (ncp_debug) printf("%%%% %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
@@ -3272,9 +3305,12 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     len = 2;
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
-    if (ncp_debug) printf("To socket %s: [OPN]", conn_sockaddr_path(conn));
-    // not actual length, just noting there is data to be sent
-    len = 1;
+#if CHAOS_DNS
+    if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)buf, NS_MAXDNAME > CH_PK_MAX_DATALEN ? CH_PK_MAX_DATALEN : NS_MAXDNAME) < 0)
+#endif
+      sprintf((char *)buf, "%#o", ch_srcaddr(pkt));
+    len = strlen(buf);
+    if (ncp_debug) printf("To socket %s (%d bytes): [OPN] %s", conn_sockaddr_path(conn), len, buf);
   } else if ((opc == CHOP_LOS) || (opc == CHOP_CLS)) {
     if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
 			      conn_state_name(conn), ch_nbytes(pkt));
@@ -3301,7 +3337,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     send_sts_pkt(conn);
     PTLOCKN(cs->conn_state_lock,"conn_state_lock");
     if (conn->conn_type == CT_Packet)
-      len = 1;			// fake marker, like for OPN, to make the message go to the socket
+      len = 1;			// fake marker, to make the message go to the socket
   } else if (((cs->state == CS_Open) || (cs->state == CS_Finishing))
 	     && (opc >= CHOP_DAT) && (opc < CHOP_DWD)) {
     if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
@@ -3319,7 +3355,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 
   if ((len > 0) || (conn->conn_type == CT_Packet)) {	     // Something to write to the user socket?
-    if ((opc == CHOP_OPN) || (opc == CHOP_EOF)) len = 0; // fake len given
+    if (opc == CHOP_EOF) len = 0; // fake len given
     if (len >= 0)
       send_to_user_socket(conn, pkt, (u_char *)buf, len);
   }
