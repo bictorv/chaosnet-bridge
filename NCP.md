@@ -161,15 +161,15 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 
 | Opcode | Data | Type |
 | --- | --- | --- |
-| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional |
+| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
 | OPN (sent) | none | |
-| OPN (rcvd) | *rhost* | which is FQDN or octal address |
+| OPN (rcvd) | *rhost* | ascii, which is FQDN or octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
 | ANS | *data* | binary (not interpreted by NCP) |
 | LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
 | DAT, DWD, UNC | *data*  | binary (not interpreted by NCP) |
-| EOF | none | or when sending, optionally the string "wait" (four bytes) |
+| EOF | none | or when sending, optionally the ascii string "wait" (four bytes) |
 | FWD | *addr* | LSB, MSB of forwarding address |
 | ACK | none | received from NCP as response to "EOF wait", when th EOF is acked or an eofwait timeout happens |
 
