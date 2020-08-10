@@ -231,8 +231,6 @@ Tons of locking, but possibly not enough.
 
 The foreign protocol type (see [Section 6 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
 
-Double-word (16-bit data) packets (opcode 0300 and up) are kind of not really implemented/tested yet. This is needed e.g. for binary FILE transfers, so it will happen at some point.
-
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
 ## TODO

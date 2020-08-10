@@ -23,7 +23,6 @@
 # Complain if ostype unknown, implement command to set it
 # Split better in classes/modules/files
 # Improve exception handling
-# Handle binary file transfers (needs NCP hacking, DWD)
 # abstract "packets" to make TCP port easy
 # make completing (with Tab) and abbreviating parser - https://python-prompt-toolkit.readthedocs.io ?
 # add pathname interpretation based on DNS HINFO
