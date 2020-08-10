@@ -61,10 +61,10 @@ class Opcode(IntEnum):
     LOS = auto()
     LSN = auto()
     MNT = auto()
-    EOF = auto()                          # @@@@ with NCP, extended with optional "wait" data part which is never sent on the wire
+    EOF = auto()                          # with NCP, extended with optional "wait" data part which is never sent on the wire
     UNC = auto()
     BRD = auto()
-    ACK = 0o177                           # @@@@ new opcode to get an acknowledgement from NCP when an EOF+wait has been acked
+    ACK = 0o177                           # new opcode to get an acknowledgement from NCP when an EOF+wait has been acked
     DAT = 0o200
     SMARK = 0o201                       # synchronous mark
     AMARK = 0o202                       # asynchronous mark
@@ -404,6 +404,8 @@ class File(NCPConn):
                 if outstream == None:
                     return b''.join(idata)
                 else:
+                    if isinstance(outstream, io.TextIOBase) and outstream != sys.stdout:
+                        print("!", file=sys.stderr)
                     return None
             elif opc == Opcode.DAT:
                 if outstream == None:
@@ -411,6 +413,8 @@ class File(NCPConn):
                 else:
                     if isinstance(outstream, io.TextIOBase):
                         d = str(d,'lispm')
+                        if outstream != sys.stdout:
+                            print('.', end='', flush=True, file=sys.stderr)
                     outstream.write(d)
             elif opc == Opcode.AMARK:
                 # @@@@ parse it and make more specific exception
@@ -435,8 +439,7 @@ class File(NCPConn):
                 # Need to wait for EOF to be acked - extend NCP protocol by data in EOF pkt, which is normally not there
                 ncp.send_packet(Opcode.EOF,"wait")
                 print("!", file=sys.stderr, end='', flush=True)
-                # @@@@ but we notice the waiting only by delaying the next pkt!
-                # @@@@ so, invent an ACK pkt as response to EOF+wait
+                # but we notice the waiting only by delaying the next pkt, so, invent an ACK pkt as response to EOF+wait
                 opc, d = ncp.get_packet()
                 if opc != Opcode.ACK:
                     raise FileError(b'BUG', bytes("unexpected opcode in response to EOF+wait: {} ({})".format(Opcode(opc).name, d), "ascii"))
@@ -454,11 +457,17 @@ class File(NCPConn):
         # m = bytes(("{} {} {}"+" {}{}"*len(args)).format(tid,fh,cmd,*ar),"utf8")
         m = tid+b" "+fh+b" "+cmd
         if debug:
-            print("send_command: tid {} fh {} cmd {} opts {} args {}".format(tid,fh,cmd, options, args))
+            print("send_command: tid {} fh {} cmd {} opts {} args {}".format(tid,fh,cmd, options, args), file=sys.stderr)
         if len(options) > 0:
             m = m+b" "+b" ".join(options)
         if len(args) > 0:
-            m = m+LMchar.RETURN+LMchar.RETURN.join(args)+LMchar.RETURN
+            if cmd == b'CREATE-LINK':
+                # What a crock - "Compensate for incompetently-defined protocol"
+                m = m+LMchar.RETURN+LMchar.RETURN.join(args)
+            else:
+                m = m+LMchar.RETURN+LMchar.RETURN.join(args)+LMchar.RETURN
+        if debug:
+            print("send_command: {!r}".format(m), file=sys.stderr)
         self.send_packet(Opcode.DAT, m)
 
     # get_response => (tid, fh, cmd, array-of-results)
@@ -582,6 +591,7 @@ class File(NCPConn):
         resp, msg = self.execute_operation("LOGIN", options=[uname], dataconn=False)
         if debug:
             print('Login',resp,msg, file=sys.stderr)
+        self.uname = uname
         # Lambda: b'bv ' [b'LX: BV;', b'']
         # uname RETURN homedir
         # ITS: b'BV USERS1' [b'Victor, Bjorn', b'@']
@@ -727,6 +737,34 @@ class File(NCPConn):
         resp, msg = self.execute_operation("change-properties", args=pv, dataconn=False)
         if debug:
             print('change_props result',resp,msg, file=sys.stderr)
+            
+    def create_directory(self, dname):
+        # For ITS, need to be logged in with a proper/personal homedir (named as userid)
+        if self.ostype == 'ITS':
+            if self.uname.lower()+";" != self.homedir.lower():
+                print("You need to have a homedir naed as your user name", file=sys.stderr)
+            if not dname.endswith(';'):
+                print("Directory name should end with ;", file=sys.stderr)
+        resp, msg = self.execute_operation("create-directory", args=[dname], dataconn=False)
+        if debug:
+            print('create_directory response',resp,msg, file=sys.stderr)
+
+    def home_directory(self, uname):
+        resp, msg = self.execute_operation("homedir", options=[uname], dataconn=False)
+        if debug:
+            print('homedir response',resp,msg, file=sys.stderr)
+        return str(resp[0],'ascii')
+
+    def file_system_info(self):
+        resp, msg = self.execute_operation("file-system-info", dataconn=False)
+        if True or debug:
+            print('file_system_info response',resp,msg, file=sys.stderr)
+        return list(map(lambda x: str(x,'ascii'), msg))
+
+    def create_link(self, lname, fname):
+        resp, msg = self.execute_operation("create-link", args=[lname,fname], dataconn=False)
+        if True or debug:
+            print('create_link response',resp,msg, file=sys.stderr)
 
     def parse_properties(self, lines):
         props = dict()
@@ -961,6 +999,32 @@ if __name__ == '__main__':
     parser.add_argument("host", help='The host to connect to')
     args = parser.parse_args()
 
+    cmdhelp = {"debug": "Toggle debug",
+                "bye": "Close connection and exit program",
+                "cwd": '"cwd dname" changes working directory (local effect only), "cwd" shows the working directory.',
+                "login":'"login uname" logs in as user uname',
+                "probe": '"probe fname" checks if file fname exists',
+                "complete": '"complete str" tries to complete the str as a filename',
+                "delete": '"delete fname" deletes the file fname',
+                "undelete": '"undelete fname" undeletes the file fname (if supported)',
+                "expunge": '"expunge fname" expunges deleted files (if supported)',
+                "nodelete": '"nodelete fname" sets the do-not-delete property (if supported)',
+                "nosupersede": '"nosupersede fname" sets the dont-supersede property (if supported)',
+                "supersede": '"supersede fname" un-sets the dont-supersede property (if supported)',
+                "homedir": '"homedir uname" gets the home directory of the user uname',
+                "fsi": "gets file system information (if available)",
+                "crdir": '"crdir dname" creates the directory dname (if possible)',
+                "crlink": '"crlink linkname destination" creates a link to the destination filename',
+                "read": '"read fname" reads the file fname and prints it on stdout',
+                "readinto": '"readinto local remote" reads the remote file into the local file',
+                "readraw": '"readraw fname" reads the fname without translating characters',
+                "write": '"write local remote" writes the local file to the remote file',
+                "alldirs": 'lists all (top-level) directories. To list subdirectories, use the "directory" command',
+                "directory": '"directory pname" lists files matching the pathname. Can be abbreviated "dir".',
+                "ddirectory": '"ddirectory pname" lists file including deleted ones (if supported). Abbrev "ddir".',
+                "fdirectory": '"fdirectory pname" lists files using the FAST option, without properties. Abbrev "fdir".'
+                }
+
     if args.debug:
         debug = True
 
@@ -980,7 +1044,7 @@ if __name__ == '__main__':
 
         while True:
             # Wish: a completing/abbreviating command reader
-            cline = input("FILE {}@{}{}> ".format(uid,args.host, " [debug]" if debug else ""))
+            cline = input("FILE {}@{}{}> ".format(uid,args.host, " [debug]" if debug else "")).lstrip()
 
             parts = cline.split(' ', maxsplit=1)
             if len(parts) == 0:
@@ -995,11 +1059,11 @@ if __name__ == '__main__':
                 if op == '':
                     continue
                 elif op == '?':
-                    print('Commands:',["debug","bye","cwd","login","probe","complete",
-                                           "delete","undelete","expunge",
-                                           "nodelete","supersede","nosupersede",
-                                           "read","readraw","write",
-                                           "alldirs", "directory", "ddirectory","fdirectory"])
+                    print('Commands:')
+                    mxlen = len(max(cmdhelp, key=len))
+                    fmt = string.Template("{:$mxlen}  {}").substitute(mxlen=mxlen)
+                    for cmd in cmdhelp:
+                        print(fmt.format(cmd, cmdhelp[cmd]))
                 elif op == "bye" or op == "quit":
                     print("Bye bye.", file=sys.stderr)
                     try:
@@ -1056,11 +1120,33 @@ if __name__ == '__main__':
                     ncp.change_props(wdparse(arg[0]),{'dont-supersede':'NIL'})
                 elif op == "nosupersede":
                     ncp.change_props(wdparse(arg[0]),{'dont-supersede':'T'})
-                # @@@@ read into output file, read binary files...
+                elif op == "crdir":
+                    ncp.create_directory(arg[0])
+                elif op == "homedir":
+                    print(ncp.home_directory(arg[0]))
+                elif op == "fsi":
+                    print(ncp.file_system_info())
+                elif op == "crlink":
+                    if ncp.ostype != 'ITS':
+                        print("Links are probably only supported in ITS", file=sys.stderr)
+                    linkname, destname = arg[0].split(' ', maxsplit=1)
+                    ncp.create_link(linkname, destname)
+                # @@@@ read binary files...
                 elif op == "read":
                     # s = io.StringIO()
                     s = sys.stdout
                     ncp.read_file(wdparse(arg[0]), s)
+                    # print(s.getvalue(), end='')
+                elif op == "readinto":
+                    outf, inf = arg[0].split(' ', maxsplit=1)
+                    try:
+                        os = open(outf, "w")
+                        ncp.read_file(wdparse(arg[0]), os)
+                    except FileNotFoundError as e:
+                        print(e, file=sys.stderr)
+                        continue
+                    finally:
+                        os.close()
                     # print(s.getvalue(), end='')
                 elif op == "readraw":
                     ncp.read_file(wdparse(arg[0]), None, raw=True)
@@ -1069,11 +1155,12 @@ if __name__ == '__main__':
                     inf,outf = arg[0].split(' ', maxsplit=1)
                     try:
                         ins = open(inf,"r")
+                        r = ncp.write_file(wdparse(outf), ins)
                     except FileNotFoundError as e:
                         print(e, file=sys.stderr)
                         continue
-                    r = ncp.write_file(wdparse(outf), ins)
-                    ins.close()
+                    finally:
+                        ins.close()
                     print("Wrote {}, length {} ({}), created {}".format(r['truename'], r['length'],
                                                                             "binary" if r['binary'] else "character",
                                                                             r['created']))
