@@ -406,7 +406,7 @@ class File(NCPConn):
                 if outstream == None:
                     return b''.join(idata)
                 else:
-                    if isinstance(outstream, io.TextIOBase) and outstream != sys.stdout:
+                    if outstream is not None and outstream != sys.stdout:
                         print("!", file=sys.stderr)
                     return None
             elif opc == Opcode.DAT:
@@ -415,8 +415,15 @@ class File(NCPConn):
                 else:
                     if isinstance(outstream, io.TextIOBase):
                         d = str(d,'lispm')
-                        if outstream != sys.stdout:
-                            print('.', end='', flush=True, file=sys.stderr)
+                    if outstream is not None and outstream != sys.stdout:
+                        print('.', end='', flush=True, file=sys.stderr)
+                    outstream.write(d)
+            elif opc == Opcode.DWD:
+                if outstream == None:
+                    idata.append(d)
+                else:
+                    if outstream != sys.stdout:
+                        print('.', end='', flush=True, file=sys.stderr)
                     outstream.write(d)
             elif opc == Opcode.AMARK:
                 # @@@@ parse it and make more specific exception
@@ -424,10 +431,10 @@ class File(NCPConn):
             elif opc == Opcode.CLS:
                 raise FileError(b'CLS', d)
             else:
-                raise FileError(b'UNC', bytes("Unexpected response {} ({}) in data handler for {} (wanted DAT or EOF)".format(Opcode(opc).name, d, stream),"ascii"))
+                raise FileError(b'UNC', bytes("Unexpected response {} ({}) in data handler for {} (wanted DAT or EOF)".format(Opcode(opc).name, d, outstream),"ascii"))
 
 
-    def write_handler(self, instream, ncp):
+    def write_handler(self, instream, ncp, binary=False):
         # returns the number of bytes written
         # caller is supposed to CLOSE the FH (but we already wrote EOF and SMARK)
         nbytes = 0
@@ -448,9 +455,13 @@ class File(NCPConn):
                 print("\n", end='', file=sys.stderr, flush=True)
                 ncp.send_packet(Opcode.SMARK,"")
                 return nbytes
-            d = codecs.encode(d,'lispm')
+            if not binary:
+                d = codecs.encode(d,'lispm')
             nbytes += len(d)
-            ncp.send_packet(Opcode.DAT, d)
+            if binary:
+                ncp.send_packet(Opcode.DWD, d)
+            else:
+                ncp.send_packet(Opcode.DAT, d)
             print(".", file=sys.stderr, end='', flush=True)
 
     # send_command(tid, fh, cmd, options = on same line as cmd, args = on consecutive lines)
@@ -528,7 +539,8 @@ class File(NCPConn):
                 print("{}: {}".format(cmd,res), file=sys.stderr)
         return res.split(b' ')
 
-    def execute_operation(self, operation, is_write=False, options=[], args=[], dataconn=True, outstream=None, instream=None):
+    def execute_operation(self, operation, is_write=False, options=[], args=[],
+                              dataconn=True, outstream=None, instream=None, binary=False):
         tid = self.next_tid()
         if dataconn and self.dataconn == None:
             if debug:
@@ -559,7 +571,7 @@ class File(NCPConn):
             # Get the conn (waiting here for RFC)
             c = self.data.result()
             if is_write:
-                hand = self.xecutor.submit(self.write_handler, instream, c)
+                hand = self.xecutor.submit(self.write_handler, instream, c, binary)
                 fh = ofh
             else:
                 hand = self.xecutor.submit(self.read_handler, outstream, c)
@@ -653,9 +665,18 @@ class File(NCPConn):
                     file=sys.stderr)
         return dict(truename=truename, creationdate=crdt, length=length, binary=binp)
 
-    def read_file(self, fname, output, raw=False):
+    def read_file(self, fname, output, raw=False, binary=False):
         try:
-            resp, msg, content = self.execute_operation("OPEN", outstream=output, options=["READ"]+(["RAW"] if raw else []), args=[fname])
+            opts = ["READ"]
+            if raw:
+                opts.append("RAW")
+            if binary:
+                opts += ["BINARY","BYTE-SIZE 16"]
+            if debug:
+                print("read_file options {}".format(opts))
+            resp, msg, content = self.execute_operation("OPEN", outstream=output,
+                                                            options=opts,
+                                                            args=[fname])
         except DNFError as e:
             print(e, file=sys.stderr)
             return None
@@ -673,23 +694,26 @@ class File(NCPConn):
         if debug:
             print("= Here comes {} created {} len {}{}".format(truename,crdt,length," (binary)" if binp else " (not binary)"),
                     file=sys.stderr)
-        if output == 'return':
+        if output == 'return' or output is None:
             if raw or binp:
                 return content
             else:
                 return str(content,'lispm')
-        elif not output:
-            if raw or binp:
-                print(content)
-            else:
-                print(str(content,'lispm'))
+        else:
+            return dict(truename=truename, created=crdt, length=length, binary=binp)
 
-    def write_file(self, fname, instream, raw=False):
+    def write_file(self, fname, instream, raw=False, binary=False):
         if debug:
             print("Writing {} from stream {}".format(fname,instream))
         if instream is None:
             raise FileError(b'BUG',b'You called write_file without an input stream')
-        resp, msg, content = self.execute_operation("OPEN", is_write=True, instream=instream, options=["WRITE"]+(["RAW"] if raw else []), args=[fname])
+        opts = ["WRITE"]
+        if raw:
+            opts.append("RAW")
+        if binary:
+            opts += ["BINARY","BYTE-SIZE 16"]
+        resp, msg, content = self.execute_operation("OPEN", is_write=True, instream=instream, binary=binary,
+                                                        options=opts, args=[fname])
         truename = str(msg[0],"ascii")
         cdate,ctime,length,binp,x = resp[:5]
         if debug:
@@ -1019,8 +1043,10 @@ if __name__ == '__main__':
                 "crlink": '"crlink linkname destination" creates a link to the destination filename',
                 "read": '"read fname" reads the file fname and prints it on stdout',
                 "readinto": '"readinto local remote" reads the remote file into the local file',
+                "breadinto": '"breadinto local remote" reads the remote file into the local file in binary mode, byte-size 16',
                 "readraw": '"readraw fname" reads the fname without translating characters',
                 "write": '"write local remote" writes the local file to the remote file',
+                "bwrite": '"bwrite local remote" writes the local file to the remote file in binary mode, byte-size 16',
                 "alldirs": 'lists all (top-level) directories. To list subdirectories, use the "directory" command',
                 "directory": '"directory pname" lists files matching the pathname. Can be abbreviated "dir".',
                 "ddirectory": '"ddirectory pname" lists file including deleted ones (if supported). Abbrev "ddir".',
@@ -1133,7 +1159,6 @@ if __name__ == '__main__':
                         print("Links are probably only supported in ITS", file=sys.stderr)
                     linkname, destname = arg[0].split(' ', maxsplit=1)
                     ncp.create_link(linkname, destname)
-                # @@@@ read binary files...
                 elif op == "read":
                     # s = io.StringIO()
                     s = sys.stdout
@@ -1143,21 +1168,48 @@ if __name__ == '__main__':
                     outf, inf = arg[0].split(' ', maxsplit=1)
                     try:
                         os = open(outf, "w")
-                        ncp.read_file(wdparse(arg[0]), os)
+                        r = ncp.read_file(wdparse(arg[0]), os)
                     except FileNotFoundError as e:
                         print(e, file=sys.stderr)
                         continue
                     finally:
                         os.close()
-                    # print(s.getvalue(), end='')
+                    print("Read {}, length {} ({}), created {}".format(r['truename'], r['length'],
+                                                                            "binary" if r['binary'] else "character",
+                                                                            r['created']))
+                elif op == "breadinto":
+                    outf, inf = arg[0].split(' ', maxsplit=1)
+                    try:
+                        os = open(outf, "wb")
+                        r = ncp.read_file(wdparse(arg[0]), os, binary=True)
+                    except FileNotFoundError as e:
+                        print(e, file=sys.stderr)
+                        continue
+                    finally:
+                        os.close()
+                    print("Read {}, length {} ({}), created {}".format(r['truename'], r['length'],
+                                                                            "binary" if r['binary'] else "character",
+                                                                            r['created']))
                 elif op == "readraw":
                     ncp.read_file(wdparse(arg[0]), None, raw=True)
-                # @@@@ write binary files...
                 elif op == "write":
                     inf,outf = arg[0].split(' ', maxsplit=1)
                     try:
                         ins = open(inf,"r")
                         r = ncp.write_file(wdparse(outf), ins)
+                    except FileNotFoundError as e:
+                        print(e, file=sys.stderr)
+                        continue
+                    finally:
+                        ins.close()
+                    print("Wrote {}, length {} ({}), created {}".format(r['truename'], r['length'],
+                                                                            "binary" if r['binary'] else "character",
+                                                                            r['created']))
+                elif op == "bwrite":
+                    inf,outf = arg[0].split(' ', maxsplit=1)
+                    try:
+                        ins = open(inf,"rb")
+                        r = ncp.write_file(wdparse(outf), ins, binary=True)
                     except FileNotFoundError as e:
                         print(e, file=sys.stderr)
                         continue
