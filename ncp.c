@@ -1136,8 +1136,7 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
       len = 0;
       break;
     default:
-      if ((opcode >= CHOP_DAT) && (opcode < CHOP_DWD))
-	// @@@@ still need to handle DWD
+      if (opcode >= CHOP_DAT)
 	htons_buf((u_short *)data, (u_short *)datao, len);
       else
 	memcpy(datao, data, len);
@@ -3339,12 +3338,11 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     if (conn->conn_type == CT_Packet)
       len = 1;			// fake marker, to make the message go to the socket
   } else if (((cs->state == CS_Open) || (cs->state == CS_Finishing))
-	     && (opc >= CHOP_DAT) && (opc < CHOP_DWD)) {
+	     && (opc >= CHOP_DAT)) {
     if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler: got %s for conn type %s\n", 
 			      ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
     ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
     len = ch_nbytes(pkt);
-    // @@@@ please also handle CHOP_DWD?
   } else {
     fprintf(stderr,"%%%% Bad pkt in conn_to_socket_pkt_handler: pkt %#x opcode %s in state %s, highest %#x\n",
 	    ch_packetno(pkt), ch_opcode_name(ch_opcode(pkt)), state_name(cs->state),

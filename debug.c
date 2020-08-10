@@ -56,6 +56,7 @@ ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
 
 // **** Debug stuff
 static char **datnames = NULL;
+static char **dwdnames = NULL;
 
 char *
 ch_opcode_name(int op)
@@ -79,9 +80,19 @@ ch_opcode_name(int op)
 	}
 	return datnames[op-CHOP_DAT];
       }
-    } else if (op >= CHOP_DWD)
-      return "DWD";
-    else
+    } else if (op >= CHOP_DWD) {
+      if (op == CHOP_DWD)
+	return "DWD";
+      else {
+	if (dwdnames == NULL)
+	  dwdnames = calloc(128,sizeof(char *));
+	if (dwdnames[op-CHOP_DWD] == NULL) {
+	  dwdnames[op-CHOP_DWD] = malloc(7*sizeof(char));
+	  sprintf(dwdnames[op-CHOP_DWD],"DWD%d", op-CHOP_DWD);
+	}
+	return dwdnames[op-CHOP_DWD];
+      }
+    } else
       return "bogus";
   }
 
