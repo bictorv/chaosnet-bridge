@@ -1,0 +1,4 @@
+;Victor's ZMAIL init file -*-Mode:Lisp;Package:ZWEI;Readtable:CL;Base:10-*-
+(LOGIN-SETQ *FROM-HOST* (SI:PARSE-HOST "UP"))
+(LOGIN-SETQ *FROM-USER-ID* '"victor")
+(LOGIN-SETQ *REQUIRE-SUBJECTS* T)

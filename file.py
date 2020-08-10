@@ -399,6 +399,7 @@ class File(NCPConn):
         # if outstream is None, returns the input read as bytes
         # the caller is expected to CLOSE the FH, read the reply, and then read_until_smark from the dataconn
         idata = []
+        return_last = False
         while True:
             opc, d = conn.get_packet()
             if opc == Opcode.EOF:
@@ -407,11 +408,15 @@ class File(NCPConn):
                 else:
                     if outstream is not None and outstream != sys.stdout:
                         print("!", file=sys.stderr)
+                    if outstream == sys.stdout and not return_last:
+                        outstream.write('\n')
                     return None
             elif opc == Opcode.DAT:
                 if outstream == None:
                     idata.append(d)
                 else:
+                    if outstream == sys.stdout:
+                        return_last = d[-1:] == LMchar.RETURN
                     if isinstance(outstream, io.TextIOBase):
                         d = str(d,'lispm')
                     if outstream is not None and outstream != sys.stdout:
