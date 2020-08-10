@@ -1,6 +1,6 @@
 # Configuration
 
-See also the [example configurations](EXAMPLES.md).
+See also the [example configurations](EXAMPLES.md), and the separate configuration docs for [the NCP](NCP.md).
 
 ## Command line options:
 
@@ -22,7 +22,7 @@ It is strongly suggested to begin with Global settings, followed by Link definit
 
 Use max one of each of these. Collect all arguments on one command, rather than repeating the command with different options.
 
-Below, *%o%* means an octal number, and square brackets [ ] are around optional parameters.
+Below, *%o* means an octal number, and square brackets [ ] are around optional parameters.
 
 - `chaddr` *%o*
 
@@ -117,7 +117,7 @@ For IPv4, the Chaosnet address host byte can not be 0xFF (which is
 otherwise OK for Chaosnet), since that would map to the IP subnet
 broadcast address.
 
-(IPv6-mapped subnets will not receive routing info until broadcast for IPv6 is implemented.)
+(IPv6-mapped subnets will not receive routing info until broadcast/multicast for IPv6 is implemented.)
 (The name `chip` coincides with a parameter to the `chudp` implementation in klh10, which is a tiny bit unfortunate.)
 
 ## Dynamic links and routes

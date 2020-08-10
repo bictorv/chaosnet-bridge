@@ -9,10 +9,10 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 | setting | description |
 | --- | --- |
 |`enabled`| used to enable/disable the NCP - default is `no` (disabled).|
-|`domain`| used for specifying the default DNS domains for RFC arg parsing, as a comma-separated list. **NOTE** that there must be no spaces around the comma! Default (if none are specified) is `chaosnet.net`.|
+|`domain`| used for specifying the default DNS domains for RFC arg parsing, as a comma-separated list. **NOTE** that there must be no spaces around the comma! Default (if none are specified) is `chaosnet.net`. Example: `domain update.uu.se,chaosnet.net`|
 |`retrans`| specifies the retransmission time interval - default 500 ms.|
 |`window`| specifies window size - default 13 packets (maximally 6344 bytes). Max window size is 128. (ITS uses only 5, and a max of 64, while CADR and Lambda Lisp machine systems use 013, and max 128. Symbolics uses a max of 50.)|
-|`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 1000 ms.|
+|`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 3 `retrans` intervals, i.e. 1500.|
 |`finishwait`| specifies the time to wait for a half-open conn (OPN Sent) to become Open (thus allowing final retransmissions) while finishing it. Default 5000 ms. (You probably don't want to mess with this.)|
 |`follow_forward`| specifies whether FWD responses should be transparently followed, i.e., result in the RFC being resent to the target host. Default `no`, can also be specified as an option to individual RFCs (see below).|
 |`socketdir`| specifies the directory where to put the socket files, `chaos_stream` and `chaos_seqpacket` - default is `/tmp`.|
@@ -206,7 +206,7 @@ By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosn
 #### NOTE
 The data part of `RFC`, `OPN` and `FWD` packets are non-standard:
 - for RFC, it includes the remote host and (optional) options (see above).
-- for OPN, it includes the remote host (as FQDN or octal address)
+- for OPN, it includes the remote host (see above)
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
 
 #### NOTE further
@@ -231,6 +231,8 @@ Tons of locking, but possibly not enough.
 
 The foreign protocol type (see [Section 6 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
 
+Double-word (16-bit data) packets (opcode 0300 and up) are kind of not really implemented/tested yet. This is needed e.g. for binary FILE transfers, so it will happen at some point.
+
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
 ## TODO
@@ -247,5 +249,5 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection).
 - [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there).
 - [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
-- [x] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  Same goes for this.
+- [x] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  FILE is now done, in Python.
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs seqpacket.

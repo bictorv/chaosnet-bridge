@@ -127,7 +127,7 @@ There are different reasons to want to use TLS:
   nice/secure. TLS helps with authentication. 
 
 When configured to use Chaos-over-TLS, it needs some certificate
-infrastructure. I'm working on one for the Global Chaosnet. 
+infrastructure. There is one for the Global Chaosnet, see [TLS](TLS.md) 
 
 TLS is asymmetric, in the sense that one end is the server which the
 clients connect to. The implementation is not yet tested for cbridges

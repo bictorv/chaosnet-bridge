@@ -14,10 +14,12 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-# Based on https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file and LMI's SYS:FILE;SERVER.LISP#202
+# Based on https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file,
+# and LMI's SYS:FILE;SERVER.LISP#202 and SYS;NETWORK.CHAOS;QFILE.LISP#389
 # and its/src/syseng/file.591, its/src/sysen2/cftp.475
 
 # TODO
+# Document the protocol - SYSDOC;CHAOS FILE is not up-to-date.
 # Complain if ostype unknown, implement command to set it
 # Split better in classes/modules/files
 # Improve exception handling
