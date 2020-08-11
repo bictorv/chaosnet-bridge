@@ -1025,7 +1025,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Chaosnet FILE protocol client')
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
-    # parser.add_argument('user', help='User to login as')
+    parser.add_argument('--user', '-u', nargs=1, dest='user', help='User to login as')
     parser.add_argument("host", help='The host to connect to')
     args = parser.parse_args()
 
@@ -1063,16 +1063,41 @@ if __name__ == '__main__':
     uid = ""
     cwd = ""
     ncp = None
+    def directory_name(name):
+        if ncp.homedir.endswith(';'):
+            return name+';'
+        elif ncp.homedir.startswith(">") and ncp.homedir.endswith(">"):
+            return name+">"
+        else:
+            return name+";"
     def wdparse(f):
         if f.count(';') > 0:
+            # Assume ITS or MIT/LMI LISPM
+            return f
+        elif ncp.homedir.startswith(">") and ncp.homedir.endswith(">") and f.count('>') > 0:
+            # Symbolics or old CADR (e.g. System 78)
             return f
         else:
             return cwd + f
+    def dologin(uname):
+        uid = ncp.login(uname)
+        if ncp.homedir.count(':') > 0:
+            # skip any device
+            cwd = ncp.homedir[ncp.homedir.index(':')+1:].strip()
+        else:
+            cwd = ncp.homedir
+            print("Logged in as {} (homedir {!r})".format(uid,ncp.homedir))
+        if 'name' in ncp.dnsinfo:
+            args.host = ncp.dnsinfo['name'].split(".")[0]
+        return uid, cwd
 
     try:
         ncp = File(args.host)
         if ncp == None:
             exit(1)
+
+        if args.user and len(args.user) > 0:
+            uid,cwd = dologin(args.user[0])
 
         while True:
             # Wish: a completing/abbreviating command reader
@@ -1084,6 +1109,7 @@ if __name__ == '__main__':
 
             op = parts[0]
             arg = parts[1:]
+
             if debug:
                 print("op {!r} args {!r}".format(op,arg))
 
@@ -1106,20 +1132,17 @@ if __name__ == '__main__':
                 elif op == "debug":
                     debug = not debug
                 elif op == "dns":
-                    print('DNS info:', ncp.dnsinfo)
+                    print('DNS info: name {}, addr {!s}, OS {}, CPU {}'.format(
+                        ncp.dnsinfo['name'], ", ".join(["{:o}"]*len(ncp.dnsinfo['addrs'])).format(*ncp.dnsinfo['addrs']),
+                              ncp.dnsinfo['os'], ncp.dnsinfo['cpu']))
                 elif op == "login":
-                    uid = ncp.login(arg[0])
-                    if ncp.homedir.count(':') > 0:
-                        cwd = ncp.homedir[ncp.homedir.index(':')+1:].strip()
-                    else:
-                        cwd = ncp.homedir
-                    print("Logged in as {!r} (homedir {!r})".format(uid,ncp.homedir))
+                    uid,cwd = dologin(arg[0])
                 elif op == "cd" or op == "cwd":
                     if len(arg) > 0:
-                        if arg[0].endswith(';'):
+                        if arg[0].endswith(ncp.homedir[-1:]):
                             cwd = arg[0].strip()
                         else:
-                            print("Directory should end with ;", file=sys.stderr)
+                            print("Directory should end with {}".format(ncp.homedir[-1:]), file=sys.stderr)
                     print("CWD = {}".format(cwd))
                 elif op == "probe":
                     pb = ncp.probe_file(wdparse(arg[0]))
@@ -1224,7 +1247,7 @@ if __name__ == '__main__':
                                                                             r['created']))
                 elif op == "alldirs":
                     # print(ncp.all_directories())
-                    hd,fs = ncp.list_files(wdparse(arg[0]) if len(arg) > 0 else "*;", directories=True)
+                    hd,fs = ncp.list_files(wdparse(arg[0]) if len(arg) > 0 else directory_name("*"), directories=True)
                     for f in fs:
                         fs[f]['DIRECTORY'] = True
                     print_directory_list(hd,fs)
