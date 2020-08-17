@@ -819,7 +819,8 @@ find_existing_conn(struct chaos_header *ch)
     struct conn *c = cl->conn_conn;
     if ((c->conn_rhost == ch_srcaddr(ch)) &&
 	((c->conn_ridx == ch_srcindex(ch)) || // properly existing conn
-	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || 
+	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD) || 
+	   (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || 
 	   (ch_opcode(ch) == CHOP_FWD) || (ch_opcode(ch) == CHOP_CLS))
 	  // half-existing conn where we don't know the remote index yet
 	  && (c->conn_ridx == 0))
@@ -830,18 +831,24 @@ find_existing_conn(struct chaos_header *ch)
 	(c->conn_lhost == ch_destaddr(ch)) &&
 	((c->conn_lidx == ch_destindex(ch)) 
 	 // when receiving RFC, dest index is not specified
-	 || ((c->conn_state->state != CS_Inactive) && (ch_opcode(ch) == CHOP_RFC) && (ch_destindex(ch) == 0)))) {
+	 || ((c->conn_state->state != CS_Inactive) && 
+	     ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) && 
+	     (ch_destindex(ch) == 0)))) {
       val = c;
       break;
     }
   }
-  if (ncp_debug && (val == NULL) && ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_LOS))) {
-    u_char contact[CH_PK_MAX_DATALEN];
+  if (ncp_debug && (val == NULL) && 
+      ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD) || (ch_opcode(ch) == CHOP_LOS))) {
+    u_char contactbuf[CH_PK_MAX_DATALEN];
+    u_char *contact = contactbuf;
     get_packet_string(ch, contact, sizeof(contact));
+    if (ch_opcode(ch) == CHOP_BRD)
+      contact += ch_ackno(ch);
     printf("NCP: no conn found for %s %#x from src <%#o,%#x> for dest <%#o,%#x>, data (len %d) \"%s\"\n", 
 	   ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 	   ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), ch_nbytes(ch), contact);
-    if (ch_opcode(ch) == CHOP_RFC) {
+    if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
       printf("NCP: conn list length%s\n", conn_list == NULL ? " empty" : ":");
       struct conn_list *c = conn_list;
       while (c) {
@@ -1016,14 +1023,12 @@ add_listener(struct conn *c, u_char *contact)
 
 // find a listener for the RFC received
 struct conn *
-find_matching_listener(struct chaos_header *ch)
+find_matching_listener(struct chaos_header *ch, u_char *contact)
 {
   int x, cstate;
   struct listener *ll;
   struct conn *val = NULL;
-  u_char *contact = (u_char *)calloc(1, ch_nbytes(ch)+3);
 
-  get_packet_string(ch, contact, ch_nbytes(ch)+2);
   char *space = index((char *)contact, ' ');
   if (space) // ignore args
     *space = '\0';
@@ -1040,7 +1045,8 @@ find_matching_listener(struct chaos_header *ch)
       val = ll->lsn_conn;
       break;
     } else if (ncp_debug)
-      printf("NCP checking listener \"%s\" against RFC \"%s\" - mismatch\n", ll->lsn_contact, contact);
+      printf("NCP checking listener \"%s\" against %s \"%s\" - mismatch\n", ll->lsn_contact, 
+	     ch_opcode_name(ch_opcode(ch)), contact);
   }
   PTUNLOCKN(listener_lock,"listener_lock");
 
@@ -1048,6 +1054,9 @@ find_matching_listener(struct chaos_header *ch)
     fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
   // see if we were cancelled?
   pthread_testcancel();
+
+  if (space) // restore space
+    *space = ' ';
   return val;
 }
 
@@ -1080,13 +1089,20 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   }
 
   switch (opcode) {
+  case CHOP_BRD:
+    // For BRD, add bitmask - allocate max size for simplicity
+    memset(data, 0, 32);
+    data += 32;
+    pklen = 32;
+    set_ch_ackno(ch, 32);
+    // fall through
   case CHOP_RFC:
       if (c->conn_contact_args != NULL) {
 	u_char rfcwithargs[MAX_CONTACT_NAME_LENGTH];
 	sprintf((char *)rfcwithargs, "%s %s", c->conn_contact, c->conn_contact_args);
-	pklen = ch_11_puts(data, rfcwithargs);
+	pklen += ch_11_puts(data, rfcwithargs);
       } else
-	pklen = ch_11_puts(data, c->conn_contact);
+	pklen += ch_11_puts(data, c->conn_contact);
     break;
   case CHOP_SNS:
     // no data
@@ -1127,6 +1143,9 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   PTUNLOCK(c->conn_state->conn_state_lock);
   if ((data != NULL) && (len > 0)) {
     switch (opcode) {
+    case CHOP_BRD:
+      // BRD: skip over bitmask and fall through
+      data += ch_ackno(ch);
     case CHOP_RFC: case CHOP_CLS: case CHOP_LOS: case CHOP_ANS:
       htons_buf((u_short *)data, (u_short *)datao, len);
       break;
@@ -1187,11 +1206,11 @@ send_eof_pkt(struct conn *c)
 
 // initialize local haddr, index, winsize
 static void
-send_first_pkt(struct conn *c, int opcode, connstate_t newstate)
+send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_mask)
 {
   struct conn_state *cs = c->conn_state;
   u_char pkt[CH_PK_MAXLEN];
-  int pklen;
+  int pklen, i, mlen;
 
   if (ncp_debug > 1) printf("NCP: about to make %s pkt\n", ch_opcode_name(opcode));
 
@@ -1214,6 +1233,25 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate)
 
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
+  if (opcode == CHOP_BRD) {
+    // add subnet mask
+    if (subnet_mask != NULL) {
+      struct chaos_header *ch = (struct chaos_header *)pkt;
+      mlen = ch_ackno(ch);
+      if (ncp_debug) {
+	printf("NCP: adding BRD subnet mask length %d\n", mlen);
+	for (i = 0; i < mlen; i++)
+	  printf(" %#x", subnet_mask[i]);
+	printf("\n");
+      }
+      memcpy(&pkt[CHAOS_HEADERSIZE], subnet_mask, mlen);
+      // set_ch_nbytes(ch, ch_nbytes(ch) + mlen);
+      if (ncp_debug)
+	ch_dumpkt(pkt, ch_nbytes(ch));
+    } else if (ncp_debug) {
+      printf("NCP: making BRD pkt but no subnet mask given!\n");
+    }
+  }
 
   set_conn_state(c, cs->state, newstate, 1);
   PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
@@ -1234,7 +1272,15 @@ send_rfc_pkt(struct conn *c)
 {
   // count it as created when we send the first RFC pkt (for timeout handling)
   c->conn_created = time(NULL);
-  send_first_pkt(c, CHOP_RFC, CS_RFC_Sent);
+  send_first_pkt(c, CHOP_RFC, CS_RFC_Sent, NULL);
+}
+
+static void
+send_brd_pkt(struct conn *c, u_char *mask)
+{
+  // count it as created when we send the first BRD pkt (for timeout handling)
+  c->conn_created = time(NULL);
+  send_first_pkt(c, CHOP_BRD, CS_BRD_Sent, mask);
 }
 
 
@@ -1242,7 +1288,7 @@ static void
 send_opn_pkt(struct conn *c)
 {
   // don't declare it open until STS arrives
-  send_first_pkt(c, CHOP_OPN, CS_Open_Sent);
+  send_first_pkt(c, CHOP_OPN, CS_Open_Sent, NULL);
 }
 
 
@@ -1729,12 +1775,8 @@ parse_contact_args(u_char *data, u_char *contact)
 
 
 static void
-initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *data)
+initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *contact)
 {
-  u_char contact[MAX_CONTACT_NAME_LENGTH];
-
-  get_packet_string(ch, contact, sizeof(contact));
-
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(contact);
   conn->conn_contact_args = parse_contact_args(contact, conn->conn_contact);
@@ -1746,7 +1788,12 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *d
   conn->conn_created = time(NULL);
   // conn->conn_state->state = CS_RFC_Received;
   PTUNLOCKN(conn->conn_lock,"conn_lock");
-  if (ncp_debug) print_conn("Initiated from RFC pkt:", conn, 0);
+  if (ncp_debug) {
+    if (ch_opcode(ch) == CHOP_RFC)
+      print_conn("Initiated from RFC pkt:", conn, 0);
+    else if (ch_opcode(ch) == CHOP_BRD)
+      print_conn("Initiated from BRD pkt:", conn, 0);
+  }
   add_active_conn(conn);
 }
 
@@ -1853,6 +1900,77 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
   if (ncp_debug) print_conn("Initiated from RFC line:", conn, 0);
   add_active_conn(conn);
   send_rfc_pkt(conn);
+}
+
+static void
+initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)  
+{
+  u_short haddr = 0, netnum, numnets = 0;
+  u_char *cname, *hname, *space;
+  u_char mask[32];
+  memset(mask, 0, sizeof(mask));
+
+  space = (u_char *)index((char *)buf, ' ');
+  if (space == NULL) {
+    user_socket_los(conn, "Bad BRD line - can't find end of subnet list");
+    return;
+  }
+  if (*buf == '[') {
+    // beginning of options
+    char *beg = (char *)(buf+1), *end = index((char *)buf, ']');
+    if (end == NULL) {
+      user_socket_los(conn, "Syntax error in option parsing (%s)", buf+1);
+      return;
+    }
+    *end = '\0';
+    if (ncp_debug) printf("NCP about to parse BRD options: \"%s\"\n", beg);
+    buf = (u_char *)(end+1);		     // skip options part
+    while (isspace(*buf)) buf++; // skip whitespace
+    parse_rfc_line_options(conn, beg, end);
+  }
+  while (isdigit(*buf)) {
+    if (sscanf((char *)buf, "%ho", &netnum) == 1) {
+      mask[netnum/8] |= 1<<(netnum % 8);
+      if (ncp_debug) printf(" NCP parsed subnet %#o, setting index %d: %#x\n", 
+			    netnum, netnum/8, mask[netnum/8]);
+      numnets++;
+    }
+    // skip over the parsed number
+    while (isdigit(*buf)) buf++;
+    // and the comma if it's there
+    if (*buf == ',')
+      buf++;
+    else if (*buf == ' ') {
+      // or the space, which ends the list
+      buf++;
+      break;
+    } else {
+      user_socket_los(conn, "Bad BRD line - can't parse subnet list");
+      return;
+    }
+  }
+  if (numnets == 0) {
+    user_socket_los(conn, "Bad BRD line - no subnets found");
+    return;
+  } else if (ncp_debug)
+    printf("NCP parsing BRD: found %d subnets\n", numnets);
+
+  // skip whitespace
+  while (*buf == ' ') buf++;
+  // contact and args begin here
+  cname = buf;
+  if (ncp_debug) printf("NCP parsing BRD: contact and args are \"%s\"\n", cname);
+
+  PTLOCKN(conn->conn_lock,"conn_lock");
+  conn->conn_contact = parse_contact_name(cname);
+  conn->conn_contact_args = parse_contact_args(cname, conn->conn_contact);
+  conn->conn_rhost = 0;
+  if (ncp_debug) printf("NCP parsed BRD line: %d subnets, contact \"%s\" args \"%s\"\n",
+			numnets, conn->conn_contact, conn->conn_contact_args);
+  PTUNLOCKN(conn->conn_lock,"conn_lock");
+  if (ncp_debug) print_conn("Initiated from BRD line:", conn, 0);
+  add_active_conn(conn);
+  send_brd_pkt(conn, mask);
 }
 
 
@@ -2196,14 +2314,20 @@ retransmit_controlled_packets(struct conn *conn)
 				ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), 
 				cs->pktnum_sent_acked, state_name(cs->state));
 	}
-	if ((ch_opcode(pkt) == CHOP_RFC) && (conn->rfc_timeout > 0)
+	if (((ch_opcode(pkt) == CHOP_RFC) || (ch_opcode(pkt) == CHOP_BRD))
+	    && (conn->rfc_timeout > 0)
 	    && (time(NULL) - conn->conn_created > conn->rfc_timeout)) {
 	  // Note: more than rfc_timeout has passed. This is better than >= I think.
-	  if (ncp_debug) printf("NCP: RFC timeout (%ld > %d)\n", time(NULL) - conn->conn_created, conn->rfc_timeout);
+	  if (ncp_debug) printf("NCP: %s timeout (%ld > %d)\n", ch_opcode_name(ch_opcode(pkt)), 
+				time(NULL) - conn->conn_created, conn->rfc_timeout);
 	  PTUNLOCKN(cs->send_mutex,"send_mutex");
 	  // this also cancels the conn
-	  user_socket_los(conn, "Connection timed out (after %d s), host %#o not responding",
-			  conn->rfc_timeout, conn->conn_rhost);
+	  if (ch_opcode(pkt) == CHOP_RFC)
+	    user_socket_los(conn, "Connection timed out (after %d s), host %#o not responding",
+			    conn->rfc_timeout, conn->conn_rhost);
+	  else
+	    user_socket_los(conn, "Connection timed out (after %d s), no host responding",
+			    conn->rfc_timeout);
 	}
 	if (!packet_uncontrolled(pkt)
 	    // don't retransmit OPN when we're already open
@@ -2215,7 +2339,8 @@ retransmit_controlled_packets(struct conn *conn)
 	  // protect against swapping - send a copy
 	  if (pklen <= sizeof(tempkt)) {
 	    // update ack field
-	    set_ch_ackno(pkt, cs->pktnum_read_highest);
+	    if (ch_opcode(pkt) != CHOP_BRD)
+	      set_ch_ackno(pkt, cs->pktnum_read_highest);
 	    cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
 	    memcpy(tempkt, (u_char *)pkt, pklen);
 	    if (ncp_debug) printf("NCP local %#x retransmitting controlled pkt %#x (%s), ack %#x\n",
@@ -2263,7 +2388,8 @@ send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt, in
 			  cs->window_available, pkqueue_length(cs->send_pkts), ch_ackno(pkt));
     PTUNLOCKN(cs->window_mutex,"window_mutex");
     // update ack field
-    set_ch_ackno(pkt, cs->pktnum_read_highest);
+    if (ch_opcode(pkt) != CHOP_BRD)
+      set_ch_ackno(pkt, cs->pktnum_read_highest);
     cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
 
     if (ncp_debug) printf("NCP sending controlled pkt %#x (%s) ack %#x\n", 
@@ -2578,13 +2704,10 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   // Dispatch based on state and opcode
   switch (cs->state) {
   case CS_Listening: {
-    if (ch_opcode(ch) == CHOP_RFC) {
+    if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       // conn_to_socket changes state
       // set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
-    } else if (ch_opcode(ch) == CHOP_BRD) {
-      // @@@@ do something
-      fprintf(stderr,"NYI: BRD received, but not implemented yet\n");
     } else
       // ignore all other pkts
       return;
@@ -2673,7 +2796,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       break;
     }
   case CS_Inactive:
-    if (ch_opcode(ch) == CHOP_RFC) {
+    if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD))  {
       send_los_pkt(conn, "No such index exists");
       return;
     }
@@ -2718,26 +2841,31 @@ static struct conn *
 packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_char *data) 
 {
   struct conn *conn = NULL;
-  if (ch_opcode(ch) == CHOP_RFC) {
-    u_char contact[CH_PK_MAX_DATALEN];
+  if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
+    u_char contactbuf[CH_PK_MAX_DATALEN];
+    u_char *contact = contactbuf;
     get_packet_string(ch, contact, sizeof(contact));
+    if (ch_opcode(ch) == CHOP_BRD)
+      // look for contact after the mask
+      contact += ch_ackno(ch);
     if (ncp_debug) printf("NCP p_t_c_h: Got %s %#x from <%#o,%#x> for <%#o,%#x>, contact \"%s\"\n", 
 			  ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 			  ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), contact);
     // go look for a matching listener
-    conn = find_matching_listener(ch);
+    conn = find_matching_listener(ch, contact);
     if (conn) {
       // if we got one, initiate it from the conn and data (contact args)
       // don't accept a new one
       remove_listener_for_conn(conn);
       // fill in
-      initiate_conn_from_rfc_pkt(conn, ch, data);
+      initiate_conn_from_rfc_pkt(conn, ch, contact);
       add_input_pkt(conn, ch);
       if (ncp_debug) print_conn("Found listener for", conn, 0);
     } else {
       // CLS: No listener for this contact
       if (ncp_debug) printf("No listener found for RFC \"%s\"\n", contact);
-      send_cls_pkt(make_temp_conn_from_pkt(ch), "No server for this contact name");
+      if (ch_opcode(ch) != CHOP_BRD)
+	send_cls_pkt(make_temp_conn_from_pkt(ch), "No server for this contact name");
     }
   } else if ((ch_opcode(ch) >= CHOP_DAT) || (ch_opcode(ch) == CHOP_OPN) 
 	     || (ch_opcode(ch) == CHOP_STS) || (ch_opcode(ch) == CHOP_SNS)) {
@@ -2928,6 +3056,9 @@ socket_to_conn_stream_handler(struct conn *conn)
       // create conn and send off an RFC pkt
       if (ncp_debug) printf("Stream \"%s\"\n", buf);
       initiate_conn_from_rfc_line(conn,&buf[4],cnt-4);
+    } else if (strncasecmp((char *)buf, "BRD ", 4) == 0) {
+      if (ncp_debug) printf("Stream \"%s\"\n", buf);
+      initiate_conn_from_brd_line(conn, &buf[4], cnt-4);
     }
   }
   else if (cs->state == CS_RFC_Received) {
@@ -3012,9 +3143,21 @@ socket_to_conn_stream_handler(struct conn *conn)
   }
 #endif
   else if (cs->state != CS_Inactive) {
+    int i;
     char errbuf[512];
-    sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, LSN, OPN, CLS, ANS, or wrong state: %.12s...", 
-	    cnt, conn_state_name(conn), buf);
+    char *ep;
+    time_t now = time(NULL);
+    strftime(errbuf, sizeof(errbuf), "%T", localtime(&now));
+    ep = &errbuf[strlen(errbuf)];
+    sprintf(ep, ": Bad request len %d from stream user in state %s: not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state: ", 
+	    cnt, conn_state_name(conn));
+    ep = &errbuf[strlen(errbuf)];
+    for (i = 0; (i < cnt) && (i < 12) && (i < sizeof(errbuf)); i++) {
+      sprintf(ep, "%#02x ", buf[i]);
+      ep += 3;
+    }
+    if (i < cnt)
+      strcat(ep, "...");
     fprintf(stderr,"%s\n", errbuf);
     send_los_pkt(conn,"Local error. We apologize for the incovenience.");
     // return a LOS to the user: bad request - not RFC or LSN
@@ -3059,7 +3202,7 @@ socket_to_conn_packet_handler(struct conn *conn)
       cnt += receive_or_die(conn, buf+cnt, (len+4)-cnt);
     }
     if (cs->state == CS_Inactive) {
-      // In inactive state, the first thing from the user socket is RFC or LSN
+      // In inactive state, the first thing from the user socket is RFC, BRD or LSN
       if (opc == CHOP_LSN) {
 	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
 	memcpy(argbuf, &buf[4], len);
@@ -3073,6 +3216,13 @@ socket_to_conn_packet_handler(struct conn *conn)
 	argbuf[len] = '\0';
 	if (ncp_debug) printf("Packet \"RFC %s\"\n", argbuf);
 	initiate_conn_from_rfc_line(conn,argbuf,len);
+      } else if (opc == CHOP_BRD) {
+	// @@@@ 255 subnets => 32 bytes in dest
+	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+	memcpy(argbuf, &buf[4], len);
+	argbuf[len] = '\0';
+	if (ncp_debug) printf("Packet \"BRD %s\"\n", argbuf);
+	initiate_conn_from_brd_line(conn,argbuf,len);
       }
     }
     else if (cs->state == CS_RFC_Received) {
@@ -3116,7 +3266,7 @@ socket_to_conn_packet_handler(struct conn *conn)
     }
     else if (cs->state != CS_Inactive) {
       char errbuf[512];
-      sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, LSN, OPN, CLS, ANS, or wrong state: %s", 
+      sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state: %s", 
 	      cnt, conn_state_name(conn), ch_opcode_name(buf[0]));
       fprintf(stderr,"%s\n", errbuf);
       send_los_pkt(conn,"Local error. We apologize for the incovenience.");
@@ -3187,6 +3337,10 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       memcpy(&obuf[olen], buf, len);
       len += olen+2;
       break;
+    case CHOP_BRD:
+      // skip bitmask and fall through
+      if (ncp_debug) printf("Passing BRD on as RFC by skipping %d bytes of subnet mask\n", ch_ackno(pkt));
+      buf += ch_ackno(pkt);
     case CHOP_RFC:
       sprintf((char *)obuf,"RFC %s\r\n", buf);
       len += 4+2;
@@ -3268,13 +3422,14 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     }
   }
 
-  if ((cs->state == CS_Listening) && (opc == CHOP_RFC)) {
+  if ((cs->state == CS_Listening) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
 #if CHAOS_DNS
     char fhost[NS_MAXDNAME];
 #else
     char fhost[32];
 #endif
-    char args[MAX_CONTACT_NAME_LENGTH], *space;
+    char argsbuf[MAX_CONTACT_NAME_LENGTH], *space;
+    char *args = argsbuf;
     len = ch_nbytes(pkt);
 #if CHAOS_DNS
     if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
@@ -3282,15 +3437,21 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
     get_packet_string(pkt, (u_char *)args, sizeof(args));
-    if (ncp_debug) printf("NCP rfc data: \"%s\"\n", args);
+    if (opc == CHOP_BRD) {
+      // for BRD, skip bitmask
+      if (ncp_debug) printf("NCP passing BRD on to socket as RFC by skipping %d bytes of subnet mask\n",
+			    ch_ackno(pkt));
+      args += ch_ackno(pkt);
+    }
+    if (ncp_debug) printf("NCP %s data: \"%s\"\n", ch_opcode_name(opc), args);
     if ((space = index(args, ' ')) != NULL) 
       sprintf(buf, "%s%s", fhost, space);
     else
       sprintf(buf, "%s", fhost);
     len = strlen(buf);
-    if (ncp_debug) printf("To socket %s (%d bytes): [RFC] %s\n", conn_sockaddr_path(conn), len, buf);
+    if (ncp_debug) printf("To socket %s (%d bytes): [%s] %s\n", conn_sockaddr_path(conn), len, ch_opcode_name(opc), buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
-  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_ANS)) {
+  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent)) && (ch_opcode(pkt) == CHOP_ANS)) {
     trace_conn("Answered", conn);
     len = ch_nbytes(pkt);
     // might be non-string data
@@ -3302,7 +3463,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     buf[0] = ch_ackno(pkt) & 0xff;
     buf[1] = ch_ackno(pkt) >> 8;
     len = 2;
-  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_Open))
+  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
 #if CHAOS_DNS
     if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)buf, NS_MAXDNAME > CH_PK_MAX_DATALEN ? CH_PK_MAX_DATALEN : NS_MAXDNAME) < 0)

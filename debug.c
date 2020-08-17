@@ -202,7 +202,7 @@ void print_buf(u_char *ucp, int len)
 void
 ch_dumpkt(unsigned char *ucp, int cnt)
 {
-  int i, row, len;
+  int i, row, len, mlen;
   char b1[3],b2[3];
   struct chaos_header *ch = (struct chaos_header *)ucp;
   struct chaos_hw_trailer *tr;
@@ -226,6 +226,25 @@ ch_dumpkt(unsigned char *ucp, int cnt)
   ucp += CHAOS_HEADERSIZE;
 
   switch (ch_opcode(ch)) {
+  case CHOP_BRD:
+    // show bitmask, then fall through
+    mlen = ch_ackno(ch);
+    fprintf(stderr," Broadcast to %d*8 subnets ", ch_ackno(ch));
+    for (i = 0; i < mlen; i++) {
+      int x;
+      fprintf(stderr, "%#x ", ucp[i]);
+#if 0
+      for (x = 0; x < 8; x++) {
+	if (ucp[i] & (1<<x))
+	  fprintf(stderr, "%#o, ", i*8+x);
+      }
+#endif
+    }
+    fprintf(stderr,"\n");
+    ch_11_gets(ucp+mlen, data, (ch_nbytes(ch)+1)-mlen);
+    fprintf(stderr,"[Contact: \"%s\"]\n", data);
+    break;
+    
   case CHOP_RFC:
     ch_11_gets(ucp, data, ((ch_nbytes(ch)+1)/2)*2);
     fprintf(stderr,"[Contact: \"%s\"]\n", data);

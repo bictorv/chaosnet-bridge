@@ -91,6 +91,16 @@ So far there are two:
 - `rfc 3040 dump-routing-table`
     - it's all case-insensitive (contact names are made uppercase). (Try `hostat 3040 dump-routing-table` for legible output.)
 
+#### Broadcast:
+
+To send a controlled [broadcast packet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast), write
+
+`BRD `[*options*] *CSL* *contactname* *args*
+
+where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to.
+
+Example: `BRD 6,7,11 [timeout=3] STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works.
+
 #### Responses
 
 Any errors in parsing the RFC line (etc) result in a
@@ -163,6 +173,8 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | --- | --- | --- |
 | RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
+| BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to. As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
+| BRD (rcvd) | - | is translated to an RFC (see above) |
 | OPN (sent) | none | |
 | OPN (rcvd) | *rhost* | ascii, which is FQDN or octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
@@ -239,7 +251,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Add a bit of statistics counters for conns
 - [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
 - [ ] Reconsider how uncontrolled packets are handled, so they can "bypass" the controlled ones in delivery to user.
-- [ ] Implement broadcast (both address-zero and BRD).
+- [x] Implement broadcast (both address-zero and BRD).
 
 ### Applications:
 - [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
