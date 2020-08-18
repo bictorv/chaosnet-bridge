@@ -138,11 +138,12 @@ void print_buf(u_char *ucp, int len)
 // ;;; For subnet n, pkt[2n] has the method; if this is less than 400 (octal), it's
 // ;;; an interface number; otherwise, it's a host which will forward packets to that
 // ;;; subnet.  pkt[2n+1] has the host's idea of the cost.
-void print_routing_table(u_char *bp, int len)
+void print_routing_table(u_char *bp, int len, u_short src)
 {
   u_short *ep, *dp = (u_short *)bp;
   int i, sub, maxroutes = len/4;
 
+  printf("Routing table received from host %#o\n", src);
   printf("%-8s %-8s %s\n", "Subnet", "Method", "Cost");
   for (sub = 0; sub < maxroutes; sub++) {
     if (dp[sub*2] != 0) {
@@ -152,7 +153,7 @@ void print_routing_table(u_char *bp, int len)
   }
 }
 
-void print_time(u_char *bp, int len)
+void print_time(u_char *bp, int len, u_short src)
 {
   u_short *dp = (u_short *)bp;
   char tbuf[64];
@@ -204,7 +205,7 @@ char *seconds_as_interval(u_int t)
   return strdup(tbuf);
 }
 
-void print_uptime(u_char *bp, int len)
+void print_uptime(u_char *bp, int len, u_short src)
 {
   u_short *dp = (u_short *)bp;
 
@@ -213,15 +214,16 @@ void print_uptime(u_char *bp, int len)
   u_int t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
 
   t /= 60;
-  printf("%s\n", seconds_as_interval(t));
+  printf("Host %#o uptime: %s\n", src, seconds_as_interval(t));
 }
 
-void print_lastcn(u_char *bp, int len)
+void print_lastcn(u_char *bp, int len, u_short src)
 {
   u_short *dp = (u_short *)bp;
   int i;
   
   // @@@@ prettyprint age, host?
+  printf("Last seen at host %#o:\n", src);
   printf("%-8s %-8s %-8s %s\n", "Host","#in","Via","Age(s)");
   for (i = 0; i < len/2/7; i++) {
     u_short wpe = (*dp++);
@@ -234,7 +236,7 @@ void print_lastcn(u_char *bp, int len)
   }
 }
 
-void print_status(u_char *bp, int len)
+void print_status(u_char *bp, int len, u_short src)
 {
   u_char hname[32+1];
   u_short *dp;
@@ -243,7 +245,7 @@ void print_status(u_char *bp, int len)
   // First 32 bytes contain the name of the node, padded on the right with zero bytes.
   memset(hname, 0, sizeof(hname));
   strncpy((char *)hname, (char *)bp, sizeof(hname)-1);
-  printf("Hostat for host %s\n", hname);
+  printf("Hostat for host %s (%#o)\n", hname, src);
   bp += 32;
 
   dp = (u_short *)bp;
@@ -273,7 +275,7 @@ void print_status(u_char *bp, int len)
 }
 
 void
-print_finger_info(u_char *bp, int len, char *host)
+print_finger_info(u_char *bp, int len, char *host, u_short src)
 {
   u_char *nl;
   u_char *uid = NULL, *loc = NULL, *idle = NULL, *pname = NULL, *aff = NULL;
@@ -294,9 +296,11 @@ print_finger_info(u_char *bp, int len, char *host)
       }
     }
   }
+  char nmbuf[8+5+3];
+  sprintf(nmbuf,"User at %#o", src);
   printf("%-15s %.1s %-22s %-10s %5s    %s\n"
 	 "%-15.15s %.1s %-22.22s %-10.10s %5.5s    %s\n",
-	 "User"," ","Name","Host","Idle","Location",
+	 nmbuf," ","Name","Host","Idle","Location",
 	 uid,aff,pname,host,idle,loc);
 }
 
@@ -305,10 +309,11 @@ main(int argc, char *argv[])
 {
   signed char c;
   char opts[] = "r";		// raw
-  char *host, *contact = "STATUS", *pname;
+  char *host, *contact = "STATUS", *pname, *space;
   char buf[CH_PK_MAXLEN];
   char *nl, *bp;
   int i, cnt, sock, anslen, ncnt, raw = 0;
+  u_short src;
 
   pname = argv[0];
 
@@ -350,10 +355,18 @@ main(int argc, char *argv[])
     fprintf(stderr,"Unexpected reply from %s: %s\n", host, buf);
     exit(1);
   }
-  if (sscanf(&buf[4], "%d", &anslen) != 1) {
+  if (sscanf(&buf[4],"%ho", &src) != 1) {
+    fprintf(stderr,"Cannot parse ANS source address: %s\n", buf);
+    exit(1);
+  }
+  space = index(&buf[4], ' ');
+  if ((space == NULL) || sscanf(space+1, "%d", &anslen) != 1) {
     fprintf(stderr, "Cannot parse ANS length: %s\n", buf);
     exit(1);
   }
+#if 0
+  fprintf(stderr,"Got ANS from %#o, %d bytes\n", src, anslen);
+#endif
   for (bp = nl+cnt; bp-nl < anslen; ncnt = recv(sock, bp, sizeof(buf)-(bp-buf), 0)) {
     cnt += ncnt;
     bp += ncnt;
@@ -361,17 +374,17 @@ main(int argc, char *argv[])
   if (raw)
     print_buf((u_char *)nl, anslen);
   else if (strcasecmp(contact, "STATUS") == 0)
-    print_status((u_char *)nl, anslen);
+    print_status((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "TIME") == 0)
-    print_time((u_char *)nl, anslen);
+    print_time((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "UPTIME") == 0)
-    print_uptime((u_char *)nl, anslen);
+    print_uptime((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "DUMP-ROUTING-TABLE") == 0)
-    print_routing_table((u_char *)nl, anslen);
+    print_routing_table((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "FINGER") == 0)
-    print_finger_info((u_char *)nl, anslen, host);
+    print_finger_info((u_char *)nl, anslen, host, src);
   else if (strcasecmp(contact, "LASTCN") == 0)
-    print_lastcn((u_char *)nl, anslen);
+    print_lastcn((u_char *)nl, anslen, src);
   else
     print_buf((u_char *)nl, anslen);
 }

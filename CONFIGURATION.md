@@ -38,10 +38,13 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 	set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*. If `server` is specified, a TLS server is started listening to *portnr* (default 42042, if at EOL). TLS servers are always "dynamic" in that they listen to connections from anywhere, but accept only those using certificates trusted by the CA trust chain. Server-end connections are added dynamically at runtime, and can not be pre-declared. The local address is set to the `myaddr` parameter, or the global `chaddr`. With debug on, prints some debug stuff. 
 - `ether` [ `debug` off/on ]
 
-	With debug on, prints some debug stuff. (Note that interface names are now on link definitions.) |
+	With debug on, prints some debug stuff. (Note that interface names are now on link definitions.) 
 - `chip` [ `dynamic` off/on \| `debug` off/on ]
 
 	Allow [dynamically](#dynamic-links-and-routes) added destinations (cf `chudp` above). With debug on, prints some debug stuff. 
+- `unix` [ `debug` off/on ]
+
+	With debug on, prints some debug stuff.
 - `dns` [ `server` 130.238.19.25 ] [ `addrdomain` CH-ADDR.NET ] [ `forwarder` off/on ] [ `trace` off/on ]
 
 	set the DNS IP server (which should handle CH records, default above), the domain of "local" CH class addresses (default above, no ending dot), enable/disable forwarding of pkts received on the "DNS" contact name (default off), and enable trace printouts (default off). DNS is used internally by the TLS server/client to look up the certificate CN (of server and client) as Chaos hosts, looking for their addresses, and also by the [NCP](NCP.md) to look up addresses.

@@ -24,6 +24,32 @@
 // Based on code by Brad Parker (brad@heeltoe.com), see http://www.unlambda.com/cadr/
 
 static int unixsock = -1;
+static int unixdebug = 0;
+
+int
+parse_usockets_config()
+{
+  char *tok = NULL;
+
+  while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
+    if (strcmp(tok,"debug") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) {
+	fprintf(stderr,"unix: no argument given for \"debug\" setting\n");
+	return -1;
+      } else if ((strcmp(tok,"on") == 0) || (strcmp(tok,"yes") == 0)) {
+	unixdebug = 1;
+      } else if ((strcmp(tok,"off") == 0) || (strcmp(tok,"no") == 0)) {
+	unixdebug = 0;
+      }
+      fprintf(stderr,"unix: debug is %s\n", unixdebug ? "on" : "off");
+    } else {
+      fprintf(stderr,"unix: unknown keyword \"%s\"\n", tok);
+      return -1;
+    }
+  }
+  return 0;
+}
 
 /*
  * connect to server using specificed socket type
@@ -53,7 +79,7 @@ u_connect_to_server(void)
 
     unlink(unix_addr.sun_path);
 
-    if (debug) fprintf(stderr,"My unix socket %s\n", unix_addr.sun_path);
+    if (unixdebug) fprintf(stderr,"My unix socket %s\n", unix_addr.sun_path);
 
     if ((bind(fd, (struct sockaddr *)&unix_addr, len) < 0)) {
       perror("bind(AF_UNIX)");
@@ -76,10 +102,10 @@ u_connect_to_server(void)
     unixs_addr.sun_family = AF_UNIX;
     len = SUN_LEN(&unixs_addr);
 
-    if (debug) fprintf(stderr,"Connecting to server socket %s\n", unixs_addr.sun_path);
+    if (unixdebug) fprintf(stderr,"Connecting to server socket %s\n", unixs_addr.sun_path);
 
     if (connect(fd, (struct sockaddr *)&unixs_addr, len) < 0) {
-      if (debug) {
+      if (unixdebug) {
 	fprintf(stderr,"cannot connect to socket %s\n",unixs_addr.sun_path);
 	perror("connect(AF_UNIX)");
       }
@@ -100,11 +126,13 @@ u_read_chaos(int fd, u_char *buf, int buflen)
 
     ret = read(fd, lenbytes, 4);
     if (ret == 0) {
-      perror("read nothing from unix socket");
+      if (unixdebug)
+	perror("read nothing from unix socket");
       return -1;
     }
     if (ret < 0) {
-      perror("u_read_chaos");
+      if (unixdebug)
+	perror("u_read_chaos");
       return ret;
     }
 
@@ -112,17 +140,20 @@ u_read_chaos(int fd, u_char *buf, int buflen)
 
     ret = read(fd, buf, len > buflen ? buflen : len);
     if (ret == 0) {
-      perror("read nothing from unix socket");
+      if (unixdebug)
+	perror("read nothing from unix socket");
       return -1;
     }
     if (ret < 0)
       return ret;
 
-    if (debug || (ret != len)) {
+    if (unixdebug || (ret != len)) {
       fprintf(stderr,"Read %d of %d bytes from Unix socket\n",ret,len);
-      htons_buf((u_short *)buf,(u_short *)buf,len);
-      ch_dumpkt(buf,len);
-      ntohs_buf((u_short *)buf,(u_short *)buf,len);
+      if (debug || (unixdebug > 1)) {
+	htons_buf((u_short *)buf,(u_short *)buf,len);
+	ch_dumpkt(buf,len);
+	ntohs_buf((u_short *)buf,(u_short *)buf,len);
+      }
     }
 
     return ret;
@@ -142,7 +173,7 @@ u_send_chaos(int fd, u_char *buf, int buflen)
     htons_buf((u_short *)buf,(u_short *)buf,buflen);
     ch_dumpkt(buf,buflen);
     ntohs_buf((u_short *)buf,(u_short *)buf,buflen);
-  } else if (verbose) {
+  } else if (verbose || unixdebug) {
     fprintf(stderr,"Unix: Sending %s: %d bytes\n",
 	    ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff), buflen);
   }
@@ -160,7 +191,8 @@ u_send_chaos(int fd, u_char *buf, int buflen)
 
   ret = writev(fd, iov, 2);
   if (ret <  0) {
-    perror("u_send_chaos");
+    if (unixdebug)
+      perror("u_send_chaos");
     // return(-1);
   }
 }
@@ -170,6 +202,7 @@ void * unix_input(void *v)
   /* Unix -> others thread */
   u_char data[CH_PK_MAXLEN];
   int len, blen = sizeof(data);
+  int unlucky = 0;
   u_char *pkt = data;
 
   u_char us_subnet = 0;		/* unix socket subnet */
@@ -181,9 +214,11 @@ void * unix_input(void *v)
     }
   }
 
-  if ((unixsock = u_connect_to_server()) < 0)
+  if ((unixsock = u_connect_to_server()) < 0) {
     //exit(1);
-    fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+    if (verbose || unixdebug)
+      fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+  }
 
   while (1) {
     memset(pkt, 0, blen);
@@ -191,12 +226,15 @@ void * unix_input(void *v)
       if (unixsock > 0)
 	close(unixsock);
       unixsock = -1;		// avoid using it until it's reopened
-      if (verbose) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
-      // @@@@ progressive backoff, like in chtls?
-      sleep(5);			/* wait a bit to let chaosd restart */
+      if (verbose || unixdebug) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
+      // Backoff: increase sleep until 35, then go back to 15
+      unlucky++;
+      if (unlucky > 30) unlucky /= 3;
+      sleep(5+unlucky);			/* wait a bit to let chaosd restart */
       unixsock = u_connect_to_server();
     } else {
-      if (debug) fprintf(stderr,"unix input %d bytes\n", len);
+      unlucky = 0;
+      if (unixdebug) fprintf(stderr,"unix input %d bytes\n", len);
 
       ntohs_buf((u_short *)pkt, (u_short *)pkt, len);
 
@@ -214,11 +252,12 @@ void * unix_input(void *v)
 	    tr->ch_hw_checksum = ntohs(tr->ch_hw_checksum);
 	    if (ch_checksum(pkt, len) != 0) {
 	      // Still bad
-	      if (verbose || debug) {
+	      if (verbose || debug || unixdebug) {
 		fprintf(stderr,"[Bad checksum %#x from %#o (Unix)]\n", cks, schad);
 		fprintf(stderr,"HW trailer\n dest %#o, src %#o, cks %#x\n",
 			tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-		ch_dumpkt(pkt, len);
+		if (debug)
+		  ch_dumpkt(pkt, len);
 	      }
 	      // Use link source net, can't really trust data
 	      PTLOCK(linktab_lock);
@@ -227,21 +266,22 @@ void * unix_input(void *v)
 	      continue;
 	    } else {
 	      // weird case, usim byte swapping bug?
-	      if (debug) fprintf(stderr,"[Checksum from %#o (Unix) was fixed by swapping]\n", schad);
+	      if (unixdebug) fprintf(stderr,"[Checksum from %#o (Unix) was fixed by swapping]\n", schad);
 	      PTLOCK(linktab_lock);
 	      // Count it, but accept it.
 	      linktab[us_subnet].pkt_crcerr_post++;
 	      PTUNLOCK(linktab_lock);
 	    }
 	  }
-	} else if (debug)
+	} else if (unixdebug)
 	  fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Unix\n",
 		  tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
-      } else if (debug) {
+      } else if (debug || unixdebug) {
 	fprintf(stderr,"Unix: Received no HW trailer (len %d != %lu = %d+%lu+%lu)\n",
 		len, ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE,
 		ch_nbytes(ch), CHAOS_HEADERSIZE, CHAOS_HW_TRAILERSIZE);
-	ch_dumpkt(pkt, len);
+	if (debug)
+	  ch_dumpkt(pkt, len);
       }
       // check where it's coming from, prefer trailer info
       u_short srcaddr;
@@ -253,7 +293,7 @@ void * unix_input(void *v)
       if (is_mychaddr(srcaddr)) {
 	// Unix socket server/chaosd echoes everything to everyone
 	// (This is checked also in forward_chaos_pkt, but optimize a little?)
-	if (debug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
+	if (debug || unixdebug) fprintf(stderr,"unix_input: dropping echoed pkt from self\n");
 	continue;
       }
       struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
@@ -270,7 +310,7 @@ forward_on_usocket(struct chroute *rt, u_short schad, u_short dchad, struct chao
   // There can be only one?
   htons_buf((u_short *)ch, (u_short *)ch, dlen);
   if (unixsock > 0) {
-    if (debug) fprintf(stderr,"Forward: Sending on unix from %#o to %#o\n", schad, dchad);
+    if (unixdebug) fprintf(stderr,"Forward: Sending on unix from %#o to %#o\n", schad, dchad);
     u_send_chaos(unixsock, data, dlen);
   }
 }
