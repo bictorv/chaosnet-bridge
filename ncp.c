@@ -836,6 +836,15 @@ find_existing_conn(struct chaos_header *ch)
 	     (ch_destindex(ch) == 0)))) {
       val = c;
       break;
+    } else if (((c->conn_state->state == CS_BRD_Sent) || 
+		((c->conn_state->state == CS_Answered) && (ch_opcode(ch) == CHOP_ANS))) && 
+	       (c->conn_lhost == ch_destaddr(ch)) &&
+	       (c->conn_lidx == ch_destindex(ch)) &&
+	       ((ch_opcode(ch) == CHOP_ANS) || (ch_opcode(ch) == CHOP_FWD) ||
+		((ch_opcode(ch) == CHOP_OPN) && (c->conn_rhost == 0) && (c->conn_ridx == 0)))) {
+      // the BRD_Sent conn has zero rhost, but allow different hosts to ANS the same BRD conn?
+      val = c;
+      break;
     }
   }
   if (ncp_debug && (val == NULL) && 
@@ -1812,6 +1821,16 @@ handle_option(struct conn *c, char *optname, char *val)
       user_socket_los(c, "Bad timeout value \"%s\" in RFC options", val);
       return;
     }
+  } else if (strcasecmp(optname, "retrans") == 0) {
+    int to = 0;
+    if ((sscanf(val, "%d", &to) == 1) && (to > 0)) {
+      if (ncp_debug) printf(" setting retrans to %d\n", to);
+      c->retransmission_interval = to;
+    } else {
+      if (ncp_debug) printf(" bad value, not a positive int");
+      user_socket_los(c, "Bad retrans value \"%s\" in RFC options", val);
+      return;
+    }
   // @@@@ add more options as needed, maybe windowsize, retrans, etc?
   } else if (strcasecmp(optname, "follow_forward") == 0) {
     if ((strlen(val) == 0) || (strcasecmp(val,"yes") == 0) || (strcasecmp(val,"on") == 0)) {
@@ -2714,7 +2733,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     break;
   }
   case CS_BRD_Sent:
-    // @@@@ do something?
+    // @@@@ do something? 
   case CS_RFC_Sent:
     switch (ch_opcode(ch)) {
     case CHOP_CLS:
@@ -2723,7 +2742,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
     case CHOP_FWD:
-      if (conn->follow_forward)
+      if (conn->follow_forward && (cs->state != CS_BRD_Sent))
 	forward_conn_transparently(conn, ch_ackno(ch));
       else 
 	receive_data_for_conn(ch_opcode(ch), conn, ch);
@@ -2807,6 +2826,11 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   case CS_Open_Sent:	       // Should only happen for the STS above
   case CS_RFC_Received:	       // Should only get retransmitted RFCs
   case CS_Answered: // should not get pkts (other than retransmitted ANS?)
+    if ((conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
+      // Allow more ANS for broadcast conns
+      receive_data_for_conn(ch_opcode(ch), conn, ch);
+      break;
+    }
     if (!((cs->state == CS_RFC_Received) && (ch_opcode(ch) != CHOP_RFC)) &&
 	!((cs->state == CS_Answered) && (ch_opcode(ch) != CHOP_ANS))) {
       if (ncp_debug) printf("%%%% p_t_c_stream_h %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
@@ -2888,8 +2912,18 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
     }
   } else {
     //@@@@ hmm.
-    if (ncp_debug) printf("Got unexpected %s from <%#o,%#x> for <%#o,%#x> with no conn\n", ch_opcode_name(ch_opcode(ch)),
-			  ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch));
+    if (ncp_debug) {
+      printf("Got unexpected %s from <%#o,%#x> for <%#o,%#x> with no conn\n", ch_opcode_name(ch_opcode(ch)),
+	     ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch));
+      printf("NCP: conn list length%s\n", conn_list == NULL ? " empty" : ":");
+      PTLOCKN(connlist_lock,"connlist_lock");
+      struct conn_list *c = conn_list;
+      while (c) {
+	print_conn(">", c->conn_conn, 1);
+	c = c->conn_next;
+      }
+      PTUNLOCKN(connlist_lock,"connlist_lock");
+    }
   }
   return conn;
 }
@@ -3451,14 +3485,16 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     len = strlen(buf);
     if (ncp_debug) printf("To socket %s (%d bytes): [%s] %s\n", conn_sockaddr_path(conn), len, ch_opcode_name(opc), buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
-  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent)) && (ch_opcode(pkt) == CHOP_ANS)) {
+  } else if ((ch_opcode(pkt) == CHOP_ANS) &&
+	     ((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) ||
+	      ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)))) {
     trace_conn("Answered", conn);
     len = ch_nbytes(pkt);
     // might be non-string data
     ntohs_buf((u_short *)data, (u_short *)buf, len);
     if (ncp_debug) printf("To socket %s (%d bytes): [ANS]\n", conn_sockaddr_path(conn), len);
-    set_conn_state(conn, CS_RFC_Sent, CS_Answered, 1);
-  } else if ((cs->state == CS_RFC_Sent) && (ch_opcode(pkt) == CHOP_FWD)) {
+    set_conn_state(conn, cs->state, CS_Answered, 1);
+  } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent)) && (ch_opcode(pkt) == CHOP_FWD)) {
     trace_conn("Forwarded", conn);
     buf[0] = ch_ackno(pkt) & 0xff;
     buf[1] = ch_ackno(pkt) >> 8;
@@ -3505,6 +3541,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
     len = ch_nbytes(pkt);
   } else {
+    len = -1; // don't pass bad pkts on
     fprintf(stderr,"%%%% Bad pkt in conn_to_socket_pkt_handler: pkt %#x opcode %s in state %s, highest %#x\n",
 	    ch_packetno(pkt), ch_opcode_name(ch_opcode(pkt)), state_name(cs->state),
 	    cs->pktnum_received_highest);
@@ -3555,7 +3592,10 @@ conn_to_socket_handler(void *arg)
 	// Then send explict STS
 	send_sts_pkt(conn);
       }
-      if ((cs->state == CS_CLS_Received) || (cs->state == CS_Host_Down) ||
+      if ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
+	// Allow more ANS to come in
+	if (ncp_debug) printf("NCP c_t_s BRD conn in Answered state: not finishing\n");
+      } else if ((cs->state == CS_CLS_Received) || (cs->state == CS_Host_Down) ||
 	  (cs->state == CS_LOS_Received) || (cs->state == CS_Answered)) {
 	if (ncp_debug) printf("NCP c_t_s connection finishing, state %s\n", state_name(cs->state));
 	// Don't send EOF, we're already pretty closed.

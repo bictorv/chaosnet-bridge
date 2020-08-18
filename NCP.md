@@ -77,8 +77,9 @@ If the user program acts as a client, it opens the socket and writes
 The NCP sends a corresponding RFC packet to the destination host.
 
 #### Options:
-So far there are two:
+Options are
 - `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a time out, a `LOS Connection timed out` response is given to the user program.
+- `retrans=`*%d* to specify a (positive, decimal) retransmission value (in milliseconds) for this connection, see the configuration options above.
 - `follow_forward`=*yes/no* to specify whether a FWD response packet should be transparently followed, i.e., result in the RFC being redirected to the target host.
 
 #### Examples:
@@ -98,6 +99,8 @@ To send a controlled [broadcast packet](https://tumbleweed.nu/r/lm-3/uv/amber.ht
 `BRD `[*options*] *CSL* *contactname* *args*
 
 where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to.
+
+For a simple protocol, you can read multiple `ANS` responses. *Unfortunately* there is currently no way of knowing where they come from.
 
 Example: `BRD 6,7,11 [timeout=3] STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works.
 
@@ -249,9 +252,9 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 
 ### Internals:
 - [ ] Add a bit of statistics counters for conns
-- [ ] Make a few more things configurable, such as the default connection timeout, retransmission and (long) probe intervals, and the "host down" interval.
-- [ ] Reconsider how uncontrolled packets are handled, so they can "bypass" the controlled ones in delivery to user.
+- [ ] Make a few more things configurable, such as (long) probe intervals, and the "host down" interval.
 - [x] Implement broadcast (both address-zero and BRD).
+- [ ] Consider how to find out where answers to BRD packets come from.
 
 ### Applications:
 - [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
