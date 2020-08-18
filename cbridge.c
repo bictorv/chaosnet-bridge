@@ -794,17 +794,15 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
 		       ch_srcaddr(ch),
 		       sn, rt->rt_dest, rt->rt_braddr,
 		       rt_linkname(rt->rt_link));
-  // clear bit
-  mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
+  // clear bit if we're sending to a subnet link,
+  // but if it's a host link, keep it and let the other end resend it if it has further host links to that subnet
+  if (RT_SUBNETP(rt))
+    mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
   // forward
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest >>8 ].pkt_out++;
   PTUNLOCK(linktab_lock);
-  set_ch_srcaddr(ch, rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr);
   forward_chaos_pkt_on_route(rt, data, dlen);
-  // re-set bit if it's not a subnet link
-  if (!RT_SUBNETP(rt))
-    mask[sn/8] |= (1<<(sn % 8));
 }
 
 
@@ -926,7 +924,9 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
   if (dchad == 0) {		/* broadcast */
     if (ch_opcode(ch) == CHOP_BRD) {
       if (debug) fprintf(stderr,"BRD pkt received, trying to forward it\n");
-      forward_chaos_broadcast_pkt(src, data, dlen);
+      // Check that there is a mask, and validate length requirement
+      if ((ch_ackno(ch) > 0) && ((ch_ackno(ch) % 4) == 0))
+	forward_chaos_broadcast_pkt(src, data, dlen);
     }
     // if not BRD, simply drop it (handled above)
     return;
