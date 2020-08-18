@@ -202,6 +202,7 @@ void * unix_input(void *v)
   /* Unix -> others thread */
   u_char data[CH_PK_MAXLEN];
   int len, blen = sizeof(data);
+  int unlucky = 0;
   u_char *pkt = data;
 
   u_char us_subnet = 0;		/* unix socket subnet */
@@ -224,10 +225,13 @@ void * unix_input(void *v)
 	close(unixsock);
       unixsock = -1;		// avoid using it until it's reopened
       if (verbose) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
-      // @@@@ progressive backoff, like in chtls?
-      sleep(5);			/* wait a bit to let chaosd restart */
+      // Backoff: increase sleep until 35, then go back to 15
+      unlucky++;
+      if (unlucky > 30) unlucky /= 3;
+      sleep(5+unlucky);			/* wait a bit to let chaosd restart */
       unixsock = u_connect_to_server();
     } else {
+      unlucky = 0;
       if (unixdebug) fprintf(stderr,"unix input %d bytes\n", len);
 
       ntohs_buf((u_short *)pkt, (u_short *)pkt, len);
