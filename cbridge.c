@@ -786,6 +786,7 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 void 
 forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int dlen) 
 {
+  u_char copy[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)data;
   u_char *mask = &data[CHAOS_HEADERSIZE];
   if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
@@ -802,7 +803,9 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest >>8 ].pkt_out++;
   PTUNLOCK(linktab_lock);
-  forward_chaos_pkt_on_route(rt, data, dlen);
+  // send a copy, since it may be swapped in the process of sending
+  memcpy(copy, data, dlen);
+  forward_chaos_pkt_on_route(rt, copy, dlen);
 }
 
 
@@ -927,6 +930,9 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
       // Check that there is a mask, and validate length requirement
       if ((ch_ackno(ch) > 0) && ((ch_ackno(ch) % 4) == 0))
 	forward_chaos_broadcast_pkt(src, data, dlen);
+      else if (debug || verbose) {
+	fprintf(stderr,"Bad BRD mask length %d (mod 4 is %d)\n", ch_ackno(ch), ch_ackno(ch) % 4);
+      }
     }
     // if not BRD, simply drop it (handled above)
     return;
