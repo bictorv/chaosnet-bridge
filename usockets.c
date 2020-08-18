@@ -214,9 +214,11 @@ void * unix_input(void *v)
     }
   }
 
-  if ((unixsock = u_connect_to_server()) < 0)
+  if ((unixsock = u_connect_to_server()) < 0) {
     //exit(1);
-    fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+    if (verbose || unixdebug)
+      fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
+  }
 
   while (1) {
     memset(pkt, 0, blen);
@@ -224,7 +226,7 @@ void * unix_input(void *v)
       if (unixsock > 0)
 	close(unixsock);
       unixsock = -1;		// avoid using it until it's reopened
-      if (verbose) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
+      if (verbose || unixdebug) fprintf(stderr,"Error reading Unix socket - please check if chaosd is running\n");
       // Backoff: increase sleep until 35, then go back to 15
       unlucky++;
       if (unlucky > 30) unlucky /= 3;
