@@ -102,7 +102,7 @@ where *options*, *contactname* and *args* are as above, and *CSL* is a comma-sep
 
 For a simple protocol, you can read multiple `ANS` responses. *Unfortunately* there is currently no way of knowing where they come from.
 
-Example: `BRD 6,7,11 [timeout=3] STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works.
+Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
 
 #### Responses
 
