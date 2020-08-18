@@ -172,6 +172,9 @@ dump_routing_table_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -219,6 +222,9 @@ uptime_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -251,6 +257,9 @@ time_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -278,6 +287,9 @@ status_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -340,6 +352,9 @@ lastcn_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 

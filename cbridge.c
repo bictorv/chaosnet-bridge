@@ -1071,10 +1071,11 @@ void send_chaos_pkt(u_char *pkt, int len)
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short dchad = ch_destaddr(cha);
 
-  if (is_mychaddr(dchad)) {
+  if (is_mychaddr(dchad) || (dchad == 0)) {
     // shortcut. We don't need to update FC or link stats.
     handle_pkt_for_me(cha, pkt, len, dchad);
-    return;
+    if (dchad != 0)
+      return;
   }
 
   if (ch_opcode(cha) == CHOP_BRD) {

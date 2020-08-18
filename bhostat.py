@@ -120,7 +120,8 @@ class Broadcast:
         opc, data = self.conn.get_packet()
         if opc == Opcode.ANS:
             if debug:
-                print("Got ANS len {}".format(len(data)), file=sys.stderr)
+                src = data[0] + data[1]*256
+                print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
             return data
         elif opc == Opcode.LOS:
             raise StopIteration
@@ -135,10 +136,13 @@ class Status:
         self.slist = self.get_status(subnets, options)
     def statuses(self):
         return self.slist
-    def print_hostat(self,h,r):
+    def print_hostat(self,hname,src,sts):
         # Only print the name for the first subnet entry
-        first = h
-        sts = r
+        if src != 1:
+            # ITS sends ANS from address 1!
+            first = "{} ({:o})".format(hname, src)
+        else:
+            first = hname
         if sts is not None:
             for s in sts:
                 print(("{:<25s}{:>6o} "+"{:>8} "*len(sts[s])).format(first,s,*sts[s].values()))
@@ -149,6 +153,8 @@ class Status:
         hlist = []
         print(("{:<25s}{:>6s} "+"{:>8} "*8).format("Name","Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected"))
         for data in Broadcast(subnets,"STATUS", options=options):
+            src = data[0] + data[1]*256
+            data = data[2:]
             dlen = len(data)
             # First is the name of the node
             hname = str(data[:32].rstrip(b'\0x00'),'ascii')
@@ -171,7 +177,7 @@ class Status:
                     fstart += 4+flen*2
             except AssertionError:
                 print('{} value error at {}: {!r}'.format(hname,fstart,data[fstart:]))
-            self.print_hostat(hname, statuses)
+            self.print_hostat(hname, src, statuses)
         return None
 
 

@@ -1391,21 +1391,36 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
 
 //// packet conn stuff
 
-static void
-packet_conn_header_from_pkt(struct conn *conn, int opc, u_char *out, int len)
+static int
+packet_conn_header_from_pkt(struct conn *conn, struct chaos_header *pkt, u_char *out, int len)
 {
+  int opc = ch_opcode(pkt);
+  int olen = 0;
   if (conn->conn_type != CT_Packet) {
     fprintf(stderr,"packet_conn_header_from_pkt called with bad conn %p type %s\n", conn, conn_type_name(conn));
     abort();
   }
-  out[0] = opc;
-  out[1] = 0;
+  if (opc == CHOP_ANS)
+    len += 2;
+  out[olen++] = opc;
+  out[olen++] = 0;
   // lsb
-  out[2] = len & 0xff;
+  out[olen++] = len & 0xff;
   // msb
-  out[3] = len >> 8;
+  out[olen++] = len >> 8;
+  // add remote host for ANS pkts (lsb, msb)
+  if (opc == CHOP_ANS) {
+    if (ncp_debug && (ch_srcaddr(pkt) < 0400)) {
+      // It seems ITS responds with source address 1??
+      printf("Bad source address %#o of ANS:\n", ch_srcaddr(pkt));
+      ch_dumpkt((u_char *)pkt, ch_nbytes(pkt)+CHAOS_HEADERSIZE);
+    }
+    out[olen++] = ch_srcaddr(pkt) & 0xff;
+    out[olen++] = ch_srcaddr(pkt) >> 8;
+  }
   if (ncp_debug) printf("NCP Packet: made header %#o (%s) %d %#x %#x (nbytes %#x)\n", 
 			out[0], ch_opcode_name(out[0]), out[1], out[2], out[3], len);
+  return olen;
 }
 
 static int
@@ -2743,6 +2758,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       break;
     case CHOP_FWD:
       if (conn->follow_forward && (cs->state != CS_BRD_Sent))
+	// can't do this for broadcast in a reasonable way?
 	forward_conn_transparently(conn, ch_ackno(ch));
       else 
 	receive_data_for_conn(ch_opcode(ch), conn, ch);
@@ -3366,7 +3382,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
     int olen;
     switch (opc) {
     case CHOP_ANS:
-      sprintf((char *)obuf,"ANS %d\r\n", len);
+      sprintf((char *)obuf,"ANS %#o %d\r\n", ch_srcaddr(pkt), len);
       olen = strlen((char *)obuf);
       memcpy(&obuf[olen], buf, len);
       len += olen+2;
@@ -3407,10 +3423,10 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       memcpy(obuf, buf, len);
     }
   } else if (conn->conn_type == CT_Packet) {
-    // add 4-byte header
-    packet_conn_header_from_pkt(conn, opc, (u_char *)obuf, len);
-    memcpy(&obuf[4], buf, len);
-    len += 4;
+    // add 4-byte header (or 6-byte, for ANS)
+    int olen = packet_conn_header_from_pkt(conn, pkt, (u_char *)obuf, len);
+    memcpy(&obuf[olen], buf, len);
+    len += olen;
   }
   if (
 #ifdef MSG_NOSIGNAL
@@ -3422,7 +3438,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
     if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
       socket_closed_for_conn(conn);
     } else {
-      perror("?? write(conn_to_socket_pkt_handler)");
+      perror("?? write(send_to_user_socket)");
       exit(1);
     }
   }
@@ -3487,6 +3503,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
   } else if ((ch_opcode(pkt) == CHOP_ANS) &&
 	     ((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) ||
+	      // extra ANS for BRD
 	      ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)))) {
     trace_conn("Answered", conn);
     len = ch_nbytes(pkt);

@@ -2,6 +2,8 @@
 
 The NCP implements the "transport layer" of Chaosnet, and lets a regular user program easily make use of the Chaosnet routing and infrastructure built by the rest of cbridge.
 
+You can also use it to make your "unix-like" host a Chaosnet node, by using and adding applications connected to the Chaosnet, such as file transfer, interactive terminal sessions, etc.
+
 # Configuration
 
 `ncp ` [ `enabled` no/yes ] [ `debug` off/on ] [ `trace` off/on ]  ...
@@ -100,7 +102,7 @@ To send a controlled [broadcast packet](https://tumbleweed.nu/r/lm-3/uv/amber.ht
 
 where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to.
 
-For a simple protocol, you can read multiple `ANS` responses. *Unfortunately* there is currently no way of knowing where they come from.
+For a simple protocol, you can read multiple `ANS` responses.
 
 Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
 
@@ -110,7 +112,12 @@ Any errors in parsing the RFC line (etc) result in a
 `LOS `*reason*
 line given to the user program, and the socket is closed.
 
-When a response is received from the destination host, it is either an OPN or CLS packet. The NCP informs the user program by writing on its socket:
+When a response is received from the destination host, it is either an ANS, OPN or CLS packet. The NCP informs the user program by writing on its socket:
+
+`ANS `*%o* *len*
+*data*
+
+where *%o* is the (octal) source address of the ANS packet, and *len* is the length of the following *data*.
 
 `OPN Connection to host `*%o*` opened`
 
@@ -181,7 +188,8 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | OPN (sent) | none | |
 | OPN (rcvd) | *rhost* | ascii, which is FQDN or octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
-| ANS | *data* | binary (not interpreted by NCP) |
+| ANS (rcvd) | *src* *data* | *src* is the source address (LSB, MSB), and *data* is the original binary data (not interpreted by NCP) |
+| ANS (sent) | *data* | binary data (not interpreted by NCP) |
 | LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
 | DAT, DWD, UNC | *data*  | binary (not interpreted by NCP) |
 | EOF | none | or when sending, optionally the ascii string "wait" (four bytes) |
@@ -196,7 +204,7 @@ Setting up the connection is similar to `chaos_stream`:
 1. Response: either
     - receive `RFC` with data being *rhost* *args* (as for the RFC for `chaos_stream`)
         - as response to `LSN`
-	- receive `ANS` with data being the answer data
+	- receive `ANS` with data being the source address (LSB, MSB) followed by answer data
         - as response for RFC for Simple protocol
 	- receive `OPN` with data being the remote host (name or address)
         - as response to RFC for Stream protocol
@@ -253,8 +261,6 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 ### Internals:
 - [ ] Add a bit of statistics counters for conns
 - [ ] Make a few more things configurable, such as (long) probe intervals, and the "host down" interval.
-- [x] Implement broadcast (both address-zero and BRD).
-- [ ] Consider how to find out where answers to BRD packets come from.
 
 ### Applications:
 - [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
