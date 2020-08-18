@@ -145,6 +145,7 @@ int parse_tls_config_line(void);
 #endif // CHAOS_TLS
 
 int parse_chudp_config_line(void);
+int parse_usockets_config(void);
 
 #if CHAOS_IP
 int do_chip = 0;
@@ -674,7 +675,7 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
   if (ch_opcode(ch) == CHOP_RUT)
     // RUT is handled separately
     return;
-  if (ch_opcode(ch) == CHOP_RFC) {
+  if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD))  {
     if (verbose)
       fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
 	      ch_opcode_name(ch_opcode(ch)),
@@ -782,6 +783,62 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   }
 }
 
+void 
+forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int dlen) 
+{
+  struct chaos_header *ch = (struct chaos_header *)data;
+  u_char *mask = &data[CHAOS_HEADERSIZE];
+  if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
+		       ch_opcode_name(ch_opcode(ch)),
+		       ch_fc(ch),
+		       ch_srcaddr(ch),
+		       sn, rt->rt_dest, rt->rt_braddr,
+		       rt_linkname(rt->rt_link));
+  // clear bit
+  mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
+  // forward
+  PTLOCK(linktab_lock);
+  linktab[rt->rt_dest >>8 ].pkt_out++;
+  PTUNLOCK(linktab_lock);
+  set_ch_srcaddr(ch, rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr);
+  forward_chaos_pkt_on_route(rt, data, dlen);
+  // re-set bit if it's not a subnet link
+  if (!RT_SUBNETP(rt))
+    mask[sn/8] |= (1<<(sn % 8));
+}
+
+
+void 
+forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen) 
+{
+  struct chaos_header *ch = (struct chaos_header *)data;
+  // forward on all direct links matching the requested subnets, after clearing that subnet in the mask
+  // EXCEPT the link it came in on
+
+  int i, sn, nsubn = ch_ackno(ch)*8;
+  u_char *mask = &data[CHAOS_HEADERSIZE];
+  struct chroute *rt;
+  PTLOCKN(rttbl_lock, "rttbl_lock");
+  // for all rttbl_host entries except the source, which are direct links,
+  //   if its subnet is in the mask, forward there (after clearing bit)
+  for (i = 0; i < rttbl_host_len; i++) {
+    rt = &rttbl_host[i];
+    sn = (rt->rt_dest)>>8;
+    if ((sn < nsubn) && (RT_DIRECT(rt)) && (src != rt) && (mask[sn/8] & (1<<(sn % 8)))) {
+      forward_chaos_broadcast_on_route(rt, sn, data, dlen);
+    }
+  }
+  // for all rttbl_net entries except the source, which are direct links
+  //   if the subnet is set, forward there (after clearing bit)
+  for (sn = 1; sn < 256 && sn < nsubn; sn++) {
+    rt = &rttbl_net[sn];
+    if ((src != rt) && (RT_DIRECT(rt)) && (mask[sn/8] & (1<<(sn % 8)))) {
+      forward_chaos_broadcast_on_route(rt, sn, data, dlen);
+    }
+  }
+  PTUNLOCKN(rttbl_lock, "rttbl_lock");
+}
+
 void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
 {
   struct chaos_header *ch = (struct chaos_header *)data;
@@ -858,18 +915,20 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
   peek_routing(data, dlen, cost, src_linktype); /* check for RUT */
 
   // To me?
-  if (is_mychaddr(dchad) || (rt != NULL && rt->rt_myaddr == dchad)) {
+  if (is_mychaddr(dchad) || (dchad == 0) || (rt != NULL && rt->rt_myaddr == dchad)) {
+    if (debug && (dchad == 0)) 
+      fprintf(stderr,"Broadcast pkt received, trying to handle it\n");
     handle_pkt_for_me(ch, data, dlen, dchad);
-    return;			/* after checking for RUT */
+    if (dchad != 0) // check for BRD below
+      return;			/* after checking for RUT */
   }
 
   if (dchad == 0) {		/* broadcast */
-    // send on all links to the same subnet?
-    // But how can we know they didn't also receive it, and sent it on their links?
-    // Possibly do this for BRD packets, which have a storm prevention feature?
-    // Punt for now:
-    // Only live use of broadcast I've seen is for RUT, which is handled above by peek_routing
-    // if (debug) fprintf(stderr,"Broadcast received, MAYBE IMPLEMENT FORWARDING OF IT?\n");
+    if (ch_opcode(ch) == CHOP_BRD) {
+      if (debug) fprintf(stderr,"BRD pkt received, trying to forward it\n");
+      forward_chaos_broadcast_pkt(src, data, dlen);
+    }
+    // if not BRD, simply drop it (handled above)
     return;
   }
 
@@ -1009,6 +1068,11 @@ void send_chaos_pkt(u_char *pkt, int len)
   if (is_mychaddr(dchad)) {
     // shortcut. We don't need to update FC or link stats.
     handle_pkt_for_me(cha, pkt, len, dchad);
+    return;
+  }
+
+  if (ch_opcode(cha) == CHOP_BRD) {
+    forward_chaos_broadcast_pkt(NULL, pkt, len);
     return;
   }
 
@@ -1551,6 +1615,8 @@ parse_config_line(char *line)
     return parse_ether_config_line();
   }
 #endif
+  else if (strcasecmp(tok, "unix") == 0)
+    return parse_usockets_config();
   else if (strcasecmp(tok, "ncp") == 0) {
     return parse_ncp_config_line();
   }
