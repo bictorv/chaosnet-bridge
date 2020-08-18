@@ -188,7 +188,7 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | OPN (sent) | none | |
 | OPN (rcvd) | *rhost* | ascii, which is FQDN or octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
-| ANS (rcvd) | *src* *data* | *src* is the source address (LSB, MSB), and *data* is the original binary data (not interpreted by NCP) |
+| ANS (rcvd) | *src* *data* | *src* is the source address (two bytes: LSB, MSB), followed by *data* which is the original binary data (not interpreted by NCP) |
 | ANS (sent) | *data* | binary data (not interpreted by NCP) |
 | LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
 | DAT, DWD, UNC | *data*  | binary (not interpreted by NCP) |
