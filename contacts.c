@@ -172,6 +172,9 @@ dump_routing_table_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -219,6 +222,9 @@ uptime_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -251,6 +257,9 @@ time_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -278,6 +287,9 @@ status_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -340,6 +352,9 @@ lastcn_responder(u_char *rfc, int len)
   set_ch_opcode(ap, CHOP_ANS);
   set_ch_destaddr(ap, src);
   set_ch_destindex(ap, ch_srcindex(ch));
+  if (dst == 0)
+    // broadcast
+    dst = find_my_closest_addr(src);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -391,6 +406,10 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
   char *cname = (char *)malloc(datalen+1);
   if (cname == NULL) { perror("malloc(handle_rfc)"); abort(); }
   slen = get_packet_string(ch, (u_char *)cname, datalen);
+  if (ch_opcode(ch) == CHOP_BRD) {
+    cname += ch_ackno(ch);
+    slen -= ch_ackno(ch);
+  }
   char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);
@@ -398,7 +417,8 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
     if ((strncmp(cname, mycontacts[i].contact, strlen(mycontacts[i].contact)) == 0)
 	&& (strlen(cname) == strlen(mycontacts[i].contact))
 	) {
-      if (verbose) fprintf(stderr,"RFC for %s received, responding\n", mycontacts[i].contact);
+      if (verbose) fprintf(stderr,"%s for %s received, responding\n", 
+			   ch_opcode_name(ch_opcode(ch)), mycontacts[i].contact);
       // call the handler
       (*mycontacts[i].handler)(data, dlen);
       // Signal that it was handled

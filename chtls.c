@@ -716,17 +716,19 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
   //  "The number of transmissions to this subnet aborted by
   //  collisions or because the receiver was busy."
   if ((chaddr >> 8) == 0) {
-    fprintf(stderr,"TLS: bad call to tls_please_reopen_tcp: td %p tls_addr %#o (%#x), inputp %d, name \"%s\"\n",
-	    td, chaddr, chaddr, inputp, td->tls_name);
-    print_tlsdest_config();
-    return;
+    if (tls_debug) {
+      fprintf(stderr,"TLS: bad call to tls_please_reopen_tcp: td %p tls_addr %#o (%#x), inputp %d, name \"%s\"\n",
+	      td, chaddr, chaddr, inputp, td->tls_name);
+      print_tlsdest_config();
+    }
+  } else {
+    PTLOCK(linktab_lock);
+    if (inputp)
+      linktab[chaddr>>8].pkt_lost++;
+    else
+      linktab[chaddr>>8].pkt_aborted++;
+    PTUNLOCK(linktab_lock);
   }
-  PTLOCK(linktab_lock);
-  if (inputp)
-    linktab[chaddr>>8].pkt_lost++;
-  else
-    linktab[chaddr>>8].pkt_aborted++;
-  PTUNLOCK(linktab_lock);
 
   if (td->tls_serverp) {
     // no signalling to do, just close/free stuff
