@@ -1962,27 +1962,34 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
     while (isspace(*buf)) buf++; // skip whitespace
     parse_rfc_line_options(conn, beg, end);
   }
-  while (isdigit(*buf)) {
-    if (sscanf((char *)buf, "%ho", &netnum) == 1) {
-      mask[netnum/8] |= 1<<(netnum % 8);
-      if (ncp_debug) printf(" NCP parsed subnet %#o, setting index %d: %#x\n", 
-			    netnum, netnum/8, mask[netnum/8]);
-      numnets++;
+  if (strncasecmp((char *)buf,"all ", 4) == 0) {
+    // set all bits
+    memset(mask, 0xff, sizeof(mask));
+    numnets = sizeof(mask)*8;
+    // skip over "all "
+    buf += 4;
+  } else 
+    while (isdigit(*buf)) {
+      if (sscanf((char *)buf, "%ho", &netnum) == 1) {
+	mask[netnum/8] |= 1<<(netnum % 8);
+	if (ncp_debug) printf(" NCP parsed subnet %#o, setting index %d: %#x\n", 
+			      netnum, netnum/8, mask[netnum/8]);
+	numnets++;
+      }
+      // skip over the parsed number
+      while (isdigit(*buf)) buf++;
+      // and the comma if it's there
+      if (*buf == ',')
+	buf++;
+      else if (*buf == ' ') {
+	// or the space, which ends the list
+	buf++;
+	break;
+      } else {
+	user_socket_los(conn, "Bad BRD line - can't parse subnet list");
+	return;
+      }
     }
-    // skip over the parsed number
-    while (isdigit(*buf)) buf++;
-    // and the comma if it's there
-    if (*buf == ',')
-      buf++;
-    else if (*buf == ' ') {
-      // or the space, which ends the list
-      buf++;
-      break;
-    } else {
-      user_socket_los(conn, "Bad BRD line - can't parse subnet list");
-      return;
-    }
-  }
   if (numnets == 0) {
     user_socket_los(conn, "Bad BRD line - no subnets found");
     return;

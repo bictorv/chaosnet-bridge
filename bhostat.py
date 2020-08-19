@@ -152,6 +152,8 @@ class Status:
     def get_status(self, subnets, options):
         hlist = []
         print(("{:<25s}{:>6s} "+"{:>8} "*8).format("Name","Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected"))
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
         for data in Broadcast(subnets,"STATUS", options=options):
             src = data[0] + data[1]*256
             data = data[2:]
@@ -186,8 +188,8 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
     parser.add_argument("subnets", metavar="S", type=int, nargs='+',
-                            help="Subnets to broadcast on (must include the local one)")
-    parser.add_argument("-t","--timeout", type=int, default=2,
+                            help="Subnets to broadcast on (must include the local one), or -1 for all subnets")
+    parser.add_argument("-t","--timeout", type=int, default=3,
                             help="Timeout in seconds")
     parser.add_argument("-r","--retrans", type=int, default=1000,
                             help="Retransmission interval in milliseconds")
@@ -195,6 +197,9 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     args = parser.parse_args()
     if args.debug:
-        print(args)
+        # print(args)
         debug = True
+    if -1 in args.subnets and len(args.subnets) != 1:
+        # "all" supersedes all other
+        args.subnets = [-1]
     sts = Status(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
