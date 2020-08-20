@@ -928,7 +928,7 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
     if (ch_opcode(ch) == CHOP_BRD) {
       if (debug) fprintf(stderr,"BRD pkt received, trying to forward it\n");
       // Check that there is a mask, and validate length requirement
-      if ((ch_ackno(ch) > 0) && ((ch_ackno(ch) % 4) == 0))
+      if ((ch_ackno(ch) > 0) && (ch_ackno(ch) <= 32) && ((ch_ackno(ch) % 4) == 0))
 	forward_chaos_broadcast_pkt(src, data, dlen);
       else if (debug || verbose) {
 	fprintf(stderr,"Bad BRD mask length %d (mod 4 is %d)\n", ch_ackno(ch), ch_ackno(ch) % 4);
