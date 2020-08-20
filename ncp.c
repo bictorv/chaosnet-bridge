@@ -809,6 +809,9 @@ find_existing_conn(struct chaos_header *ch)
   int x, cstate;
   struct conn_list *cl;
   struct conn *val = NULL;
+  int opc = ch_opcode(ch);
+  u_short src = ch_srcaddr(ch), sidx = ch_srcindex(ch);
+  u_short dest = ch_destaddr(ch), didx = ch_destindex(ch);
 
     // protect against cancellation while holding global lock
   if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
@@ -816,33 +819,37 @@ find_existing_conn(struct chaos_header *ch)
 
   PTLOCKN(connlist_lock,"connlist_lock");
   for (cl = conn_list; (cl != NULL) && (val == NULL); cl = cl->conn_next) {
+    // @@@@ when sending an RFC to self, this seems to find the wrong end (i.e. the RFC-sending end)
+    // @@@@ break this up into more easily understandable cases!
     struct conn *c = cl->conn_conn;
-    if ((c->conn_rhost == ch_srcaddr(ch)) &&
-	((c->conn_ridx == ch_srcindex(ch)) || // properly existing conn
-	 (((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD) || 
-	   (ch_opcode(ch) == CHOP_OPN) || (ch_opcode(ch) == CHOP_ANS) || 
-	   (ch_opcode(ch) == CHOP_FWD) || (ch_opcode(ch) == CHOP_CLS))
-	  // half-existing conn where we don't know the remote index yet
-	  && (c->conn_ridx == 0))
-	 // uncontrolled pkt doesn't necessarily have a non-zero index, e.g. LOS for non-existing conn
-	 // || (opcode_uncontrolled(ch_opcode(ch)) && (ch_srcindex(ch) == 0))
-	 )
-	&&
-	(c->conn_lhost == ch_destaddr(ch)) &&
-	((c->conn_lidx == ch_destindex(ch)) 
-	 // when receiving RFC, dest index is not specified
-	 || ((c->conn_state->state != CS_Inactive) && 
-	     ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) && 
-	     (ch_destindex(ch) == 0)))) {
+    if ( // already existing conn
+	((c->conn_rhost == src) &&
+	 (c->conn_ridx == sidx) &&
+	 (c->conn_lhost == dest) &&
+	 (c->conn_lidx == didx))
+	||
+	// answer to RFC: remote index of conn is 0, but remote host matches
+	// answer to BRD: both remote index and host are 0
+	(((((c->conn_state->state == CS_RFC_Sent) && (c->conn_rhost == src)) ||
+	   ((c->conn_state->state == CS_BRD_Sent) && (c->conn_rhost == 0))) &&
+	  (c->conn_ridx == 0) &&
+	  // local parts match
+	  (c->conn_lhost == dest) && (c->conn_lidx == didx) &&
+	  // and it is an answer of some kind
+	  ((opc == CHOP_ANS) || (opc == CHOP_OPN) || (opc == CHOP_FWD) || (opc == CHOP_CLS)))
+	 )) {
       val = c;
       break;
-    } else if (((c->conn_state->state == CS_BRD_Sent) || 
-		((c->conn_state->state == CS_Answered) && (ch_opcode(ch) == CHOP_ANS))) && 
-	       (c->conn_lhost == ch_destaddr(ch)) &&
-	       (c->conn_lidx == ch_destindex(ch)) &&
-	       ((ch_opcode(ch) == CHOP_ANS) || (ch_opcode(ch) == CHOP_FWD) ||
-		((ch_opcode(ch) == CHOP_OPN) && (c->conn_rhost == 0) && (c->conn_ridx == 0)))) {
-      // the BRD_Sent conn has zero rhost, but allow different hosts to ANS the same BRD conn?
+    } else if (
+	       // another ANS or FWD for a broadcast receiver
+	       // (only the first OPN is accepted, and matched above in BRD_Sent)
+	       (c->conn_state->state == CS_Answered) && 
+	       ((opc == CHOP_ANS) || (opc == CHOP_FWD))  && 
+	       // this indicates a broadcast receiver
+	       (c->conn_rhost == 0) && (c->conn_ridx == 0) &&
+	       // local part must match
+	       (c->conn_lhost == dest) && (c->conn_lidx == didx)) {
+      // the BRD_Sent conn has zero rhost, but allow different hosts to ANS the same BRD conn
       val = c;
       break;
     }
@@ -2910,7 +2917,8 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
       if (ncp_debug) print_conn("Found listener for", conn, 0);
     } else {
       // CLS: No listener for this contact
-      if (ncp_debug) printf("No listener found for RFC \"%s\"\n", contact);
+      if (ncp_debug) printf("No listener found for %s \"%s\"\n", 
+			    ch_opcode_name(ch_opcode(ch)), contact);
       if (ch_opcode(ch) != CHOP_BRD)
 	send_cls_pkt(make_temp_conn_from_pkt(ch), "No server for this contact name");
     }
