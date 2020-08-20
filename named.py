@@ -72,6 +72,8 @@ def give_finger_response(sock, args):
             print("sending data len {}".format(len(rout)))
         # Nothing special is needed, just write the data. EOF is automatic in this case.
         sock.sendall(rout)
+    if debug:
+        print("closing socket")
     sock.close()
 
 def name_server():
