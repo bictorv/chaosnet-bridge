@@ -730,7 +730,11 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     dlen += CHAOS_HW_TRAILERSIZE;  /* add trailer if needed */
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
   // HW dest is next-hop destination
-  tr->ch_hw_destaddr = rt->rt_braddr > 0 ? htons(rt->rt_braddr) : (rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch)));
+  if (ch_destaddr(ch) == 0)
+    // unless it's broadcast
+    tr->ch_hw_destaddr = 0;
+  else
+    tr->ch_hw_destaddr = rt->rt_braddr > 0 ? htons(rt->rt_braddr) : (rt->rt_dest > 0 ? htons(rt->rt_dest) : htons(ch_destaddr(ch)));
   // HW sender is me!
   // Find proper mychaddr entry if none given
   if (rt->rt_myaddr <= 0) {
