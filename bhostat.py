@@ -50,7 +50,9 @@ class Conn:
 
     def __init__(self):
         self.get_socket()
-
+    def __str__(self):
+        return "<{} {}>".format(type(self).__name__, self.sock is not None)
+       
     # Construct a 4-byte packet header for chaos_packet connections
     def packet_header(self, opc, plen):
         return bytes([opc, 0, plen & 0xff, int(plen/256)])
@@ -99,6 +101,36 @@ class Conn:
         return (opc,data)
 
 
+class Simple:
+    conn = None
+    def __init__(self, hname, contact, args=[], options=None):
+        self.conn = Conn()
+        h = ("{} {}"+" {}"*len(args)).format(hname,contact,*args)
+        if options is not None:
+            h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
+        try:
+            if debug:
+                print("RFC {}".format(h), file=sys.stderr)
+            self.conn.send_packet(Opcode.RFC, bytes(h,"ascii"))
+        except socket.error:
+            return None
+    def result(self):
+        opc, data = self.conn.get_packet()
+        if opc == Opcode.ANS:
+            src = data[0] + data[1]*256
+            return src, data[2:]
+        elif opc == Opcode.LOS:
+            print("LOS (from {}): {}".format(hname, data), file=sys.stderr)
+        else:
+            print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, hname, data), file=sys.stderr)
+            return None
+
+def host_name(addr):
+    s = Simple(addr, "STATUS", options=dict(timeout=2))
+    src, data = s.result()
+    name = str(data[:32].rstrip(b'\0x00'), "ascii")
+    return name
+
 class Broadcast:
     conn = None
     def __init__(self, subnets, contact, args=[], options=None):
@@ -107,13 +139,12 @@ class Broadcast:
         h = ("{} {}"+" {}"*len(args)).format(",".join(map(str,subnets)),contact,*args)
         if options is not None:
             h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
-        dlist = []
         try:
             if debug:
                 print("BRD {}".format(h), file=sys.stderr)
             self.conn.send_packet(Opcode.BRD, bytes(h,"ascii"))
         except socket.error:
-            return dlist
+            return None
     def __iter__(self):
         return self
     def __next__(self):
@@ -138,8 +169,8 @@ class Status:
         return self.slist
     def print_hostat(self,hname,src,sts):
         # Only print the name for the first subnet entry
-        if src != 1:
-            # ITS sends ANS from address 1!
+        if True or src > 0o400:
+            # ITS sends ANS from address 1 (UP) or 150206 (ES)
             first = "{} ({:o})".format(hname, src)
         else:
             first = hname
@@ -184,6 +215,42 @@ class Status:
 
 
 
+# The TIME protocol
+class ChaosTime:
+    def __init__(self,subnets, options=None):
+        self.get_time(subnets, options=options)
+    def get_time(self, subnets, options):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        for data in Broadcast(subnets,"TIME",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            # cf RFC 868
+            print("{:16} {}".format(hname,datetime.fromtimestamp(unpack("I",data[0:4])[0]-2208988800)))
+
+# The UPTIME protocol
+class ChaosUptime:
+    def __init__(self,subnets, options=None):
+        self.get_uptime(subnets, options=options)
+    def get_uptime(self, subnets, options):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        for data in Broadcast(subnets,"UPTIME",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            # cf RFC 868
+            print("{:16} {}".format(hname,timedelta(seconds=unpack("I",data[0:4])[0]/60)))
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
@@ -193,13 +260,24 @@ if __name__ == '__main__':
                             help="Timeout in seconds")
     parser.add_argument("-r","--retrans", type=int, default=1000,
                             help="Retransmission interval in milliseconds")
+    parser.add_argument("-s","--service", default="STATUS",
+                            help="Service to ask for (STATUS, TIME, UPTIME)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     args = parser.parse_args()
     if args.debug:
-        # print(args)
+        print(args)
         debug = True
     if -1 in args.subnets and len(args.subnets) != 1:
         # "all" supersedes all other
         args.subnets = [-1]
-    sts = Status(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
+    if args.service.upper() == 'STATUS':
+        c = Status
+    elif args.service.upper() == 'TIME':
+        c = ChaosTime
+    elif args.service.upper() == 'UPTIME':
+        c = ChaosUptime
+    else:
+        print("Bad service arg {}, please use STATUS, TIME or UPTIME (in any case)".format(args.service))
+        exit(1)
+    c(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
