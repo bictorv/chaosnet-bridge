@@ -1,7 +1,7 @@
 # Chaosnet server for NAME protocol (what is otherwise known as finger, which is a different protocol on Chaosnet)
 # Demonstrates the APIs for the NCP of cbridge: both the simpler stream protocol and the packet protocol.
 
-import socket, io
+import socket, io, time
 import sys, subprocess, threading
 import re, string
 from datetime import datetime
@@ -86,6 +86,12 @@ def name_server():
             sock.connect(packet_address)
         else:
             sock.connect(server_address)
+    except ConnectionRefusedError as m:
+        # cbridge down, try again in a while
+        if debug:
+            print("Error {}, sleeping and retrying".format(m))
+        time.sleep(15)
+        return
     except socket.error as msg:
         print(msg)
         sys.exit(1)
