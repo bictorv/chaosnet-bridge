@@ -109,6 +109,7 @@ def finger(host,user=None):
     sock = stream_conn(packet_address if packetp else stream_address,host,"NAME",args=(['/W',user] if user is not None else []))
     if sock is not None:
         data = []
+        ateol = False
         while True:
             if len(data) == 0:
                 data = sock.recv(488+4)
@@ -131,13 +132,19 @@ def finger(host,user=None):
                 if debug and opc != Opcode.DAT:
                     print("{}".format(Opcode(opc).name),end=' ')
                 if debug or opc == Opcode.DAT:
-                    print("{!s}".format(str(data[4:lenth+4].translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")),end='')
+                    o = str(data[4:lenth+4].translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                    print("{!s}".format(o),end='')
+                    ateol = o.endswith("\n")
                 if opc != Opcode.DAT and debug and lenth > 0:
                     print()
                 data = data[lenth+4:]
             else:
-                print("{!s}".format(str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")), end='')
+                o = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                print("{!s}".format(o), end='')
+                ateol = o.endswith("\n")
                 data = []
+        if not ateol:
+            print()
     else:
         print("Connection failed")
 
