@@ -251,6 +251,28 @@ class ChaosUptime:
             # cf RFC 868
             print("{:16} {}".format(hname,timedelta(seconds=unpack("I",data[0:4])[0]/60)))
 
+# The FINGER protocol (note: not NAME)
+class ChaosFinger:
+    def __init__(self,subnets, options=None):
+        self.get_finger(subnets, options=options)
+    def get_finger(self, subnets, options):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format("User","","Name","Host","Idle","Location"))
+        for data in Broadcast(subnets,"FINGER",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            # hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            hname = host_name("{:o}".format(src))
+            fields = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
+            if debug:
+                print(hname, fields)
+            print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format(fields[0],fields[4],fields[3],hname,fields[2],fields[1]))
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
@@ -261,7 +283,7 @@ if __name__ == '__main__':
     parser.add_argument("-r","--retrans", type=int, default=1000,
                             help="Retransmission interval in milliseconds")
     parser.add_argument("-s","--service", default="STATUS",
-                            help="Service to ask for (STATUS, TIME, UPTIME)")
+                            help="Service to ask for (STATUS, TIME, UPTIME, FINGER)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     args = parser.parse_args()
@@ -277,7 +299,9 @@ if __name__ == '__main__':
         c = ChaosTime
     elif args.service.upper() == 'UPTIME':
         c = ChaosUptime
+    elif args.service.upper() == 'FINGER':
+        c = ChaosFinger
     else:
-        print("Bad service arg {}, please use STATUS, TIME or UPTIME (in any case)".format(args.service))
+        print("Bad service arg {}, please use STATUS, TIME, UPTIME or FINGER (in any case)".format(args.service))
         exit(1)
     c(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
