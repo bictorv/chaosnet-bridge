@@ -93,9 +93,13 @@ class Conn:
         assert(hdr[1] == 0)
         # then length
         length = hdr[2] + hdr[3]*256
-        assert(length <= 488)
         if debug:
             print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
+        if opc == Opcode.ANS:
+            # Includes 2 bytes of source!
+            assert length <= 490
+        else:
+            assert length <= 488
         data = self.sock.recv(length)
         # print("< {} {!s}".format(len(data), str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")))
         return (opc,data)
@@ -103,7 +107,9 @@ class Conn:
 
 class Simple:
     conn = None
+    hname = None
     def __init__(self, hname, contact, args=[], options=None):
+        self.hname = hname
         self.conn = Conn()
         h = ("{} {}"+" {}"*len(args)).format(hname,contact,*args)
         if options is not None:
@@ -120,15 +126,19 @@ class Simple:
             src = data[0] + data[1]*256
             return src, data[2:]
         elif opc == Opcode.LOS:
-            print("LOS (from {}): {}".format(hname, data), file=sys.stderr)
+            print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
+            return None, None
         else:
-            print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, hname, data), file=sys.stderr)
+            print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data), file=sys.stderr)
             return None
 
 def host_name(addr):
     s = Simple(addr, "STATUS", options=dict(timeout=2))
     src, data = s.result()
-    name = str(data[:32].rstrip(b'\0x00'), "ascii")
+    if src:
+        name = str(data[:32].rstrip(b'\0x00'), "ascii")
+    else:
+        name = "{}".format(addr)
     return name
 
 class Broadcast:
@@ -273,6 +283,65 @@ class ChaosFinger:
                 print(hname, fields)
             print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format(fields[0],fields[4],fields[3],hname,fields[2],fields[1]))
 
+# The DUMP-ROUTING-TABLE protocol
+class ChaosDumpRoutingTable:
+    def __init__(self,subnets, options=None):
+        self.get_routing(subnets, options=options)
+    def get_routing(self, subnets, options):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        print("{:<20} {:>6} {:>6} {}".format("Host","Net","Meth","Cost"))
+        for data in Broadcast(subnets,"DUMP-ROUTING-TABLE",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            rtt = dict()
+            for sub in range(0,int(len(data)/4)):
+                sn = unpack('H',data[sub*4:sub*4+2])[0]
+                if sn != 0:
+                    rtt[sub] = dict(zip(('method','cost'),unpack('H'*2,data[sub*4:sub*4+4])))
+            first = hname
+            for sub in rtt:
+                print("{:<20} {:>6o} {:>6o} {}".format(first,sub,rtt[sub]['method'],rtt[sub]['cost']))
+                first = ""
+
+# The LASTCN protocol
+class ChaosLastSeen:
+    def __init__(self,subnets, options=None):
+        self.get_lastcn(subnets, options=options)
+    def get_lastcn(self, subnets, options):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","Age"))
+        # @@@@ consider presenting the info based on seen addresses (when seen at a certain bridge)?
+        for data in Broadcast(subnets,"LASTCN",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            cn = dict()
+            for i in range(0,int(len(data)/2/7)):
+                flen = unpack('H',data[i*7*2:i*7*2+2])[0]
+                assert flen == 7
+                addr = unpack('H',data[i*7*2+2:i*7*2+4])[0]
+                inp = unpack('I',data[i*7*2+4:i*7*2+4+4])[0]
+                via = unpack('H',data[i*7*2+4+4:i*7*2+4+4+2])[0]
+                age = unpack('I',data[i*7*2+4+4+2:i*7*2+4+4+2+4])[0]
+                cn[addr] = dict(input=inp,via=via,age=age)
+            first = hname
+            for addr in cn:
+                e = cn[addr]
+                a = timedelta(seconds=e['age'])
+                print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
+                first = ""                
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
@@ -283,7 +352,7 @@ if __name__ == '__main__':
     parser.add_argument("-r","--retrans", type=int, default=1000,
                             help="Retransmission interval in milliseconds")
     parser.add_argument("-s","--service", default="STATUS",
-                            help="Service to ask for (STATUS, TIME, UPTIME, FINGER)")
+                            help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     args = parser.parse_args()
@@ -301,7 +370,11 @@ if __name__ == '__main__':
         c = ChaosUptime
     elif args.service.upper() == 'FINGER':
         c = ChaosFinger
+    elif args.service.upper() == "LASTCN":
+        c = ChaosLastSeen
+    elif args.service.upper() == "ROUTING" or args.service.upper() == "DUMP-ROUTING-TABLE":
+        c = ChaosDumpRoutingTable
     else:
-        print("Bad service arg {}, please use STATUS, TIME, UPTIME or FINGER (in any case)".format(args.service))
+        print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table) or LASTCN (in any case)".format(args.service))
         exit(1)
     c(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
