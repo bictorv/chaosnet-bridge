@@ -13,6 +13,7 @@ packet_address = '/tmp/chaos_packet'
 # -d
 debug = False
 packetp = False
+broadcastp = False
 
 # Chaos packet opcodes
 class Opcode(IntEnum):
@@ -63,13 +64,15 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
         # d = bytes(("[follow_forward=yes] {} {}"+" {}"*len(args)).format(host,contact,*args),"ascii")
         d = bytes(("{} {}"+" {}"*len(args)).format(host,contact,*args),"ascii")
     if packetp:
+        opc = Opcode.BRD if broadcastp else Opcode.RFC
         if debug:
-            print('packet',packet_header(Opcode.RFC, len(d))+d)
-        sock.sendall(packet_header(Opcode.RFC, len(d))+d)
+            print('packet',packet_header(opc, len(d))+d)
+        sock.sendall(packet_header(opc, len(d))+d)
     else:
+        opc = b"BRD" if broadcastp else b"RFC"
         if debug:
-            print(b"stream: RFC "+d)
-        sock.sendall(b"RFC "+d)
+            print(b"stream: "+opc+b" "+d)
+        sock.sendall(opc+b" "+d)
     try:
         # Receive max 488 data bytes, 16 to fit "ANS 488\r\n" (so 9 would be enough)
         data = sock.recv(488+16)
@@ -78,6 +81,8 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
             if data[0] == Opcode.ANS:
                 return data[4:dlen+4]
             elif data[0] == Opcode.OPN:
+                if debug:
+                    print("OPN from {!s}".format(data[1:]), file=sys.stderr)
                 return sock
             elif timeout is not None and data[0] == Opcode.LOS and data[4:].startswith(b"Connection timed out"):
                 return None
@@ -95,6 +100,8 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
                 dlen = int(resp[1])
                 return data[dstart:dstart+dlen]
             elif resp[0] == b"OPN":
+                if debug:
+                    print(resp, file=sys.stderr)
                 return sock
             elif timeout is not None and resp[0] == b"LOS" and data[eol+1:].startswith(b"Connection timed out"):
                 return None
@@ -155,12 +162,16 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("--packet",dest='packetp',action='store_true',
                             help='Use packet mode (chaos_seqpacket) instead of plain stream')
+    parser.add_argument('-b','--broadcast',action='store_true',
+                            help='Use BRD instead of RFC, and host arg is a comma-but-not-space-separated list of subnets, or "all"')
     parser.add_argument("host", help='The host to check')
     parser.add_argument("user", nargs="?", help='User to check')
     args = parser.parse_args()
 
     if args.packetp:
         packetp = True
+    if args.broadcast:
+        broadcastp = True
     if args.debug:
         debug = True
 
