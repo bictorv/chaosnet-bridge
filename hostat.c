@@ -310,7 +310,7 @@ main(int argc, char *argv[])
   signed char c;
   char opts[] = "r";		// raw
   char *host, *contact = "STATUS", *pname, *space;
-  char buf[CH_PK_MAXLEN];
+  char buf[CH_PK_MAXLEN+2];
   char *nl, *bp;
   int i, cnt, sock, anslen, ncnt, raw = 0;
   u_short src;
