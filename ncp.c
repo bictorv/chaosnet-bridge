@@ -856,11 +856,8 @@ find_existing_conn(struct chaos_header *ch)
   }
   if (ncp_debug && (val == NULL) && 
       ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD) || (ch_opcode(ch) == CHOP_LOS))) {
-    u_char contactbuf[CH_PK_MAX_DATALEN];
-    u_char *contact = contactbuf;
+    u_char contact[CH_PK_MAX_DATALEN];
     get_packet_string(ch, contact, sizeof(contact));
-    if (ch_opcode(ch) == CHOP_BRD)
-      contact += ch_ackno(ch);
     printf("NCP: no conn found for %s %#x from src <%#o,%#x> for dest <%#o,%#x>, data (len %d) \"%s\"\n", 
 	   ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 	   ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), ch_nbytes(ch), contact);
@@ -2786,6 +2783,9 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       u_short rec, winz;
       rec = ntohs(dataw[0]);
       winz = ntohs(dataw[1]);
+      if (cs->state == CS_BRD_Sent)
+	// remember who we're talking to!
+	conn->conn_rhost = ch_srcaddr(ch);
       if (ncp_debug) {
 	int pklen = ch_nbytes(ch)+CHAOS_HEADERSIZE;
 	if (pklen % 2) pklen++;
@@ -2803,7 +2803,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       cs->foreign_winsize = winz;
       cs->window_available = winz;
       send_sts_pkt(conn);
-      set_conn_state(conn, CS_RFC_Sent, CS_Open, 0);
+      set_conn_state(conn, cs->state, CS_Open, 0);
       if (ncp_debug) print_conn("Opened", conn, 1);
       receive_data_for_conn(ch_opcode(ch), conn, ch);
     }
@@ -2896,12 +2896,8 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
 {
   struct conn *conn = NULL;
   if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
-    u_char contactbuf[CH_PK_MAX_DATALEN];
-    u_char *contact = contactbuf;
+    u_char contact[CH_PK_MAX_DATALEN];
     get_packet_string(ch, contact, sizeof(contact));
-    if (ch_opcode(ch) == CHOP_BRD)
-      // look for contact after the mask
-      contact += ch_ackno(ch);
     if (ncp_debug) printf("NCP p_t_c_h: Got %s %#x from <%#o,%#x> for <%#o,%#x>, contact \"%s\"\n", 
 			  ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 			  ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), contact);

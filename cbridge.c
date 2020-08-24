@@ -664,6 +664,11 @@ get_packet_string(struct chaos_header *pkt, u_char *out, int outsize)
 {
   u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
   int len = outsize < ch_nbytes(pkt) ? outsize : ch_nbytes(pkt);
+  if (ch_opcode(pkt) == CHOP_BRD) {
+    // skip bitmask
+    dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE+ch_ackno(pkt)];
+    len -= ch_ackno(pkt);
+  }
   ntohs_buf(dataw, (u_short *)out, len);
   out[len] = '\0';
   return len;
