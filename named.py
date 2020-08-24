@@ -132,6 +132,9 @@ def name_server():
             else:
                 sock.sendall(b'CLS Bad request\r\n')
                 sock.close()
+    except ConnectionRefusedError as m:
+        # cbridge down, try again in a while
+        pass
     except socket.error as msg:
         print(msg)
 
