@@ -126,17 +126,26 @@ class Simple:
             src = data[0] + data[1]*256
             return src, data[2:]
         elif opc == Opcode.LOS:
-            print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
+            if debug:
+                print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
             return None, None
         else:
             print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data), file=sys.stderr)
             return None
 
+host_names = dict()
 def host_name(addr):
+    if isinstance(addr,int):
+        if addr < 0o400:
+            return addr
+        addr = "{:o}".format(addr)
+    if addr in host_names:
+        return host_names[addr]
     s = Simple(addr, "STATUS", options=dict(timeout=2))
     src, data = s.result()
     if src:
         name = str(data[:32].rstrip(b'\0x00'), "ascii")
+        host_names[addr] = name
     else:
         name = "{}".format(addr)
     return name
@@ -292,6 +301,7 @@ class ChaosDumpRoutingTable:
         if len(subnets) == 1 and subnets[0] == -1:
             subnets = ["all"]
         print("{:<20} {:>6} {:>6} {}".format("Host","Net","Meth","Cost"))
+        # @@@@ consider presenting the info based on subnets, and how far hosts are from them
         for data in Broadcast(subnets,"DUMP-ROUTING-TABLE",options=options):
             src = data[0] + data[1]*256
             if src in hlist:
@@ -311,13 +321,16 @@ class ChaosDumpRoutingTable:
 
 # The LASTCN protocol
 class ChaosLastSeen:
-    def __init__(self,subnets, options=None):
-        self.get_lastcn(subnets, options=options)
-    def get_lastcn(self, subnets, options):
+    def __init__(self,subnets, options=None, show_names=False):
+        self.get_lastcn(subnets, options=options, show_names=show_names)
+    def get_lastcn(self, subnets, options, show_names=False):
         hlist = []
         if len(subnets) == 1 and subnets[0] == -1:
             subnets = ["all"]
-        print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","Age"))
+        if show_names:
+            print("{:<20} {:10} {:>8} {:10}  {}".format("Host","Seen","#in","Via","Age"))
+        else:
+            print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","Age"))
         # @@@@ consider presenting the info based on seen addresses (when seen at a certain bridge)?
         for data in Broadcast(subnets,"LASTCN",options=options):
             src = data[0] + data[1]*256
@@ -339,7 +352,10 @@ class ChaosLastSeen:
             for addr in cn:
                 e = cn[addr]
                 a = timedelta(seconds=e['age'])
-                print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
+                if show_names:
+                    print("{:<20} {:<10} {:>8} {:<10}  {}".format(first,host_name(addr),e['input'],host_name(e['via']),a))
+                else:
+                    print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
                 first = ""                
 
 if __name__ == '__main__':
