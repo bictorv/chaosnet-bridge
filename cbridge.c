@@ -663,7 +663,13 @@ int
 get_packet_string(struct chaos_header *pkt, u_char *out, int outsize) 
 {
   u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
-  int len = outsize < ch_nbytes(pkt) ? outsize : ch_nbytes(pkt);
+  int len;
+  if (outsize < ch_nbytes(pkt))
+    len = outsize;
+  else {
+    len = ch_nbytes(pkt);
+    if (len % 2) len++;
+  }
   if (ch_opcode(pkt) == CHOP_BRD) {
     // skip bitmask
     dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE+ch_ackno(pkt)];

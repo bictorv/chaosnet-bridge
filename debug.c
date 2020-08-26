@@ -134,7 +134,7 @@ ch_11_puts(unsigned char *out, unsigned char *in)
     else
       out[i+1] = in[i];
   }
-  return x;
+  return strlen((char *)in);
 }
 
 int
