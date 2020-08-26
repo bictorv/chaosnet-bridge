@@ -3413,7 +3413,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
     case CHOP_LOS: case CHOP_CLS:
       sprintf((char *)obuf, "%s ", ch_opcode_name(opc));
       strncpy((char *)&obuf[4], (char *)buf, len);
-      strcpy((char *)&obuf[len+4], "\r\n");
+      strcat((char *)&obuf[len+4], "\r\n");
       len += 4+2;
       break;
     case CHOP_FWD: {
@@ -3540,7 +3540,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 			      conn_state_name(conn), ch_nbytes(pkt));
     get_packet_string(pkt, (u_char *)buf, sizeof(buf)-4-3);
     len = ch_nbytes(pkt);
-    if (ncp_debug) printf("To socket %s (len %d): [%s] %.12s...\n", conn_sockaddr_path(conn), len, 
+    if (ncp_debug) printf("To socket %s (len %d): [%s] \"%s\"\n", conn_sockaddr_path(conn), len, 
 			  ch_opcode_name(opc), buf);
     if (ch_opcode(pkt) == CHOP_LOS)
       set_conn_state(conn, cs->state, CS_LOS_Received, 1);

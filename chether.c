@@ -1003,7 +1003,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 #endif
 #endif // USE_CHAOS_ETHER_TRAILER
       if (debug || chether_debug) {
-	printf("Ethernet Chaos message:\n");
+	printf("Ethernet Chaos message (len %d):\n", rlen);
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
 	ch_dumpkt(buf, rlen);
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
@@ -1011,7 +1011,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       else if (chether_debug || verbose) {
 	struct chaos_header *ch = (struct chaos_header *)buf;
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
-	printf("Ethernet Chaos message received: %s from %#o to %#o\n",
+	printf("Ethernet Chaos message len %d received: %s from %#o to %#o\n", rlen,
 	       ch_opcode_name(ch_opcode(ch)), ch_srcaddr(ch), ch_destaddr(ch));
 	if ((ch_opcode(ch) == 0) || ((ch_opcode(ch) > CHOP_BRD) && (ch_opcode(ch) < CHOP_DAT))) {
 	  if (chether_debug) {
