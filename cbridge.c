@@ -688,9 +688,9 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
     return;
   if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD))  {
     if (verbose)
-      fprintf(stderr,"%s pkt for self (%#o) received, checking if we handle it\n",
+      fprintf(stderr,"%s pkt for self (%#o) from <%#o,%#x> received, checking if we handle it\n",
 	      ch_opcode_name(ch_opcode(ch)),
-	      dchad);
+	      dchad, ch_srcaddr(ch), ch_srcindex(ch));
     // see what contact they look for
     if (!handle_rfc(ch, data, dlen)) {
       packet_to_conn_handler(data, dlen);
@@ -842,15 +842,22 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
     sn = (rt->rt_dest)>>8;
     if ((sn < nsubn) && (RT_DIRECT(rt)) && (src != rt) && (mask[sn/8] & (1<<(sn % 8)))) {
       forward_chaos_broadcast_on_route(rt, sn, data, dlen);
-    }
+    } else if (debug)
+      fprintf(stderr,"BRD not forwarded to %s host route %d (sn %#o, dest %#o, bit %d)\n", 
+	      RT_DIRECT(rt) ? "direct" : "indirect", 
+	      i, sn, rt->rt_dest, (mask[sn/8] & (1<<(sn % 8))));
   }
   // for all rttbl_net entries except the source, which are direct links
   //   if the subnet is set, forward there (after clearing bit)
   for (sn = 1; sn < 256 && sn < nsubn; sn++) {
     rt = &rttbl_net[sn];
-    if ((src != rt) && (RT_DIRECT(rt)) && (mask[sn/8] & (1<<(sn % 8)))) {
+    if ((src != rt) && (rttbl_net[sn].rt_link != LINK_NOLINK) && 
+	(RT_DIRECT(rt)) && (mask[sn/8] & (1<<(sn % 8)))) {
       forward_chaos_broadcast_on_route(rt, sn, data, dlen);
-    }
+    } else if (debug && rttbl_net[sn].rt_link != LINK_NOLINK)
+      fprintf(stderr,"BRD not forwarded to subnet %#o %s route (bit %d)\n", 
+	      sn, RT_DIRECT(rt) ? "direct" : "indirect", 
+	      (mask[sn/8] & (1<<(sn % 8))));
   }
   PTUNLOCKN(rttbl_lock, "rttbl_lock");
 }
@@ -932,8 +939,9 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
 
   // To me?
   if (is_mychaddr(dchad) || (dchad == 0) || (rt != NULL && rt->rt_myaddr == dchad)) {
-    if (debug && (dchad == 0)) 
-      fprintf(stderr,"Broadcast pkt received, trying to handle it\n");
+    if ((debug || verbose) && (dchad == 0)) 
+      fprintf(stderr,"Broadcast pkt received from %#o hw %#o rt %s type %s, trying to handle it\n",
+	      schad, htons(tr->ch_hw_srcaddr), src != NULL ? rt_linkname(src->rt_link) : "(null)", rt_linkname(src_linktype));
     handle_pkt_for_me(ch, data, dlen, dchad);
     if (dchad != 0) // check for BRD below
       return;			/* after checking for RUT */
