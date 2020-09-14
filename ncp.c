@@ -551,7 +551,7 @@ await_conn_state(struct conn *c, connstate_t new, int timeout_ms)
 
   gettimeofday(&tv, NULL);
   tv.tv_usec += timeout_ms*1000;
-  while (tv.tv_usec > 1000000) {
+  while (tv.tv_usec >= 1000000) {
     tv.tv_sec++; tv.tv_usec -= 1000000;
   }
   to.tv_sec = tv.tv_sec + 0;
@@ -1365,7 +1365,7 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
   gettimeofday(&tv, NULL);
   memcpy(&ts, &tv, sizeof(ts));
   tv.tv_usec += eof_wait_timeout*1000;
-  while (tv.tv_usec > 1000000) {
+  while (tv.tv_usec >= 1000000) {
     tv.tv_sec++; tv.tv_usec -= 1000000;
   }
   to.tv_sec = tv.tv_sec + 0;
@@ -1875,14 +1875,16 @@ parse_rfc_line_options(struct conn *conn, char *beg, char *end)
   char *eql = NULL, *comma = NULL, *vp = NULL;
   // now parse the options=value
   do {
-    if (comma != NULL) beg = comma+1; // not the first option
+    comma = index(beg, ',');
+    if (comma != NULL) *comma = '\0';
     if ((eql = index(beg, '=')) != NULL) {
       *eql = '\0';
       vp = eql+1;
       handle_option(conn, beg, vp);
     } else
       handle_option(conn, beg, "on");
-  } while ((comma = index(end, ',')) != NULL);
+    if (comma != NULL) beg = comma+1; // not the first option
+  } while (comma != NULL);
 }
 
 static void
@@ -2534,7 +2536,7 @@ conn_to_packet_stream_handler(void *v)
 
     gettimeofday(&tv, NULL);
     tv.tv_usec += (conn->retransmission_interval)*1000;
-    while (tv.tv_usec > 1000000) {
+    while (tv.tv_usec >= 1000000) {
       tv.tv_sec++; tv.tv_usec -= 1000000;
     }
     retrans.tv_sec = tv.tv_sec + 0;
@@ -3021,7 +3023,7 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
     // @@@@ well, some interval? The longer, more time until socket closure is discovered
     timeout.tv_sec = 0;
     timeout.tv_usec = conn->retransmission_interval*1000;
-    while (timeout.tv_usec > 1000000) {
+    while (timeout.tv_usec >= 1000000) {
       timeout.tv_sec++; timeout.tv_usec -= 1000000;
     }
 
@@ -3029,24 +3031,38 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
       if (sval == EINTR) {
 	// timed out, try again
 	sval = 0;
+      } else {
+	if (ncp_debug) 
+	  fprintf(stderr,"NCP select(receive_or_die): %s (sval %d, sock %d, timeout %ld.%d)", 
+		  strerror(errno), sval, sock, timeout.tv_sec, timeout.tv_usec);
+	socket_closed_for_conn(conn);
+	return -1;
       }
     }
   }
   cnt = sval;
-  if ((conn->conn_sock != -1) && (sval > 0) && FD_ISSET(sock, &fds) && ((cnt = recv(conn->conn_sock, buf, buflen, 0)) < 0)) {
-    if ((errno == EBADF) || (errno == ECONNRESET) || (errno == ETIMEDOUT)) {
+  if ((conn->conn_sock != -1) && (sval > 0) && FD_ISSET(sock, &fds)) {
+    if ((cnt = recv(conn->conn_sock, buf, buflen, 0)) < 0) {
+      if ((errno == EBADF) || (errno == ECONNRESET) || (errno == ETIMEDOUT)) {
+	if (ncp_debug) perror("NCP recv(receive_or_die)");
+	socket_closed_for_conn(conn);
+	return -1;
+      } else {
+	perror("?? recv(receive_or_die)");
+	exit(1);
+      }
+    } else if (cnt == 0) {
+      if (ncp_debug > 1) printf("== receive_or_die (%s, %s): sock %d select %d, read %d bytes, assuming closed\n", 
+				conn_thread_name(conn), conn_type_name(conn), conn->conn_sock, sval, cnt);
       socket_closed_for_conn(conn);
       return -1;
-    } else {
-      perror("?? recv(receive_or_die)");
-      exit(1);
     }
   } else if ((conn->conn_sock == -1) || (sval == 0) || (cnt == 0)) {
     if (ncp_debug > 1) printf("== receive_or_die (%s, %s): sock %d select %d, read %d bytes, assuming closed\n", 
 			      conn_thread_name(conn), conn_type_name(conn), conn->conn_sock, sval, cnt);
     socket_closed_for_conn(conn);
     return -1;
-  } else if (ncp_debug > 1) printf("== receive_or_die read %d bytes (buflen %d)\n", cnt, buflen);
+  } else if (ncp_debug > 1) printf("== receive_or_die read %d bytes (sock %d, buflen %d)\n", cnt, conn->conn_sock, buflen);
   return cnt;
 }
 
