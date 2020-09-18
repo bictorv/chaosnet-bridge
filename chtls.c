@@ -1144,12 +1144,25 @@ void * tls_input(void *v)
 	    u_short srcaddr;
 	    if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
 	      struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
-	      srcaddr = ntohs(tr->ch_hw_srcaddr);
-	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
-				     ch_opcode_name(ch_opcode(cha)), srcaddr);
+	      int cks, dlen = ch_nbytes(cha) + (ch_nbytes(cha)%2) + CHAOS_HEADERSIZE + CHAOS_HW_TRAILERSIZE;
+	      if (len < dlen) {
+		if (1 || tls_debug) fprintf(stderr,"%%%% TLS incomplete trailer: len %d, pklen %d, expected total %d\n",
+				       len, ch_nbytes(cha), dlen);
+		srcaddr = ch_srcaddr(cha);
+	      } else {
+		srcaddr = ntohs(tr->ch_hw_srcaddr);
+		if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
+				       ch_opcode_name(ch_opcode(cha)), srcaddr);
+		if ((cks = ch_checksum((u_char *)&data, dlen)) != 0) {
+		  // "This can't possibly happen!" - really!
+		  if (1 || tls_debug)
+		    fprintf(stderr,"[CHTLS: bad checksum %#x for pkt dlen %d from %#o, dropping pkt]\r\n", cks, dlen, srcaddr);
+		  continue;
+		}
+	      }
 	    } else {
 	      srcaddr = ch_srcaddr(cha);
-	      if (verbose || tls_debug || debug)
+	      if (1 || verbose || tls_debug || debug)
 		fprintf(stderr,"%%%% TLS input: no trailer in pkt from %#o\n", srcaddr);
 	      if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from header: %#o\n",
 				     ch_opcode_name(ch_opcode(cha)), srcaddr);
