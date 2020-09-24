@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 # The directory of this need to match the "socketdir" ncp setting in cbridge.
 stream_socket_address = '/tmp/chaos_stream'
 # This is the default forwarding server
-dns_forwarder = "10.0.1.72" # "130.238.19.25"
+dns_forwarder = "130.238.19.25"
 # -d
 debug = False
 
