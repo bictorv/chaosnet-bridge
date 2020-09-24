@@ -41,8 +41,17 @@ A non-standard contact `DNS` is also supported, which responds to a
 "simple" protocol. The contact string is "DNS" followed by a space and
 then the DNS query packet. The cbridge process, if configured for it,
 forwards the query to a DNS server (over IP/UDP) and sends the
-response as an ANS packet to the (Chaosnet) requester. A client
-implementation for the LambdaDelta lisp machine exists, which could
-prossibly be ported to the CADR system (which doesn't have IP). 
+response as an ANS packet to the (Chaosnet) requester.  Because of the
+packet size limit, queries and responses are also limited in size.
+
+There is also a (separate) [server](domain.py) for the `DOMAIN`
+contact which allows DNS queries over a stream connection, lifting the
+size limit. This is more standard, used by Symbolics lisp machines,
+and (soon) by the Bogodyne lisp system. 
+
+A client implementation (for both protocols) for the
+[LambdaDelta lisp machine](https://github.com/dseagrav/ld) exists,
+which could prossibly be ported to the CADR system (which doesn't have
+IP).
 
 See also https://chaosnet.net for info about DNS for Chaosnet data.
