@@ -2,33 +2,49 @@
 
 Some examples of configurations.
 
-## Basic example
+## Example: klh10
 
-Assuming you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 11 (octal). In the example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
+Assuming you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 14 (octal). In the example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
 
     ; My default Chaosnet address
-    chaddr 4401
+    chaddr 6001
     ; Define a chaos-over-udp link to the Global Chaosnet router, which has address 3040
     link chudp router.chaosnet.net host 3040 myaddr 3171
-    ; Define a local Chaos-over-Ether on the eth0 interface, for subnet nr 11 (hosts 4400-4777)
-    link ether eth0 subnet 11
+    ; Define a local Chaos-over-Ether on the eth0 interface, for subnet nr 14 (hosts 6001-6376)
+    link ether eth0 subnet 14
     ; A chaos-over-udp link to the ITS configured below
-    link chudp localhost:42043 host 4411
+    link chudp localhost:42043 host 6002
 
 For a ITS/klh10 running on the same host as cbridge, you can use
 
-    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 chudpport=42043 chip=4401/localhost:42042
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=6002 chudpport=42043 chip=6001/localhost:42042
 
 If you let ITS/klh10 use Chaos-over-Ethernet, you do not need the last
 "link chudp" line in the cbridge config, and in klh10.ini you can use
 
-    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=4411 ifmeth=pcap
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=6002 ifmeth=pcap
 
 The ITS will pick up routing info from cbridge. (Of course you also
-need to configure ITS to use address 4411.)
+need to configure ITS to use address 6002, see [here](https://github.com/PDP-10/klh10/blob/master/run/ksits/pubits/doc/distrib.its) for instructions.)
 
-If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the "link ether" line.
+If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the `link ether` line.
 
+## Example: linux/macOS
+
+If you just want to connect your linux or macOS system to the global Chaosnet, something like this cwould work. 
+
+First, [create a certificate request](TLS.md) and get a certificate back. Then, assuming the address you got was 3077, use the following configuration.
+
+	; My Chaosnet address
+	chaddr 3077
+	; Enable the NCP, so you can connect using linux/macOS programs
+	ncp enabled yes
+	; Configure my TLS key and cert (see TLS.md)
+	tls key private/my.key.pem cert certs/my.cert.pem
+	; Define a TLS link to the main router over IPv6
+	link tls router.chaosnet.net host 3040 myaddr 3077
+
+This should enable you to use e.g. [supdup](https://github.com/PDP-10/supdup) to connect to ITS systems,  [hostat](hostat.c) to check the status of systems, or [finger](finger.py) to check who is logged in.
 
 ## Example: MX-11
 
