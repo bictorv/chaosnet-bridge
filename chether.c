@@ -21,10 +21,18 @@
 
 /* **** Chaos-over-Ethernet functions **** */
 
-// Slightly less efficent, but useful information:
-// - add a fake "hardware trailer" based on sender MAC and ARP info
+#if CHAOS_ETHERP
+#define FAKE_CHAOS_ETHER_TRAILER 1
+
+// Look for, and use, a Chaos trailer in Ethernet pkts - don't do this
 #ifndef USE_CHAOS_ETHER_TRAILER
 #define USE_CHAOS_ETHER_TRAILER 0
+#endif
+// Slightly less efficent, but useful information:
+// - add a fake "hardware trailer" based on sender MAC and ARP info
+#ifndef FAKE_CHAOS_ETHER_TRAILER
+#define FAKE_CHAOS_ETHER_TRAILER USE_CHAOS_ETHER_TRAILER 
+#endif
 #endif
 
 // ARP stuff
@@ -80,7 +88,7 @@ static struct charp_ent charp_list[CHARP_MAX];
 static int charp_len = 0;			/* cf CHARP_MAX */
 
 static void get_my_ea(void);
-#if USE_CHAOS_ETHER_TRAILER
+#if FAKE_CHAOS_ETHER_TRAILER
 static u_short find_arp_entry_for_ea(u_char *eaddr);
 #endif
 void print_arp_table();
@@ -629,7 +637,7 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
   if (chether_debug || verbose) {
     struct chaos_header *ch = (struct chaos_header *)packet;
     printf("Ether: Sending %s: %d bytes with protocol 0x%04x (%s) to address ",
-	   (ethtype == ETHERTYPE_CHAOS ? ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff) :
+	   (ethtype == ETHERTYPE_CHAOS ? ch_opcode_name(ch_opcode(ch)) :
 	    (ethtype == ETHERTYPE_ARP ? "ARP" : "?")),
 	   packetlen, ethtype,
 	   (ethtype == ETHERTYPE_ARP ? "ARP" :
@@ -972,26 +980,37 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     else if (protocol == htons(ETHERTYPE_CHAOS)) {
       // Oh dear, this might slow things down a bit,
       // but I really would like the LASTCN stats to know who sent it last
-#if USE_CHAOS_ETHER_TRAILER
+#if FAKE_CHAOS_ETHER_TRAILER
       u_short trailer_from = find_arp_entry_for_ea((u_char *)&src_mac);
       if ((trailer_from != 0) 
 	  // it fits
 	  && (rlen + CHAOS_HW_TRAILERSIZE < buflen)
 	  // it's not already there
+	  // - but size is sometimes larger than what was actually sent, so don't check this
+	  // - and we don't actually send the trailer, just fake it on reception
 	  // && (rlen < CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE)
 	  ) {
 	// add trailer
-	if (chether_debug) printf("Ether: adding fake hw trailer for %%#llx = Chaos %#o\n", // ether_ntoa((struct ether_addr *)src_mac),
+	struct chaos_header *ch = (struct chaos_header *)buf;
+	// end of packet
+	int pkend = CHAOS_HEADERSIZE + ch_nbytes_n(ch);
+	pkend += (pkend % 2); // align
+
+	if (chether_debug) printf("Ether: adding fake hw trailer for %s = Chaos %#o\n", 
+				  ether_ntoa((struct ether_addr *)src_mac),
 				  trailer_from);
-	if (rlen % 2) rlen++; // align
-	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[rlen];
+	struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[pkend];
 	tr->ch_hw_srcaddr = trailer_from;
 	tr->ch_hw_destaddr = ntohs(ch_destaddr((struct chaos_header *)buf));
 	tr->ch_hw_checksum = ntohs(ch_checksum(buf, rlen+2*sizeof(u_short)));
-	rlen += CHAOS_HW_TRAILERSIZE;
+	if (chether_debug) printf(" updating length to %d + %ld = %ld (rlen %d)\n",
+				  pkend, CHAOS_HW_TRAILERSIZE, pkend + CHAOS_HW_TRAILERSIZE, rlen);
+	rlen = pkend + CHAOS_HW_TRAILERSIZE;
       } 
-      else if (chether_debug && (trailer_from == 0))
+      else if (chether_debug && (trailer_from == 0)) {
+	printf("Ether: can't find ARP for %s - not adding trailer\n", ether_ntoa((struct ether_addr *)src_mac));
 	print_arp_table();
+      }
 #if 1
       else if (chether_debug) {
 	printf("Ether: NOT adding trailer: from %#o, fits %s, already there %s (%d %lu)\n",
@@ -1001,7 +1020,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 	       rlen, CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE);
       }
 #endif
-#endif // USE_CHAOS_ETHER_TRAILER
+#endif // FAKE_CHAOS_ETHER_TRAILER
       if (debug || chether_debug) {
 	printf("Ethernet Chaos message (len %d):\n", rlen);
 	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
@@ -1019,7 +1038,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 #if 1
 	    printf(" Opcode: %#o (%s), unused: %#x\n FC: %d, Nbytes %d.\n",
 		   ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-		   ch->ch_opcode_u.ch_opcode_s.ch_unused,
+		   ch_unused(ch),
 		   ch_fc(ch), ch_nbytes(ch));
 	    printf(" Dest host: %#o, index %#o\n Source host: %#o, index %#o\n",
 		   ch_destaddr(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch));
@@ -1029,7 +1048,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 	  }
 	  return 0;
 	}
-	ntohs_buf((u_short *)buf, (u_short *)buf, rlen);
+	htons_buf((u_short *)buf, (u_short *)buf, rlen);
       }
 #if 0
     if (debug) {
@@ -1097,7 +1116,7 @@ static u_char *find_arp_entry(u_short daddr)
   return NULL;
 }
 
-#if USE_CHAOS_ETHER_TRAILER
+#if FAKE_CHAOS_ETHER_TRAILER
 static u_short find_arp_entry_for_ea(u_char *eaddr)
 {
   int i;
@@ -1127,7 +1146,7 @@ static u_short find_arp_entry_for_ea(u_char *eaddr)
   PTUNLOCK(charp_lock);
   return 0;
 }
-#endif // USE_CHAOS_ETHER_TRAILER
+#endif // FAKE_CHAOS_ETHER_TRAILER
 
 #if 0
 // Find my chaos address on the ether link #### check config that there are no conflicting addrs?

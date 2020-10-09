@@ -1,8 +1,8 @@
 #include <arpa/inet.h>
 
 /* 11-format word */
-#define WORD32(c) ((c[1]) + ((c)[0]<<8) + ((c)[3]<<16) + ((c)[2]<<24))
-#define WORD16(c) (*(c+1) + (*(c)<<8))
+#define WORD16(c) (ntohs(*(u_short *)(c)))
+
 // Max forwarding count (4 bits)
 #define CH_FORWARD_MAX 0xF
 
@@ -20,80 +20,38 @@ static char
 char *ch_opcode_name(int opc);
 
 struct chaos_header {
-  union {
-    unsigned short ch_opcode_x;
-    struct {
-      unsigned char ch_opcode;
-      unsigned char ch_unused;
-    } ch_opcode_s;
-  } ch_opcode_u;
-  struct {
-    unsigned char ch_fc_nbytes1;
-    unsigned char ch_fc_nbytes2;
-  } ch_fc_nbytes;
-  union {
-    unsigned short ch_destaddr_x:16;
-    struct {
-      unsigned char ch_destaddr1;
-      unsigned char ch_destaddr2;
-    } ch_destaddr_s;
-  } ch_destaddr_u;
-  union {
-    unsigned short ch_destindex_x:16;
-    struct {
-      unsigned char ch_destindex1;
-      unsigned char ch_destindex2;
-    } ch_destindex_s;
-  } ch_destindex_u;
-  union {
-    unsigned short ch_srcaddr_x:16;
-    struct {
-      unsigned char ch_srcaddr1;
-      unsigned char ch_srcaddr2;
-    } ch_srcaddr_s;
-  } ch_srcaddr_u;
-  union {
-    unsigned short ch_srcindex_x:16;
-    struct {
-      unsigned char ch_srcindex1;
-      unsigned char ch_srcindex2;
-    } ch_srcindex_s;
-  } ch_srcindex_u;
-  union {
-    unsigned short ch_packetno_x:16;
-    struct {
-      unsigned char ch_packetno1;
-      unsigned char ch_packetno2;
-    } ch_packetno_s;
-  } ch_packetno_u;
-  union {
-    unsigned short ch_ackno_x:16;
-    struct {
-      unsigned char ch_ackno1;
-      unsigned char ch_ackno2;
-    } ch_ackno_s;
-  } ch_ackno_u;
+  unsigned short ch_opcode_x:16;
+  unsigned short ch_fc_nbytes_n:16;
+  unsigned short ch_destaddr_n:16;
+  unsigned short ch_destindex_n:16;
+  unsigned short ch_srcaddr_n:16;
+  unsigned short ch_srcindex_n:16;
+  unsigned short ch_packetno_n:16;
+  unsigned short ch_ackno_n:16;
 };
 
-#define ch_opcode(CH) ((CH)->ch_opcode_u.ch_opcode_s.ch_opcode)
-#define ch_fc(CH) ((CH)->ch_fc_nbytes.ch_fc_nbytes1 >> 4)
-#define ch_nbytes(CH) ((((CH)->ch_fc_nbytes.ch_fc_nbytes1 & 0xf) << 8) | (CH)->ch_fc_nbytes.ch_fc_nbytes2)
-#define ch_destaddr(CH) (ntohs((CH)->ch_destaddr_u.ch_destaddr_x))
-#define ch_destindex(CH) (ntohs((CH)->ch_destindex_u.ch_destindex_x))
-#define ch_srcaddr(CH) (ntohs((CH)->ch_srcaddr_u.ch_srcaddr_x))
-#define ch_srcindex(CH) (ntohs((CH)->ch_srcindex_u.ch_srcindex_x))
-#define ch_packetno(CH) (ntohs((CH)->ch_packetno_u.ch_packetno_x))
-#define ch_ackno(CH) (ntohs((CH)->ch_ackno_u.ch_ackno_x))
+// network order
+#define ch_opcode(CH) (ntohs((CH)->ch_opcode_x) >> 8)
+#define ch_unused(CH) (ntohs((CH)->ch_opcode_x) & 0xff)
+#define ch_fc(CH) (ntohs((CH)->ch_fc_nbytes_n) >> 12)
+#define ch_nbytes(CH) (ntohs((CH)->ch_fc_nbytes_n) & 0xfff)
+#define ch_nbytes_n(CH) (((CH)->ch_fc_nbytes_n) & 0xfff)
+#define ch_destaddr(CH) (ntohs((CH)->ch_destaddr_n))
+#define ch_destindex(CH) (ntohs((CH)->ch_destindex_n))
+#define ch_srcaddr(CH) (ntohs((CH)->ch_srcaddr_n))
+#define ch_srcindex(CH) (ntohs((CH)->ch_srcindex_n))
+#define ch_packetno(CH) (ntohs((CH)->ch_packetno_n))
+#define ch_ackno(CH) (ntohs((CH)->ch_ackno_n))
 
-#define set_ch_opcode(CH,val) ((CH)->ch_opcode_u.ch_opcode_s.ch_opcode = (val))
-#define set_ch_fc(CH,val) ((CH)->ch_fc_nbytes.ch_fc_nbytes1 = ((CH)->ch_fc_nbytes.ch_fc_nbytes1 & 0xf)|(val<<4))
-#define set_ch_nbytes(CH,val) (((CH)->ch_fc_nbytes.ch_fc_nbytes1 = ((CH)->ch_fc_nbytes.ch_fc_nbytes1 &0xf0) | (((val) & 0xf00) >> 8)), (CH)->ch_fc_nbytes.ch_fc_nbytes2 = (val) & 0xff)
-#define set_ch_destaddr(CH,val) ((CH)->ch_destaddr_u.ch_destaddr_x = htons(val))
-#define set_ch_destindex(CH,val) ((CH)->ch_destindex_u.ch_destindex_x = htons(val))
-#define set_ch_srcaddr(CH,val) ((CH)->ch_srcaddr_u.ch_srcaddr_x = htons(val))
-#define set_ch_srcindex(CH,val) ((CH)->ch_srcindex_u.ch_srcindex_x = htons(val))
-#define set_ch_packetno(CH,val) ((CH)->ch_packetno_u.ch_packetno_x = htons(val))
-#define set_ch_ackno(CH,val) ((CH)->ch_ackno_u.ch_ackno_x = htons(val))
+#define set_ch_opcode(CH,val) ((CH)->ch_opcode_x = htons(ch_opcode(CH) | ((val) << 8)))
+#define set_ch_fc(CH,val) ((CH)->ch_fc_nbytes_n = htons((ch_nbytes(CH) | ((val) << 12))))
+#define set_ch_nbytes(CH,val) ((CH)->ch_fc_nbytes_n = htons((ch_fc(CH) << 12) | ((val) & 0xfff)))
+#define set_ch_destaddr(CH,val) ((CH)->ch_destaddr_n = htons(val))
+#define set_ch_destindex(CH,val) ((CH)->ch_destindex_n = htons(val))
+#define set_ch_srcaddr(CH,val) ((CH)->ch_srcaddr_n = htons(val))
+#define set_ch_srcindex(CH,val) ((CH)->ch_srcindex_n = htons(val))
+#define set_ch_packetno(CH,val) ((CH)->ch_packetno_n = htons(val))
+#define set_ch_ackno(CH,val) ((CH)->ch_ackno_n = htons(val))
 
 struct chaos_hw_trailer {
   unsigned short ch_hw_destaddr:16;

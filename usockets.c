@@ -175,7 +175,7 @@ u_send_chaos(int fd, u_char *buf, int buflen)
     ntohs_buf((u_short *)buf,(u_short *)buf,buflen);
   } else if (verbose || unixdebug) {
     fprintf(stderr,"Unix: Sending %s: %d bytes\n",
-	    ch_opcode_name(ntohs(ch->ch_opcode_u.ch_opcode_x)&0xff), buflen);
+	    ch_opcode_name(ch_opcode(ch)), buflen);
   }
 
   lenbytes[0] = (buflen >> 8) & 0xff;

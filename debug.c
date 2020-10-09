@@ -210,7 +210,7 @@ ch_dumpkt(unsigned char *ucp, int cnt)
 
   fprintf(stderr,"Opcode: %#o (%s), unused: %o\r\nFC: %o, Nbytes %d.\r\n",
 	  ch_opcode(ch), ch_opcode_name(ch_opcode(ch)),
-	  ch->ch_opcode_u.ch_opcode_s.ch_unused,
+	  ch_unused(ch),
 	  ch_fc(ch), ch_nbytes(ch));
   fprintf(stderr,"Dest host: %#o, index %#o (%#x)\r\nSource host: %#o, index %#o (%#x)\r\n",
 	  ch_destaddr(ch), ch_destindex(ch), ch_destindex(ch), ch_srcaddr(ch), ch_srcindex(ch), ch_srcindex(ch));
