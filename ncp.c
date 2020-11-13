@@ -1784,6 +1784,7 @@ parse_contact_name(u_char *in)
 u_char * 
 parse_contact_args(u_char *data, u_char *contact) 
 {
+  // Note: this doesn't handle binary args (cf. DNS protocol - so use DOMAIN instead)
   if (strlen((char *)data) > strlen((char *)contact)) {
     int i, j = strlen((char *)data) - strlen((char *)contact);
     u_char *e, *p = &data[strlen((char *)contact)];
@@ -1829,7 +1830,7 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *c
 static void
 handle_option(struct conn *c, char *optname, char *val)
 {
-  if (ncp_debug) printf("NCP parsing RFC option \"%s\" value \"%s\"\n", optname, val);
+  if (ncp_debug) printf("NCP parsing RFC/BRD option \"%s\" value \"%s\"\n", optname, val);
   if (strcasecmp(optname, "timeout") == 0) {
     int to = 0;
     if ((sscanf(val, "%d", &to) == 1) && (to > 0)) {
@@ -2464,6 +2465,17 @@ probe_connection(struct conn *conn)
   struct timespec now;
   timespec_get(&now, TIME_UTC);
   retransmit_controlled_packets(conn);
+
+  if ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
+    // this is a BRD which has received some ANS, but might need a timeout
+    // We're comparing to creation time (when BRD was sent) rather than last reception
+    if ((conn->rfc_timeout > 0) && (time(NULL) - conn->conn_created > conn->rfc_timeout)) {
+      if (ncp_debug) printf("NCP probe_conn %p <%#o,%#x> BRD connection timeout age %ld\n", 
+			    conn, conn->conn_lhost, conn->conn_lidx, time(NULL) - conn->conn_created);
+      // Don't send EOF
+      finish_stream_conn(conn, 0);
+    }
+  }
   if ((cs->time_last_received != 0) && (now.tv_sec - cs->time_last_received > HOST_DOWN_INTERVAL)) {
     // haven't received for a long time, despite probing
     if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, host down!\n", 
@@ -3638,7 +3650,8 @@ conn_to_socket_handler(void *arg)
       }
       if ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
 	// Allow more ANS to come in
-	if (ncp_debug) printf("NCP c_t_s BRD conn in Answered state: not finishing\n");
+	if (ncp_debug) printf("NCP c_t_s BRD conn <%#o,%#x> in Answered state: not finishing (t/o %d, age %ld)\n",
+			      conn->conn_lhost, conn->conn_lidx, conn->rfc_timeout, time(NULL) - conn->conn_created);
       } else if ((cs->state == CS_CLS_Received) || (cs->state == CS_Host_Down) ||
 	  (cs->state == CS_LOS_Received) || (cs->state == CS_Answered)) {
 	if (ncp_debug) printf("NCP c_t_s connection finishing, state %s\n", state_name(cs->state));
