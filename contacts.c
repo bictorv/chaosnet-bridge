@@ -87,7 +87,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
       nroutes++;
     } else if (debug && (rttbl_net[i].rt_type != RT_NOPATH)) {
       if (i == (dest >> 8))
-	fprintf(stderr, " NOT including net %#o for dest %#o\n", i, dest);
+	fprintf(stderr, " NOT including net %#o for dest %#o (same subnet)\n", i, dest);
       else if (rttbl_net[i].rt_braddr == dest) 
 	fprintf(stderr, " NOT including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
       else if ((rttbl_net[i].rt_braddr >> 8) == (dest >> 8))
