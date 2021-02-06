@@ -1,7 +1,7 @@
 ## Add dns stuff
 
 import socket, io
-import sys, subprocess, threading
+import sys, subprocess, threading, errno
 import re, string
 import functools
 from struct import unpack
@@ -66,8 +66,8 @@ class Conn:
         try:
             self.sock.connect(address)
             return self.sock
-        except socket.error as msg:
-            print('Socket errror:',msg, file=sys.stderr)
+        except OSError as msg:
+            print("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg), file=sys.stderr)
             sys.exit(1)
 
 
@@ -85,8 +85,12 @@ class Conn:
         # Read header to see how long the pkt is
         hdr = self.sock.recv(4)
         if hdr is None or len(hdr) < 4:
-            print("Bad header {!r}".format(hdr), file=sys.stderr)
-            return None
+            if debug:
+                if len(hdr) == 0:
+                    print("No data from recv, assuming closed socket {}".format(self.sock), file=sys.stderr)
+                else:
+                    print("Bad header {!r}".format(hdr), file=sys.stderr)
+            return None, None
         # First is opcode
         opc = hdr[0]
         # then zero
@@ -133,12 +137,38 @@ class Simple:
             print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data), file=sys.stderr)
             return None
 
+def dns_name_of_address(addrstring, onlyfirst=True):
+    name = "{}.CH-ADDR.NET.".format(addrstring)
+    try:
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH), '130.238.19.25')
+        for t in h.answer:
+            if t.rdtype == dns.rdatatype.PTR:
+                    for d in t:
+                        n = d.target.to_text(omit_final_dot=True)
+                        if onlyfirst:
+                            return n.split('.',maxsplit=1)[0]
+                        else:
+                            return n
+                        # return d.target_to_text()
+        return addrstring
+    except AttributeError as e:
+        # dnspython not updated with support for Chaos records?
+        pass
+        # print("Error", e, file=sys.stderr)
+    except dns.exception.DNSException as e:
+        print("Error", e, file=sys.stderr)
+
+
 host_names = dict()
+# Prefer not to ask for a host's name
+no_host_names = False
 def host_name(addr):
     if isinstance(addr,int):
         if addr < 0o400:
             return addr
         addr = "{:o}".format(addr)
+    # if no_host_names:
+    #     return addr
     if addr in host_names:
         return host_names[addr]
     s = Simple(addr, "STATUS", options=dict(timeout=2))
@@ -147,7 +177,9 @@ def host_name(addr):
         name = str(data[:32].rstrip(b'\0x00'), "ascii")
         host_names[addr] = name
     else:
-        name = "{}".format(addr)
+        name = dns_name_of_address(addr)
+        host_names[addr] = name
+        # name = "{}".format(addr)
     return name
 
 class Broadcast:
@@ -155,25 +187,35 @@ class Broadcast:
     def __init__(self, subnets, contact, args=[], options=None):
         self.conn = Conn()
         # print("Simple({} {}) t/o {}".format(host,contact, timeout))
-        h = ("{} {}"+" {}"*len(args)).format(",".join(map(str,subnets)),contact,*args)
+        h = bytes("{} {}".format(",".join(map(str,subnets)),contact),"ascii")
+        for a in args:
+            if isinstance(a,str):
+                h += b" "+bytes(a)
+            else:
+                h += b" "+a
         if options is not None:
-            h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
+            h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
         try:
             if debug:
                 print("BRD {}".format(h), file=sys.stderr)
-            self.conn.send_packet(Opcode.BRD, bytes(h,"ascii"))
+            self.conn.send_packet(Opcode.BRD, h)
         except socket.error:
             return None
     def __iter__(self):
         return self
     def __next__(self):
         opc, data = self.conn.get_packet()
+        if opc == None:
+            raise StopIteration
         if opc == Opcode.ANS:
             if debug:
                 src = data[0] + data[1]*256
                 print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
             return data
         elif opc == Opcode.LOS:
+            if debug:
+                src = data[0] + data[1]*256
+                print("Got LOS from {:o} len {}: {}".format(src,len(data),data), file=sys.stderr)
             raise StopIteration
         else:
             print("Got {} ({})".format(Opcode(opc).name, data), file=sys.stderr)
@@ -211,6 +253,8 @@ class Status:
             # First is the name of the node
             hname = str(data[:32].rstrip(b'\0x00'),'ascii')
             if hname in hlist:
+                if debug:
+                    print("Extra response from {} ({:o})".format(hname,src), file=sys.stderr)
                 continue
             hlist.append(hname)
             fstart = 32
@@ -268,7 +312,7 @@ class ChaosUptime:
             data = data[2:]
             hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
             # cf RFC 868
-            print("{:16} {}".format(hname,timedelta(seconds=unpack("I",data[0:4])[0]/60)))
+            print("{:16} {}".format(hname,timedelta(seconds=int(unpack("I",data[0:4])[0]/60))))
 
 # The FINGER protocol (note: not NAME)
 class ChaosFinger:
@@ -338,7 +382,7 @@ class ChaosLastSeen:
                 continue
             hlist.append(src)
             data = data[2:]
-            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+            hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) # if not(no_host_names) else "{:o}".format(src)
             cn = dict()
             for i in range(0,int(len(data)/2/7)):
                 flen = unpack('H',data[i*7*2:i*7*2+2])[0]
@@ -358,6 +402,22 @@ class ChaosLastSeen:
                     print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
                 first = ""                
 
+# The simple DNS protocol is not suitable for the string interface of the NCP,
+# but the stream DOMAIN protocol should be.
+class ChaosDNS:
+    def __init__(self,subnets, options=None, name=None, qtype=None):
+        self.get_dns(subnets, options=options, name=name, qtype=qtype)
+    def get_dns(self, subnets, options, name=None, qtype=None):
+        hlist = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        msg = dns.message.make_query(name, qtype, rdclass=dns.rdataclass.CH)
+        print("> {!r} len {}".format(msg, len(msg.to_wire())))
+        print("> {!r}".format(msg.to_text()))
+        for data in Broadcast(subnets,"DNS", args=[msg.to_wire()], options=options):
+            print("< {!r}".format(data))
+            print("< {!r}".format(dns.message.from_wire(data)))
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
@@ -371,10 +431,14 @@ if __name__ == '__main__':
                             help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
+    parser.add_argument("-n",'--no-host-names', dest='no_host_names', action='store_true',
+                            help="Prefer not to ask hosts for their names")
     args = parser.parse_args()
     if args.debug:
         print(args)
         debug = True
+    if args.no_host_names:
+        no_host_names = True
     if -1 in args.subnets and len(args.subnets) != 1:
         # "all" supersedes all other
         args.subnets = [-1]
@@ -387,10 +451,15 @@ if __name__ == '__main__':
     elif args.service.upper() == 'FINGER':
         c = ChaosFinger
     elif args.service.upper() == "LASTCN":
-        c = ChaosLastSeen
+        c = lambda sn,ops: ChaosLastSeen(sn,ops,show_names=not(no_host_names))
     elif args.service.upper() == "ROUTING" or args.service.upper() == "DUMP-ROUTING-TABLE":
         c = ChaosDumpRoutingTable
+    elif args.service.upper() == "DNS":
+        ChaosDNS(args.subnets,options=dict(timeout=args.timeout, retrans=args.retrans),
+                     name="3143.ch-addr.net.", qtype=dns.rdatatype.PTR)
+        exit(0)
     else:
         print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table) or LASTCN (in any case)".format(args.service))
         exit(1)
-    c(args.subnets,dict(timeout=args.timeout, retrans=args.retrans))
+    opts = dict(timeout=args.timeout, retrans=args.retrans)
+    c(args.subnets,opts)
