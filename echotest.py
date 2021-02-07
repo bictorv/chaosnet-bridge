@@ -11,13 +11,38 @@ import sys, subprocess, threading, time
 import re, string
 import functools
 from datetime import datetime
+from enum import IntEnum, auto
 
 # The directory of this need to match the "socketdir" ncp setting in cbridge.
 stream_socket_address = '/tmp/chaos_stream'
+packet_socket_address = '/tmp/chaos_packet'
 # -d
 debug = False
 
-class StreamConn:
+
+# Chaos packet opcodes
+class Opcode(IntEnum):
+    RFC = 1
+    OPN = auto()
+    CLS = auto()
+    FWD = auto()
+    ANS = auto()
+    SNS = auto()
+    STS = auto()
+    RUT = auto()
+    LOS = auto()
+    LSN = auto()
+    MNT = auto()
+    EOF = auto()                          # with NCP, extended with optional "wait" data part which is never sent on the wire
+    UNC = auto()
+    BRD = auto()
+    ACK = 0o177                           # new opcode to get an acknowledgement from NCP when an EOF+wait has been acked
+    DAT = 0o200
+    SMARK = 0o201                       # synchronous mark
+    AMARK = 0o202                       # asynchronous mark
+    DWD = 0o300
+
+class NCPConn:
     sock = None
     active = False
     contact = None
@@ -36,7 +61,7 @@ class StreamConn:
     def close(self, msg="Thank you"):
         if debug:
             print("Closing {} with msg {}".format(self,msg), file=sys.stderr)
-        # self.send_packet(Opcode.CLS, msg)
+        self.send_cls(msg)
         try:
             self.sock.close()
         except socket.error as msg:
@@ -44,7 +69,7 @@ class StreamConn:
         self.sock = None
 
     def get_socket(self):
-        address = stream_socket_address
+        address = self.socket_address
         # Create a Unix socket
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
@@ -55,7 +80,37 @@ class StreamConn:
         except socket.error as msg:
             print('Socket errror:',msg, file=sys.stderr)
             sys.exit(1)
-    
+
+    def send_socket_data(self, data):
+        self.sock.sendall(data)
+
+    def get_bytes(self, nbytes):
+        return self.sock.recv(nbytes)
+
+    def get_line(self):
+        # Read an OPN/CLS in response to our RFC
+        rline = b""
+        b = self.get_bytes(1)
+        while b != b"\r" and b != b"\n":
+            rline += b
+            b = self.get_bytes(1)
+        if b == b"\r":
+            b = self.get_bytes(1)
+            if b != b"\n":
+                print("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b),
+                          file=sys.stderr)
+                exit(1)
+        return rline
+
+class PacketConn(NCPConn):
+    def __init__(self):
+        self.socket_address = packet_socket_address
+        super().__init__()
+
+    # Construct a 4-byte packet header for chaos_packet connections
+    def packet_header(self, opc, plen):
+        return bytes([opc, 0, plen & 0xff, int(plen/256)])
+  
     def send_data(self, data):
         # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
         if isinstance(data, str):
@@ -64,32 +119,74 @@ class StreamConn:
             msg = data
         if debug:
             print("> {} to {}".format(len(msg), self), file=sys.stderr)
-        self.sock.sendall(msg)
+        self.send_socket_data(self.packet_header(Opcode.DAT, len(msg)) + msg)
 
-    def get_message(self, length=488):
-        data = self.sock.recv(length)
+    def send_packet(self, opc, data):
+        self.send_socket_data(self.packet_header(opc, len(data))+data)
+
+    def send_los(self, msg):
+        self.send_packet(Opcode.LOS, msg)
+    def send_cls(self, msg):
+        self.send_packet(Opcode.CLS, msg)
+
+    def get_packet(self):
+        hdr = self.get_bytes(4)
+        # First is opcode
+        opc = hdr[0]
+        # then zero
+        assert(hdr[1] == 0)
+        # then length
+        length = hdr[2] + hdr[3]*256
+        assert(length <= 488)
         if debug:
-            print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
-        if len(data) < length:
-            d2 = self.sock.recv(length-len(data))
-            if debug:
-                print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
-            data += d2
-        return data
+            print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
+        return opc, self.get_bytes(length)
 
-    def get_line(self):
-        rline = b""
-        b = self.sock.recv(1)
-        while b != b"\r" and b != b"\n":
-            rline += b
-            b = self.sock.recv(1)
-        if b == b"\r":
-            b = self.sock.recv(1)
-            if b != b"\n":
-                print("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b),
-                          file=sys.stderr)
-                exit(1)
-        return rline
+    def connect(self, host, contact, args=[]):
+        h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
+        if debug:
+            print("RFC: {}".format(h), file=sys.stderr)
+        self.send_packet(Opcode.RFC, h)
+        opc, data = self.get_packet()
+        if opc == Opcode.OPN:
+            return True
+        else:
+            print("Expected OPN: {}".format(opc), file=sys.stderr)
+            return False
+
+    def get_message(self, dlen=488):
+        opc, data = self.get_packet()
+        if opc != Opcode.DAT:
+            print("Unexpected opcode {}".format(opc), file=sys.stderr)
+            return None
+        elif len(data) >= dlen:
+            return data
+        else:
+            if debug:
+                print("read less than expected: {} < {}, going for more".format(len(data),dlen))
+            return data + self.get_message(dlen-len(data))
+    
+class StreamConn(NCPConn):
+    def __init__(self):
+        self.socket_address = stream_socket_address
+        super().__init__()
+
+    def send_data(self, data):
+        # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
+        if isinstance(data, str):
+            msg = bytes(data,"ascii")
+        else:
+            msg = data
+        if debug:
+            print("> {} to {}".format(len(msg), self), file=sys.stderr)
+        self.send_socket_data(msg)
+
+    def send_los(self, msg):
+        # Can't do this over stream interface
+        pass
+    def send_cls(self, msg):
+        # Can't do this over stream interface
+        pass
 
     def connect(self, host, contact, args=[]):
         self.contact = contact
@@ -106,22 +203,16 @@ class StreamConn:
             print("Expected OPN: {}".format(inp), file=sys.stderr)
             return False
 
-    def listen(self, contact):
-        self.contact = contact
+    def get_message(self, length=488):
+        data = self.sock.recv(length)
         if debug:
-            print("Listen for {}".format(contact))
-        self.send_data("LSN {}\r\n".format(contact))
-        inp = self.get_line()
-        op,data = inp.split(b' ', maxsplit=1)
-        if debug:
-            print("{}: {}".format(op,data), file=sys.stderr)
-        if op == b"RFC":
-            self.remote = str(data,"ascii")
-            return self.remote
-        else:
-            print("Expected RFC: {}".format(inp), file=sys.stderr)
-            return None
-
+            print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
+        if len(data) < length:
+            d2 = self.sock.recv(length-len(data))
+            if True or debug:
+                print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
+            data += d2
+        return data
 
 if __name__ == '__main__':
     import argparse
@@ -130,6 +221,10 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("-c","--chunk", type=int, default=10,
                             help="Chunk length for each '.'")
+    parser.add_argument("--goon", dest='goon', action='store_true',
+                            help="Go on after mismatch")
+    parser.add_argument("-p","--packet", dest='packetp', action='store_true',
+                            help="Use packet socket")
     parser.add_argument("host", help='The host to contact')
     args = parser.parse_args()
     if args.debug:
@@ -138,7 +233,10 @@ if __name__ == '__main__':
     xs = b" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}"
     dlen = len(xs)
 
-    c = StreamConn()
+    if args.packetp:
+        c = PacketConn()
+    else:
+        c = StreamConn()
     n = 0
     tot = 0
     if c.connect(args.host, "ECHO"):
@@ -152,7 +250,8 @@ if __name__ == '__main__':
                 for i in range(0,len(d)):
                     if xs[i] != d[i]:
                         print("{}: {!r} != {!r}".format(i, d[i], xs[i]))
-                break
+                if not(args.goon):
+                    break
             if n % args.chunk == 0:
                 print(".", end='', flush=True, file=sys.stderr)
             if n % (args.chunk*80) == 0:
