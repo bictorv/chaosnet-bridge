@@ -192,9 +192,9 @@ class StreamConn(NCPConn):
 
     def connect(self, host, contact, args=[], options=None):
         self.contact = contact
-        h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
+        h = ("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args)
         if options is not None:
-            h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
+            h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
         if debug:
             print("RFC to {} for {}".format(host,h))
         self.send_data("RFC {}".format(h))
