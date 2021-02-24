@@ -142,8 +142,10 @@ class PacketConn(NCPConn):
             print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
         return opc, self.get_bytes(length)
 
-    def connect(self, host, contact, args=[]):
+    def connect(self, host, contact, args=[], options=None):
         h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
+        if options is not None:
+            h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
         if debug:
             print("RFC: {}".format(h), file=sys.stderr)
         self.send_packet(Opcode.RFC, h)
@@ -188,11 +190,14 @@ class StreamConn(NCPConn):
         # Can't do this over stream interface
         pass
 
-    def connect(self, host, contact, args=[]):
+    def connect(self, host, contact, args=[], options=None):
         self.contact = contact
+        h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
+        if options is not None:
+            h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
         if debug:
-            print("RFC to {} for {}".format(host,contact))
-        self.send_data(("RFC {} {}"+" {}"*len(args)).format(host,contact,*args))
+            print("RFC to {} for {}".format(host,h))
+        self.send_data("RFC {}".format(h))
         inp = self.get_line()
         op, data = inp.split(b' ', maxsplit=1)
         if debug:
@@ -221,10 +226,16 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("-c","--chunk", type=int, default=10,
                             help="Chunk length for each '.'")
+    parser.add_argument("-R","--retrans", type=int,
+                            help="retransmission time in ms")
+    parser.add_argument("-W","--winsize", type=int,
+                            help="local window size")
     parser.add_argument("--goon", dest='goon', action='store_true',
                             help="Go on after mismatch")
     parser.add_argument("-p","--packet", dest='packetp', action='store_true',
                             help="Use packet socket")
+    parser.add_argument("-r","--rotate", dest='rotatep', action='store_true',
+                            help="Rotate string being sent")
     parser.add_argument("host", help='The host to contact')
     args = parser.parse_args()
     if args.debug:
@@ -239,7 +250,14 @@ if __name__ == '__main__':
         c = StreamConn()
     n = 0
     tot = 0
-    if c.connect(args.host, "ECHO"):
+    cargs=dict()
+    if args.retrans and args.retrans > 0:
+        cargs['retrans'] = args.retrans
+    if args.winsize and args.winsize > 0:
+        cargs['winsize'] = args.winsize
+    if len(cargs) == 0:
+        cargs = None
+    if c.connect(args.host, "ECHO", options=cargs):
         while True:
             c.send_data(xs)
             d = c.get_message(dlen)
@@ -256,3 +274,5 @@ if __name__ == '__main__':
                 print(".", end='', flush=True, file=sys.stderr)
             if n % (args.chunk*80) == 0:
                 print("", file=sys.stderr)
+            if args.rotatep:
+                xs = xs[2:]+xs[:2]
