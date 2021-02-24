@@ -101,6 +101,7 @@ struct conn {
   u_short conn_lhost;
   u_short conn_lidx;
   u_int retransmission_interval;   // msec - need not be per conn, really?
+  u_int initial_winsize;
   pthread_t conn_to_sock_thread;   // conn_to_socket
   pthread_t conn_from_sock_thread; // socket_to_conn
   pthread_t conn_to_net_thread;	   // conn_to_packet (only for stream)

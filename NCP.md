@@ -82,6 +82,7 @@ The NCP sends a corresponding RFC packet to the destination host.
 Options are
 - `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a time out, a `LOS Connection timed out` response is given to the user program.
 - `retrans=`*%d* to specify a (positive, decimal) retransmission value (in milliseconds) for this connection, see the configuration options above.
+- `winsize=`*%d* to specify a (positive, decimal) local window size for this connection, see the configuration options above.
 - `follow_forward`=*yes/no* to specify whether a FWD response packet should be transparently followed, i.e., result in the RFC being redirected to the target host.
 
 #### Examples:

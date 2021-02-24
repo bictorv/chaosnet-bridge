@@ -641,6 +641,7 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
     memcpy(&conn->conn_sockaddr, sa, (sa_len > sizeof(conn->conn_sockaddr) ? sizeof(conn->conn_sockaddr) : sa_len));
   conn->conn_state = cs;
   conn->retransmission_interval = default_retransmission_interval;
+  conn->initial_winsize = default_window_size;
   conn->follow_forward = forward_transparently;
   conn->rfc_timeout = CONNECTION_TIMEOUT;
   conn->conn_created = time(NULL);
@@ -1236,7 +1237,7 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   if (ncp_debug > 1) print_conn("Updated", c, 0);
 
   PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-  cs->local_winsize = default_window_size;
+  cs->local_winsize = c->initial_winsize;
 
   // initial pkt nr random, make sure we don't think it's acked
   // ITS starts at 1, but random is better against hijacks.
@@ -1851,7 +1852,17 @@ handle_option(struct conn *c, char *optname, char *val)
       user_socket_los(c, "Bad retrans value \"%s\" in RFC options", val);
       return;
     }
-  // @@@@ add more options as needed, maybe windowsize, retrans, etc?
+  } else if (strcasecmp(optname, "winsize") == 0) {
+    int to = 0;
+    if ((sscanf(val, "%d", &to) == 1) && (to > 0) && (to < (1<<16))) {
+      if (ncp_debug) printf(" setting winsize to %d\n", to);
+      c->initial_winsize = to;
+    } else {
+      if (ncp_debug) printf(" bad value, not a positive int which fits in 16 bits");
+      user_socket_los(c, "Bad winsize value \"%s\" in RFC options", val);
+      return;
+    }
+  // @@@@ add more options as needed
   } else if (strcasecmp(optname, "follow_forward") == 0) {
     if ((strlen(val) == 0) || (strcasecmp(val,"yes") == 0) || (strcasecmp(val,"on") == 0)) {
       if (ncp_debug) printf(" setting 1\n");
