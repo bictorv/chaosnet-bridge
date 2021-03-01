@@ -214,7 +214,7 @@ class StreamConn(NCPConn):
             print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
         if len(data) < length:
             d2 = self.sock.recv(length-len(data))
-            if True or debug:
+            if debug:
                 print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
             data += d2
         return data
@@ -230,6 +230,8 @@ if __name__ == '__main__':
                             help="retransmission time in ms")
     parser.add_argument("-W","--winsize", type=int,
                             help="local window size")
+    parser.add_argument("-b","--babel", dest='babelp', action='store_true',
+                            help="Use BABEL instead of ECHO")
     parser.add_argument("--goon", dest='goon', action='store_true',
                             help="Go on after mismatch")
     parser.add_argument("-p","--packet", dest='packetp', action='store_true',
@@ -245,6 +247,9 @@ if __name__ == '__main__':
     dlen = len(xs)
 
     if args.packetp:
+        if args.babelp:
+            print("Babel won't work in packet mode", file=sys.stderr)
+            exit(1)
         c = PacketConn()
     else:
         c = StreamConn()
@@ -257,14 +262,15 @@ if __name__ == '__main__':
         cargs['winsize'] = args.winsize
     if len(cargs) == 0:
         cargs = None
-    if c.connect(args.host, "ECHO", options=cargs):
+    if c.connect(args.host, "ECHO" if not args.babelp else "BABEL", options=cargs):
         while True:
-            c.send_data(xs)
+            if not args.babelp:
+                c.send_data(xs)
             d = c.get_message(dlen)
             n += 1
             tot += len(d)
             if d != xs:
-                print("Echo failed at {} (in {}): {}".format(n, tot, d))
+                print(("Echo" if not args.babelp else "Babel") + " failed at {} (in {}): {}".format(n, tot, d))
                 for i in range(0,len(d)):
                     if xs[i] != d[i]:
                         print("{}: {!r} != {!r}".format(i, d[i], xs[i]))
