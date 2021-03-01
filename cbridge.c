@@ -801,7 +801,13 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
 {
   u_char copy[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)data;
-  u_char *mask = &data[CHAOS_HEADERSIZE];
+  u_char *mask = malloc(ch_ackno(ch));
+  if (mask != NULL) {
+    htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
+  } else {
+    perror("!!! malloc failed in forward_chaos_broadcast_on_route");
+    return;
+  }
   if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
 		       ch_opcode_name(ch_opcode(ch)),
 		       ch_fc(ch),
@@ -810,8 +816,11 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
 		       rt_linkname(rt->rt_link));
   // clear bit if we're sending to a subnet link,
   // but if it's a host link, keep it and let the other end resend it if it has further host links to that subnet
-  if (RT_SUBNETP(rt))
+  if (RT_SUBNETP(rt) && (sn < ch_ackno(ch)*8)) {
     mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
+    ntohs_buf((u_short *)mask, (u_short *)&data[CHAOS_HEADERSIZE], ch_ackno(ch));
+  }
+  free(mask);
   // forward
   PTLOCK(linktab_lock);
   linktab[rt->rt_dest >>8 ].pkt_out++;
@@ -869,6 +878,7 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
 	      (mask[sn/8] & (1<<(sn % 8))));
   }
   PTUNLOCKN(rttbl_lock, "rttbl_lock");
+  free(mask);
 }
 
 void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
