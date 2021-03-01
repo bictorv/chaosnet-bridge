@@ -1258,7 +1258,7 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
 	  printf(" %#x", subnet_mask[i]);
 	printf("\n");
       }
-      memcpy(&pkt[CHAOS_HEADERSIZE], subnet_mask, mlen);
+      htons_buf((u_short *)subnet_mask, (u_short *)&pkt[CHAOS_HEADERSIZE], mlen);
       // set_ch_nbytes(ch, ch_nbytes(ch) + mlen);
       if (ncp_debug)
 	ch_dumpkt(pkt, ch_nbytes(ch));

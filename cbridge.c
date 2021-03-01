@@ -30,8 +30,6 @@
      https://docstore.mik.ua/univercd/cc/td/doc/product/software/ssr83/rpc_r/48381.htm
 
    Also implements the transport layer (Network Control Program), see ncp.c and NCP.md
-
-   Does not hack BRD packets (yet), but noone seems to use them anyway?
 */
 
 /* Read MIT AIM 628, in particular secions 3.6 and 3.7. */
@@ -490,7 +488,7 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
     if (debug) fprintf(stderr,"Got my pkt back (%#o), ignoring\n", pksrc);
     return;
   }
-  if (ch_opcode(cha) == 0) {
+  if ((ch_opcode(cha) == 0) || ((ch_opcode(cha) > CHOP_BRD) && (ch_opcode(cha) < CHOP_DAT))) {
     fprintf(stderr,"BAD PACKET (wrong byte order?)\n");
     htons_buf((u_short *)pkt,(u_short *)pkt,pklen);
     ch_dumpkt(pkt,pklen);
@@ -832,7 +830,18 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // EXCEPT the link it came in on
 
   int i, sn, nsubn = ch_ackno(ch)*8;
-  u_char *mask = &data[CHAOS_HEADERSIZE];
+  u_char *mask = malloc(ch_ackno(ch));
+  if (mask != NULL) {
+    htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
+    if (debug)
+      fprintf(stderr,"BRD mask %d in %02x%02x%02x%02x => %02x%02x%02x%02x\n", nsubn,
+	      data[CHAOS_HEADERSIZE],data[CHAOS_HEADERSIZE+1],data[CHAOS_HEADERSIZE+2],data[CHAOS_HEADERSIZE+3],
+	      mask[0], mask[1], mask[2], mask[3]);
+  }
+  else {
+    perror("!!!! malloc failed in forward_chaos_broadcast_pkt");
+    return;
+  }
   struct chroute *rt;
   PTLOCKN(rttbl_lock, "rttbl_lock");
   // for all rttbl_host entries except the source, which are direct links,
