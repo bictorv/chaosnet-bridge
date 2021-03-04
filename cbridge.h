@@ -88,11 +88,11 @@
 // Chaos packet defs, opcodes, etc
 #include "cbridge-chaos.h"
 
-#define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"FAILED TO LOCK\n")
-#define PTUNLOCK(x) if (pthread_mutex_unlock(&x) != 0) fprintf(stderr,"FAILED TO UNLOCK\n")
+#define PTLOCK(x) if (pthread_mutex_lock(&x) != 0) fprintf(stderr,"%s line %d: FAILED TO LOCK\n", __FILE__, __LINE__)
+#define PTUNLOCK(x) if (pthread_mutex_unlock(&x) != 0) fprintf(stderr,"%s line %d: FAILED TO UNLOCK\n", __FILE__, __LINE__)
 
-#define PTLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_lock(&x)) != 0) fprintf(stderr,"FAILED TO LOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
-#define PTUNLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_unlock(&x)) != 0) fprintf(stderr,"FAILED TO UNLOCK %s: %s (%d)\n", yyyname, strerror(yyy), yyy); }
+#define PTLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_lock(&x)) != 0) fprintf(stderr,"%s line %d: FAILED TO LOCK %s: %s (%d)\n", __FILE__, __LINE__, yyyname, strerror(yyy), yyy); }
+#define PTUNLOCKN(x,yyyname) { int yyy; if ((yyy = pthread_mutex_unlock(&x)) != 0) fprintf(stderr,"%s line %d: FAILED TO UNLOCK %s: %s (%d) %p\n", __FILE__, __LINE__, yyyname, strerror(yyy), yyy, &x); }
 
 // ==== Route/routing/link structures
 
