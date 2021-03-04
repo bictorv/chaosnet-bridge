@@ -533,7 +533,7 @@ set_conn_state(struct conn *c, connstate_t old, connstate_t new, int havelock)
     return;
   }
   if (!havelock) PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-  if (ncp_debug) printf("Conn %p changing from %s to %s\n", c, conn_state_name(c), state_name(new));
+  if (ncp_debug) printf("Conn %p changing from %s to %s (%s)\n", c, conn_state_name(c), state_name(new), havelock ? "had lock" : "locked");
   cs->state = new;
   if (pthread_cond_broadcast(&cs->conn_state_cond) != 0) perror("?? pthread_cond_broadcast(conn_state_cond)");
   if (!havelock) PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
@@ -1812,7 +1812,11 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *c
   conn->conn_contact_args = parse_contact_args(contact, conn->conn_contact);
   conn->conn_rhost = ch_srcaddr(ch);
   conn->conn_ridx = ch_srcindex(ch);
-  conn->conn_lhost = ch_destaddr(ch);
+  if (ch_destaddr(ch) == 0) 
+    // sent to broadcast, fill in my address
+    conn->conn_lhost = mychaddr_on_net(ch_srcaddr(ch));
+  else
+    conn->conn_lhost = ch_destaddr(ch);
   conn->conn_lidx = make_fresh_index();
   conn->conn_state->pktnum_received_highest = ch_packetno(ch);
   conn->conn_created = time(NULL);
@@ -3536,14 +3540,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 #endif
       sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
-    get_packet_string(pkt, (u_char *)args, sizeof(args));
-    if (opc == CHOP_BRD) {
-      // for BRD, skip bitmask
-      if (ncp_debug) printf("NCP passing BRD on to socket as RFC by skipping %d bytes of subnet mask\n",
-			    ch_ackno(pkt));
-      args += ch_ackno(pkt);
-    }
-    if (ncp_debug) printf("NCP %s data: \"%s\"\n", ch_opcode_name(opc), args);
+    int nstrbytes = get_packet_string(pkt, (u_char *)args, sizeof(argsbuf));
+    if (ncp_debug) printf("NCP %s %d bytes data: \"%s\"\n", ch_opcode_name(opc), nstrbytes, args);
     if ((space = index(args, ' ')) != NULL) 
       sprintf(buf, "%s%s", fhost, space);
     else

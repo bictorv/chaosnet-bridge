@@ -662,9 +662,10 @@ get_packet_string(struct chaos_header *pkt, u_char *out, int outsize)
 {
   u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
   int len;
-  if (outsize < ch_nbytes(pkt))
+  if (outsize < ch_nbytes(pkt)) {
+    fprintf(stderr,"%%%% Warning: get_packet_string called with small outsize %d\n", outsize);
     len = outsize;
-  else {
+  } else {
     len = ch_nbytes(pkt);
     if (len % 2) len++;
   }
