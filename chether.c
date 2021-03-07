@@ -130,7 +130,7 @@ parse_ether_link_config()
 {
   char *tok = NULL;
 
-  PTLOCK(cheth_lock);
+  PTLOCKN(cheth_lock,"cheth_lock");
   // clear the entry we're creating
   memset(&chethdest[nchethdest], 0, sizeof(struct chethdest));
 
@@ -140,22 +140,22 @@ parse_ether_link_config()
     strncpy(chethdest[nchethdest].cheth_ifname, tok, IFNAMSIZ);
   } else {
     fprintf(stderr,"ether error: no interface name given\n");
-    PTUNLOCK(cheth_lock);
+    PTUNLOCKN(cheth_lock,"cheth_lock");
     return -1;
   }
   nchethdest++;
-  PTUNLOCK(cheth_lock);
+  PTUNLOCKN(cheth_lock,"cheth_lock");
   return 0;
 }
 
 int
 postparse_ether_link_config(struct chroute *rt)
 {
-  PTLOCK(cheth_lock);
+  PTLOCKN(cheth_lock,"cheth_lock");
   struct chethdest *cd = &chethdest[nchethdest-1];
   cd->cheth_myaddr = rt->rt_myaddr;
   cd->cheth_addr = rt->rt_dest;
-  PTUNLOCK(cheth_lock);
+  PTUNLOCKN(cheth_lock,"cheth_lock");
 
   if (cd->cheth_addr == 0) {
     fprintf(stderr,"Config error: link ether ifname %s: no addr given\n", cd->cheth_ifname);
@@ -230,7 +230,7 @@ static void get_my_ea() {
 #endif
   int i, ngot = 0;
   // int ifn = 0;
-  PTLOCK(cheth_lock);
+  PTLOCKN(cheth_lock,"cheth_lock");
   for (ifx = ifs; ifx != NULL; ifx = ifx->ifa_next) {
     // ifn++;
     for (i = 0; i < nchethdest; i++) {
@@ -261,7 +261,7 @@ static void get_my_ea() {
       }
     }
   }
-  PTUNLOCK(cheth_lock);
+  PTUNLOCKN(cheth_lock,"cheth_lock");
   freeifaddrs(ifs);
   if (ngot < nchethdest)
     fprintf(stderr,"Failed to get ether addresses for all interfaces! Got %d out of %d\n",
@@ -562,9 +562,9 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
     perror("ioctl(SIOCGIFINDEX)");
     return -1;
   }
-  PTLOCK(cheth_lock);
+  PTLOCKN(cheth_lock,"cheth_lock");
   cd->cheth_ifix = ifr.ifr_ifindex;
-  PTUNLOCK(cheth_lock);
+  PTUNLOCKN(cheth_lock,"cheth_lock");
 
 #if 0
   if ((chether_debug || debug))
@@ -1098,21 +1098,21 @@ static u_char *find_arp_entry(u_short daddr)
     return NULL;
   }
   
-  PTLOCK(charp_lock);
+  PTLOCKN(charp_lock,"charp_lock");
   for (i = 0; i < charp_len; i++)
     if (charp_list[i].charp_chaddr == daddr) {
       if ((charp_list[i].charp_age != 0)
 	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
 	if (chether_debug || verbose) fprintf(stderr,"Found ARP entry for %#o but it is too old (%lu s)\n",
 			     daddr, (time(NULL) - charp_list[i].charp_age));
-	PTUNLOCK(charp_lock);
+	PTUNLOCKN(charp_lock,"charp_lock");
 	return NULL;
       }
       if (chether_debug || debug) fprintf(stderr,"Found ARP entry for %#o\n", daddr);
-      PTUNLOCK(charp_lock);
+      PTUNLOCKN(charp_lock,"charp_lock");
       return charp_list[i].charp_eaddr;
     }
-  PTUNLOCK(charp_lock);
+  PTUNLOCKN(charp_lock,"charp_lock");
   return NULL;
 }
 
@@ -1125,7 +1125,7 @@ static u_short find_arp_entry_for_ea(u_char *eaddr)
   if (charp_len == 0)
     return 0;
 
-  PTLOCK(charp_lock);
+  PTLOCKN(charp_lock,"charp_lock");
   for (i = 0; i < charp_len; i++)
     if (memcmp(charp_list[i].charp_eaddr, eaddr, ETHER_ADDR_LEN) == 0) {
 #if 0
@@ -1133,17 +1133,17 @@ static u_short find_arp_entry_for_ea(u_char *eaddr)
 	  && ((time(NULL) - charp_list[i].charp_age) > CHARP_MAX_AGE)) {
 	if (chether_debug || verbose) fprintf(stderr,"Found ARP entry for %#llx but it is too old (%lu s)\n",
 			     eaddr, (time(NULL) - charp_list[i].charp_age));
-	PTUNLOCK(charp_lock);
+	PTUNLOCKN(charp_lock,"charp_lock");
 	return 0;
       }
 #endif
 #if 0
       if (chether_debug || debug) fprintf(stderr,"Found ARP entry for %#llx\n", eaddr);
 #endif
-      PTUNLOCK(charp_lock);
+      PTUNLOCKN(charp_lock,"charp_lock");
       return charp_list[i].charp_chaddr;
     }
-  PTUNLOCK(charp_lock);
+  PTUNLOCKN(charp_lock,"charp_lock");
   return 0;
 }
 #endif // FAKE_CHAOS_ETHER_TRAILER
@@ -1153,7 +1153,7 @@ static u_short find_arp_entry_for_ea(u_char *eaddr)
 static u_short find_ether_chaos_address() {
   int i;
   u_short ech = 0;
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; i < rttbl_host_len; i++) {
     if (rttbl_host[i].rt_link == LINK_ETHER) {
       ech = rttbl_host[i].rt_myaddr;
@@ -1168,7 +1168,7 @@ static u_short find_ether_chaos_address() {
       }
     }
   }
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
   return (ech == 0 ? mychaddr[0] : ech);  // hmm, are defaults good?
 }
 #endif
@@ -1232,7 +1232,7 @@ static void
 add_to_arp(u_short schad, u_char *sead) 
 {
   /* Now see if we should add this to our Chaos ARP list */
-  PTLOCK(charp_lock);
+  PTLOCKN(charp_lock,"charp_lock");
   int i, found = 0;
   for (i = 0; i < charp_len; i++)
     if (charp_list[i].charp_chaddr == schad) {
@@ -1259,7 +1259,7 @@ add_to_arp(u_short schad, u_char *sead)
     memcpy(&charp_list[charp_len++].charp_eaddr, sead, ETHER_ADDR_LEN);
     if (verbose) print_arp_table();
   }
-  PTUNLOCK(charp_lock);
+  PTUNLOCKN(charp_lock,"charp_lock");
 }
 
 static void handle_arp_input(struct chethdest *cd, u_char *data, int dlen)
@@ -1411,9 +1411,9 @@ ether_input(void *v)
 		}
 		// #### Use link source net, can't really trust data
 #if 0
-		PTLOCK(linktab_lock);
+		PTLOCKN(linktab_lock,"linktab_lock");
 		linktab[schad>>8].pkt_crcerr++;
-		PTUNLOCK(linktab_lock);
+		PTUNLOCKN(linktab_lock,"linktab_lock");
 		continue;
 #endif
 	      }

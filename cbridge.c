@@ -316,7 +316,7 @@ int valid_chaos_host_address(u_short addr)
 void print_link_stats() 
 {
   int i;
-  PTLOCK(linktab_lock);
+  PTLOCKN(linktab_lock,"linktab_lock");
   printf("Link stats:\n"
 	 "Subnet\t  In\t Out\t Abort\t Lost\t CRC\t Ram\t Bitc\t Rej\n");
   for (i = 0; i < 256; i++) {
@@ -327,7 +327,7 @@ void print_link_stats()
 	     linktab[i].pkt_badlen, linktab[i].pkt_rejected);
     }
   }
-  PTUNLOCK(linktab_lock);
+  PTUNLOCKN(linktab_lock,"linktab_lock");
 }
 
 // call this with hosttab_lock held
@@ -347,7 +347,7 @@ find_hostat_entry(u_short addr)
 void print_host_stats()
 {
   int n, i;
-  PTLOCK(hosttab_lock);
+  PTLOCKN(hosttab_lock,"hosttab_lock");
   printf("Host stats:\n"
 	 "Host\t  In\t Via\t Last seen\n");
   for (n = 0; n < 256; n++) {
@@ -363,7 +363,7 @@ void print_host_stats()
       }
     }
   }
-  PTUNLOCK(hosttab_lock);
+  PTUNLOCKN(hosttab_lock,"hosttab_lock");
 }
 
 char *rt_linkname(u_char linktype)
@@ -533,7 +533,7 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 	  if (verbose) fprintf(stderr," Updating age for route to %#o type %d cost %d via %#o\n",
 			       rsub, RT_DYNAMIC, rttbl_net[rsub].rt_cost, src);
 	rttbl_updated = 1;
-	PTLOCK(rttbl_lock);
+	PTLOCKN(rttbl_lock,"rttbl_lock");
 	rttbl_net[rsub].rt_type = RT_DYNAMIC; // type;
 	rttbl_net[rsub].rt_cost = (rcost + cost);  /* add the cost to go to that bridge */
 	rttbl_net[rsub].rt_link = linktype;
@@ -542,7 +542,7 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 	// Note it's a subnet route
 	rttbl_net[rsub].rt_dest = src & 0xff00;
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
-	PTUNLOCK(rttbl_lock);
+	PTUNLOCKN(rttbl_lock,"rttbl_lock");
       }
     }
     if (verbose && rttbl_updated) print_routing_table();
@@ -560,7 +560,7 @@ update_route_costs()
   // last time we updated the routing costs
   if (lasttime == 0) lasttime = time(NULL);
 
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; i < 256; i++) {
     if (rttbl_net[i].rt_type == RT_DYNAMIC) {
       /* Age by 1 every 4 seconds, max limit, but not for direct or asynch (cf AIM 628 p15) */
@@ -577,7 +577,7 @@ update_route_costs()
   }
   if (costinc > 0)
     lasttime = time(NULL);
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
 }
 
 
@@ -662,17 +662,22 @@ get_packet_string(struct chaos_header *pkt, u_char *out, int outsize)
 {
   u_short *dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE];
   int len;
-  if (outsize < ch_nbytes(pkt)) {
+  if (outsize <= (ch_nbytes(pkt) + (ch_nbytes(pkt) % 2))) {
     fprintf(stderr,"%%%% Warning: get_packet_string called with small outsize %d\n", outsize);
-    len = outsize;
+    len = outsize-1;
   } else {
     len = ch_nbytes(pkt);
     if (len % 2) len++;
   }
   if (ch_opcode(pkt) == CHOP_BRD) {
     // skip bitmask
-    dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE+ch_ackno(pkt)];
-    len -= ch_ackno(pkt);
+    if (debug) printf("BRD get_packet_string: ackno %d nbytes %d outsize %d\n",
+		      ch_ackno(pkt), ch_nbytes(pkt), outsize);
+    if (ch_ackno(pkt) < len) {
+      dataw = (u_short *)&((u_char *)pkt)[CHAOS_HEADERSIZE+ch_ackno(pkt)];
+      // @@@@ check all similar pointer arithmetic for "underflow"
+      len -= ch_ackno(pkt);
+    }
   }
   ntohs_buf(dataw, (u_short *)out, len);
   out[len] = '\0';
@@ -823,9 +828,9 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
   }
   free(mask);
   // forward
-  PTLOCK(linktab_lock);
+  PTLOCKN(linktab_lock,"linktab_lock");
   linktab[rt->rt_dest >>8 ].pkt_out++;
-  PTUNLOCK(linktab_lock);
+  PTUNLOCKN(linktab_lock,"linktab_lock");
   // send a copy, since it may be swapped in the process of sending
   memcpy(copy, data, dlen);
   forward_chaos_pkt_on_route(rt, copy, dlen);
@@ -908,15 +913,15 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
     }
   }
   if (src != NULL) {
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     linktab[(src->rt_dest)>>8].pkt_in++;
-    PTUNLOCK(linktab_lock);
-    PTLOCK(hosttab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
+    PTLOCKN(hosttab_lock,"hosttab_lock");
     struct hostat *he = find_hostat_entry(ch_srcaddr(ch));
     he->hst_in++;
     he->hst_last_seen = time(NULL);
     he->hst_last_hop = schad;
-    PTUNLOCK(hosttab_lock);
+    PTUNLOCKN(hosttab_lock,"hosttab_lock");
   } else if (debug)
     fprintf(stderr,"No source route given in forward from %#o to %#o\n",
 	    schad, dchad);
@@ -925,9 +930,9 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
   if (fwc > CH_FORWARD_MAX) {	/* over-forwarded */
     if (verbose) fprintf(stderr,"%%%% Dropping over-forwarded pkt for %#o\n", dchad);
     if (src != NULL) {
-      PTLOCK(linktab_lock);
+      PTLOCKN(linktab_lock,"linktab_lock");
       linktab[(src->rt_dest)>>8].pkt_rejected++;
-      PTUNLOCK(linktab_lock);
+      PTUNLOCKN(linktab_lock,"linktab_lock");
     }
     return;
   }
@@ -977,7 +982,7 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
 	fprintf(stderr,"Bad BRD mask length %d (mod 4 is %d)\n", ch_ackno(ch), ch_ackno(ch) % 4);
       }
     }
-    // if not BRD, simply drop it (handled above)
+    // if not BRD (or bad BRD mask), simply drop it (handled above)
     return;
   }
 
@@ -990,16 +995,16 @@ void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen,
 			 dchad, rt->rt_dest, rt->rt_braddr,
 			 rt_linkname(rt->rt_link));
 
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     linktab[rt->rt_dest >>8 ].pkt_out++;
-    PTUNLOCK(linktab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
     forward_chaos_pkt_on_route(rt, data, dlen);
   } else {
     if (verbose) fprintf(stderr,"Can't find route to %#o\n", dchad);
     if (src != NULL) {
-      PTLOCK(linktab_lock);
+      PTLOCKN(linktab_lock,"linktab_lock");
       linktab[(src->rt_dest)>>8].pkt_rejected++;
-      PTUNLOCK(linktab_lock);
+      PTUNLOCKN(linktab_lock,"linktab_lock");
     }
   }    
 }
@@ -1050,12 +1055,12 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
       set_ch_destaddr(cha, rt->rt_dest);
     break;
   }
-  PTLOCK(linktab_lock);
+  PTLOCKN(linktab_lock,"linktab_lock");
   if (ch_destaddr(cha) == 0)
     linktab[rt->rt_dest >> 8].pkt_out++;
   else
     linktab[ch_destaddr(cha) >> 8].pkt_out++;
-  PTUNLOCK(linktab_lock);
+  PTUNLOCKN(linktab_lock,"linktab_lock");
 
   forward_chaos_pkt_on_route(rt, pkt, c);
 }
@@ -1144,9 +1149,9 @@ void send_chaos_pkt(u_char *pkt, int len)
 		       rt_linkname(rt->rt_link),
 		       rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr
 		       );
-  PTLOCK(linktab_lock);
+  PTLOCKN(linktab_lock,"linktab_lock");
   linktab[rt->rt_dest>>8].pkt_out++;
-  PTUNLOCK(linktab_lock);
+  PTUNLOCKN(linktab_lock,"linktab_lock");
 
   forward_chaos_pkt_on_route(rt, pkt, len);
 }
@@ -1171,7 +1176,7 @@ parse_route_params(struct chroute *rt, u_short addr)
   } else if (is_mychaddr(rt->rt_braddr) && RT_SUBNETP(rt)) {
     // Announce-only route (for subnet with only host links)
     // Find a link that matches the subnet, use its link type & cost
-    PTLOCK(rttbl_lock);
+    PTLOCKN(rttbl_lock,"rttbl_lock");
     int i;
     for (i = 0; i < rttbl_host_len; i++) {
       if ((rttbl_host[i].rt_dest & 0xff00) == rt->rt_dest) {
@@ -1183,7 +1188,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 	break;
       }
     }
-    PTUNLOCK(rttbl_lock);
+    PTUNLOCKN(rttbl_lock,"rttbl_lock");
     if (rt->rt_link == LINK_NOLINK) {
       fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n"
 	      "%%%% No route added! Maybe you need to reorder your config?\n",

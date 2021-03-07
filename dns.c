@@ -92,7 +92,7 @@ dns_responder(u_char *rfc, int len)
     }
   }
 
-  PTLOCK(dns_lock);
+  PTLOCKN(dns_lock,"dns_lock");
   // fill in data
   struct chaos_header *ch = (struct chaos_header *)rfc;
   struct chaos_dns_req *q = &chreq[chreq_wix];
@@ -113,7 +113,7 @@ dns_responder(u_char *rfc, int len)
   // update index for next RFC to come
   if (trace_dns) fprintf(stderr,"DNS: added request at wix %d\n", chreq_wix);
   chreq_wix = ((chreq_wix)+1) % CHREQ_MAX;
-  PTUNLOCK(dns_lock);
+  PTUNLOCKN(dns_lock,"dns_lock");
 
   // tell forwarder to get going
   if (sem_post(dns_thread_readerp) < 0) {
@@ -236,11 +236,11 @@ dns_forwarder_thread(void *v)
       exit(1);
     }
 
-    PTLOCK(dns_lock);
+    PTLOCKN(dns_lock,"dns_lock");
     struct chaos_dns_req *q = &chreq[chreq_rix];
     if ((q->reqlen == 0) || (q->req == NULL)) {
       fprintf(stderr,"%% DNS: reading request at rix %d but it is NULL!\n", chreq_rix);
-      PTUNLOCK(dns_lock);
+      PTUNLOCKN(dns_lock,"dns_lock");
       continue;
     }
     if (trace_dns) {
@@ -274,7 +274,7 @@ dns_forwarder_thread(void *v)
 	if (trace_dns) fprintf(stderr,"%% DNS: answer truncated to length %d\n", anslen);
 	if (anslen < 0) {
 	  // in case truncation failed, just skip it
-	  PTUNLOCK(dns_lock);
+	  PTUNLOCKN(dns_lock,"dns_lock");
 	  if (sem_post(dns_thread_writerp) < 0) {
 	    perror("sem_post(dns_forwarder)");
 	  }
@@ -293,7 +293,7 @@ dns_forwarder_thread(void *v)
       set_ch_destaddr(ap, q->srcaddr);
       set_ch_destindex(ap, q->srcindex);
       set_ch_srcaddr(ap, q->dstaddr);
-      PTUNLOCK(dns_lock);
+      PTUNLOCKN(dns_lock,"dns_lock");
 
       // @@@@ set random srcindex
       // Lambda and Symbolics only have 0200 unique ones (see CHAOS::MAXIMUM-INDEX)
@@ -309,7 +309,7 @@ dns_forwarder_thread(void *v)
     } else {
       // query failed @@@@ maybe send LOS?
       if (trace_dns) fprintf(stderr,"DNS: query failed, error code %d\n", statp->res_h_errno);
-      PTUNLOCK(dns_lock);
+      PTUNLOCKN(dns_lock,"dns_lock");
     }
     // tell responder there is room for one more
     if (sem_post(dns_thread_writerp) < 0) {
@@ -577,7 +577,7 @@ print_config_dns()
   }
 
   int i, n;
-  PTLOCK(dns_lock);
+  PTLOCKN(dns_lock,"dns_lock");
   for (i = 0, n = 0; i < CHREQ_MAX; i++) n += chreq[i].reqlen;
   if (n == 0)
     printf(" DNS request queue empty\n");
@@ -588,7 +588,7 @@ print_config_dns()
 	printf("  %d\t%#o\t%#o\t%d\n", i, chreq[i].srcaddr, chreq[i].srcindex, chreq[i].reqlen);
     }
   }
-  PTUNLOCK(dns_lock);
+  PTUNLOCKN(dns_lock,"dns_lock");
 }
 
 // **** for debugging

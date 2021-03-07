@@ -64,7 +64,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   memset(pkt, 0, pklen);
   set_ch_opcode(cha, CHOP_RUT);
 
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
     if ((rttbl_net[i].rt_type != RT_NOPATH) 
 	// don't send a subnet route to the subnet itself (but to individual hosts)
@@ -97,7 +97,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o (anyway)\n", i, rttbl_net[i].rt_braddr, dest);
     }
   }
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
   set_ch_destaddr(cha, ((dest & 0xff) == 0) ? 0 : dest );  /* well... */
   set_ch_nbytes(cha,nroutes*4);
   if (ch_nbytes(cha) > 0)
@@ -128,7 +128,7 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
 
   memset(data, 0, pklen-CHAOS_HEADERSIZE);
 
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
     struct chroute *rt = &rttbl_net[sub];
     if (rt->rt_type != RT_NOPATH) {
@@ -146,7 +146,7 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
       nroutes = sub;
     }
   }
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
 
   if (debug) fprintf(stderr," Max net in pkt %#o, i.e. %d bytes data\n", nroutes, (nroutes+1)*4);
   return (nroutes+1)*4;
@@ -404,7 +404,7 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
     return 0;
   }
   int slen;
-  slen = get_packet_string(ch, (u_char *)cname, datalen);
+  slen = get_packet_string(ch, (u_char *)cname, sizeof(cname));
   char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);

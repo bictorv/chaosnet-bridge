@@ -204,7 +204,7 @@ void reparse_chip_names()
   hi.ai_family = PF_UNSPEC;
   hi.ai_flags = AI_ADDRCONFIG;
 
-  PTLOCK(chipdest_lock);
+  PTLOCKN(chipdest_lock,"chipdest_lock");
   for (i = 0; i < chipdest_len; i++) {
     if (chipdest[i].chip_name[0] != '\0'  /* have a name */
 	&& (inet_aton(chipdest[i].chip_name, &in) == 0)   /* which is not an explict addr */
@@ -232,7 +232,7 @@ void reparse_chip_names()
       }
   }
   // if (verbose) print_chipdest_config();
-  PTUNLOCK(chipdest_lock);
+  PTUNLOCKN(chipdest_lock,"chipdest_lock");
 }
 
 static void
@@ -329,7 +329,7 @@ static struct chroute *
 add_chip_route(u_short srcaddr)
 {
   // see if there is a host route for this, otherwise add it
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   struct chroute *rt = find_in_routing_table(srcaddr, 1, 1);
   if (rt != NULL) {
     // old route exists; don't overwrite static routes though
@@ -354,7 +354,7 @@ add_chip_route(u_short srcaddr)
     // Add a host route
     rt = add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_IP, RTCOST_ASYNCH);
   }
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
   return rt;
 }
 
@@ -363,7 +363,7 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
 {
   if (chipdest_len < CHIPDEST_MAX) {
     if (chip_debug || verbose || stats) fprintf(stderr,"Adding new CHIP destination %#o.\n", srcaddr);
-    PTLOCK(chipdest_lock);
+    PTLOCKN(chipdest_lock,"chipdest_lock");
     /* clear any non-specified fields */
     memset(&chipdest[chipdest_len], 0, sizeof(struct chipdest));
     chipdest[chipdest_len].chip_addr = srcaddr;
@@ -374,7 +374,7 @@ add_chip_dest(u_short srcaddr, sa_family_t fam, u_char *addr)
       memcpy(&chipdest[chipdest_len].chip_sa.chip_sin6.sin6_addr.s6_addr, addr, sizeof(struct in6_addr));
     chipdest_len++;
     if (chip_debug || verbose) print_chipdest_config();
-    PTUNLOCK(chipdest_lock);
+    PTUNLOCKN(chipdest_lock,"chipdest_lock");
   } else {
     if (chip_debug || stats || verbose) fprintf(stderr,"%%%% CHIP table full, not adding new destination.\n");
     return;
@@ -416,9 +416,9 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
       dumppkt_raw(chdata, chlen);
       ch_dumpkt(chdata, chlen);
     }
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     linktab[srcaddr>>8].pkt_badlen++;
-    PTUNLOCK(linktab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
     return;
   } else if (chlen > xlen) {
     if (chip_debug || debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %d\n", chlen, xlen);
@@ -431,9 +431,9 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   int cks = ch_checksum(chdata, chlen);
   if (cks != 0) {
     fprintf(stderr,"%%%% CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     linktab[srcaddr>>8].pkt_crcerr++;
-    PTUNLOCK(linktab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
     return;
   }
 
@@ -736,12 +736,12 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
     // the bridge is on IP, but the dest might not be
     dchad = rt->rt_braddr;
   // look up in chipdest, send using libnet
-  PTLOCK(chipdest_lock);
+  PTLOCKN(chipdest_lock,"chipdest_lock");
   if (!try_forward_individual_dest(rt, dchad, data, dlen)) {
     if (!try_forward_subnet_dest(rt, dchad, data, dlen)) {
       fprintf(stderr,"%%%% Can't find CHIP link to %#o via %#o/%#o\n",
 	      dchad, rt->rt_dest, rt->rt_braddr);
     }
   }
-  PTUNLOCK(chipdest_lock);
+  PTUNLOCKN(chipdest_lock,"chipdest_lock");
 }

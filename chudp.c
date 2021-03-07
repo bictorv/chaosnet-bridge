@@ -99,7 +99,7 @@ void reparse_chudp_names()
   hi.ai_flags = AI_ADDRCONFIG;
 
   // @@@@ also reparse TLS hosts?
-  PTLOCK(chudp_lock);
+  PTLOCKN(chudp_lock,"chudp_lock");
   for (i = 0; i < chudpdest_len; i++) {
     if (chudpdest[i].chu_name[0] != '\0'  /* have a name */
 	&& (inet_aton(chudpdest[i].chu_name, &in) == 0)   /* which is not an explict addr */
@@ -127,7 +127,7 @@ void reparse_chudp_names()
       }
   }
   // if (verbose) print_chudp_config();
-  PTUNLOCK(chudp_lock);
+  PTUNLOCKN(chudp_lock,"chudp_lock");
 }
 
 static void
@@ -233,7 +233,7 @@ static struct chroute *
 add_chudp_route(u_short srcaddr)
 {
   // see if there is a host route for this, otherwise add it
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   struct chroute *rt = find_in_routing_table(srcaddr, 1, 1);
   if (rt != NULL) {
     // old route exists; don't overwrite static routes though
@@ -258,7 +258,7 @@ add_chudp_route(u_short srcaddr)
     // Add a host route
     rt = add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_CHUDP, RTCOST_ASYNCH);
   }
-  PTUNLOCK(rttbl_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
   return rt;
 }
 
@@ -267,14 +267,14 @@ add_chudp_dest(u_short srcaddr, struct sockaddr *sin)
 {
   if (chudpdest_len < CHUDPDEST_MAX) {
     if (chudp_debug || verbose || stats) fprintf(stderr,"Adding new CHUDP destination %#o.\n", srcaddr);
-    PTLOCK(chudp_lock);
+    PTLOCKN(chudp_lock,"chudp_lock");
     /* clear any non-specified fields */
     memset(&chudpdest[chudpdest_len], 0, sizeof(struct chudest));
     chudpdest[chudpdest_len].chu_addr = srcaddr;
     memcpy(&chudpdest[chudpdest_len].chu_sa, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)));
     chudpdest_len++;
     if (chudp_debug || verbose) print_chudp_config();
-    PTUNLOCK(chudp_lock);
+    PTUNLOCKN(chudp_lock,"chudp_lock");
   } else {
     if (chudp_debug || stats || verbose) fprintf(stderr,"%%%% CHUDP table full, not adding new destination.\n");
     return;
@@ -322,7 +322,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
     srctrailer = ntohs(tr->ch_hw_srcaddr);
 #endif
 
-  PTLOCK(chudp_lock);
+  PTLOCKN(chudp_lock,"chudp_lock");
   if (chudp_debug || debug)
     fprintf(stderr,"Looking up %s (%#o trailer %#o) among %d chudp entries\n", ip, srcaddr, srctrailer, chudpdest_len);
   for (i = 0; i < chudpdest_len; i++) {
@@ -346,10 +346,10 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	    if (chudp_debug || verbose)
 	      fprintf(stderr,"CHUDP host %#o is on another link than where it came from (%#o), rejecting/dropping\n",
 		      srcaddr, chudpdest[i].chu_addr);
-	    PTLOCK(linktab_lock);
+	    PTLOCKN(linktab_lock,"linktab_lock");
 	    linktab[(chudpdest[i].chu_addr)>>8].pkt_rejected++;
-	    PTUNLOCK(linktab_lock);
-	    PTUNLOCK(chudp_lock);
+	    PTUNLOCKN(linktab_lock,"linktab_lock");
+	    PTUNLOCKN(chudp_lock,"chudp_lock");
 	    return 0;
 	  }
 	}
@@ -362,14 +362,14 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 	  fprintf(stderr,"CHUDP from %s port different from configured: %d # %d (dropping)\n",
 		  ip, ntohs(sin.sin6_port), ntohs(chudpdest[i].chu_sa.chu_sin.sin_port));
 	// #### if configured to use dynamic updates/additions also for this case?
-	PTUNLOCK(chudp_lock);
+	PTUNLOCKN(chudp_lock,"chudp_lock");
 	return 0;
       }
 #endif
       break;
     }
   }
-  PTUNLOCK(chudp_lock);
+  PTUNLOCKN(chudp_lock,"chudp_lock");
 
 #if 0
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
@@ -403,9 +403,9 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 #endif
   if ((cks = ch_checksum(&buf[CHUDP_HEADERSIZE],cnt-CHUDP_HEADERSIZE)) != 0) {
     if (chudp_debug || verbose) fprintf(stderr,"[Bad checksum %#x (CHUDP)]\n",cks);
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     linktab[srcaddr>>8].pkt_crcerr++;
-    PTUNLOCK(linktab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
     return 0;
   }
 
@@ -500,7 +500,7 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
 	    rt->rt_dest, rt->rt_braddr, rt_typename(rt->rt_type), rt_linkname(rt->rt_link), rt->rt_cost, rt->rt_myaddr);
   }
 
-  PTLOCK(chudp_lock);
+  PTLOCKN(chudp_lock,"chudp_lock");
   for (i = 0; (i < chudpdest_len) && !found; i++) {
     if (
 #if 0
@@ -526,7 +526,7 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
       break;
     }
   }
-  PTUNLOCK(chudp_lock);
+  PTUNLOCKN(chudp_lock,"chudp_lock");
   if (!found && (chudp_debug || verbose || debug))
     fprintf(stderr, "Can't find CHUDP link to %#o via %#o/%#o\n",
 	    dchad, rt->rt_dest, rt->rt_braddr);

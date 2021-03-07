@@ -1151,10 +1151,10 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   u_char *datao = &pkt[CHAOS_HEADERSIZE];
   int pklen;
 
-  PTLOCK(c->conn_state->conn_state_lock);
+  PTLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
-  PTUNLOCK(c->conn_state->conn_state_lock);
+  PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
   if ((data != NULL) && (len > 0)) {
     switch (opcode) {
     case CHOP_BRD:

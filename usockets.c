@@ -260,17 +260,17 @@ void * unix_input(void *v)
 		  ch_dumpkt(pkt, len);
 	      }
 	      // Use link source net, can't really trust data
-	      PTLOCK(linktab_lock);
+	      PTLOCKN(linktab_lock,"linktab_lock");
 	      linktab[us_subnet].pkt_crcerr++;
-	      PTUNLOCK(linktab_lock);
+	      PTUNLOCKN(linktab_lock,"linktab_lock");
 	      continue;
 	    } else {
 	      // weird case, usim byte swapping bug?
 	      if (unixdebug) fprintf(stderr,"[Checksum from %#o (Unix) was fixed by swapping]\n", schad);
-	      PTLOCK(linktab_lock);
+	      PTLOCKN(linktab_lock,"linktab_lock");
 	      // Count it, but accept it.
 	      linktab[us_subnet].pkt_crcerr_post++;
-	      PTUNLOCK(linktab_lock);
+	      PTUNLOCKN(linktab_lock,"linktab_lock");
 	    }
 	  }
 	} else if (unixdebug)

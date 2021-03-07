@@ -257,7 +257,7 @@ void print_tlsdest_config()
 {
   int i;
   char ip[INET6_ADDRSTRLEN];
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   printf("TLS destination config: %d links\n", tlsdest_len);
   for (i = 0; i < tlsdest_len; i++) {
     if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
@@ -274,7 +274,7 @@ void print_tlsdest_config()
 		  ? tlsdest[i].tls_sa.tls_sin.sin_port
 		  : tlsdest[i].tls_sa.tls_sin6.sin6_port)));
   }
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 }
 
 // Should only be called by server (clients have their routes set up by config)
@@ -282,7 +282,7 @@ static struct chroute *
 add_tls_route(int tindex, u_short srcaddr)
 {
   struct chroute * rt = NULL;
-  PTLOCK(rttbl_lock);
+  PTLOCKN(rttbl_lock,"rttbl_lock");
   // find any old entry (only host route, also nopath)
   rt = find_in_routing_table(srcaddr, 1, 1);
   if (rt != NULL) {
@@ -303,21 +303,21 @@ add_tls_route(int tindex, u_short srcaddr)
     // make a routing entry for host srcaddr through tls link at tlsindex
     rt = add_to_routing_table(srcaddr, 0, tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
   }
-  PTUNLOCK(rttbl_lock);
-  PTLOCK(tlsdest_lock);
+  PTUNLOCKN(rttbl_lock,"rttbl_lock");
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr))
     fprintf(stderr,"%%%% TLS link %d chaos address already known (%#o) but route not found - updating to %#o\n",
 	    tindex, tlsdest[tindex].tls_addr, srcaddr);
   if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
   tlsdest[tindex].tls_addr = srcaddr;
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
   return rt;
 }
 
 static void
 close_tlsdest(struct tls_dest *td)
 {
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if (td->tls_serverp) {
     // forget remote sockaddr
     memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
@@ -332,7 +332,7 @@ close_tlsdest(struct tls_dest *td)
     close(td->tls_sock);
     td->tls_sock = 0;
   }
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 }
 
 void
@@ -341,14 +341,14 @@ close_tls_route(struct chroute *rt)
   int i;
   struct tls_dest *td = NULL;
   if ((rt->rt_link == LINK_TLS) && (rt->rt_type != RT_NOPATH)) {
-    PTLOCK(tlsdest_lock);
+    PTLOCKN(tlsdest_lock,"tlsdest_lock");
     for (i = 0; i < tlsdest_len; i++) {
       if (tlsdest[i].tls_addr == rt->rt_braddr) {
 	td = &tlsdest[i];
 	break;
       }
     }
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     if (td != NULL) {
       if (tls_debug) fprintf(stderr,"TLS: closing link to bridge addr %#o\n", rt->rt_braddr);
       close_tlsdest(td);
@@ -364,7 +364,7 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
   // defining the client link adds the tlsdest entry, but need to fill in and initialize mutex/conds
 
   // fill in tls_name, tls_sock, tls_ssl
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
 #if 0
   // don't - we need the "IP name" of the server
   if (server_cn != NULL)
@@ -384,7 +384,7 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
   if (pthread_cond_init(&td->tcp_reconnect_cond, NULL) != 0)
     perror("pthread_cond_init(update_client_tlsdest)");
   
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 }
 
 
@@ -394,7 +394,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
   // no tlsdest exists for server end, until it is connected
   struct tls_dest *td = NULL;
 
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   // look for name in tlsdest and reuse entry if it is closed
   int i;
   for (i = 0; i < tlsdest_len; i++) {
@@ -413,7 +413,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
   } else {
     // crete a new entry
     if (tlsdest_len >= TLSDEST_MAX) {
-      PTUNLOCK(tlsdest_lock);
+      PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
       fprintf(stderr,"%%%% tlsdest is full! Increase TLSDEST_MAX\n");
       return;
     }
@@ -439,7 +439,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 
     tlsdest_len++;
   }
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
   if (verbose) print_tlsdest_config();
 
   // add route when first pkt comes in, see tls_input
@@ -722,18 +722,18 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       print_tlsdest_config();
     }
   } else {
-    PTLOCK(linktab_lock);
+    PTLOCKN(linktab_lock,"linktab_lock");
     if (inputp)
       linktab[chaddr>>8].pkt_lost++;
     else
       linktab[chaddr>>8].pkt_aborted++;
-    PTUNLOCK(linktab_lock);
+    PTUNLOCKN(linktab_lock,"linktab_lock");
   }
 
   if (td->tls_serverp) {
     // no signalling to do, just close/free stuff
     close_tlsdest(td);    
-    PTLOCK(rttbl_lock);
+    PTLOCKN(rttbl_lock,"rttbl_lock");
     // also disable routing entry
     struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
     if (rt != NULL) {
@@ -748,7 +748,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
-    PTUNLOCK(rttbl_lock);
+    PTUNLOCKN(rttbl_lock,"rttbl_lock");
   } else {
     // let connector thread do the closing/freeing
     if (tls_debug)
@@ -845,9 +845,9 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   obuf[1] = len & 0xff;
   memcpy(obuf+2, buf, len);
 
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((ssl = td->tls_ssl) == NULL) {
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
     tls_please_reopen_tcp(td, 0);
     return -1;
@@ -858,7 +858,7 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     fprintf(stderr,"SSL_write error %d\n", err);
     if (tls_debug)
       ERR_print_errors_fp(stderr);
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     // close/free etc
     tls_please_reopen_tcp(td, 0);
     return wrote;
@@ -867,7 +867,7 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
   else if (tls_debug)
     fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 
   return wrote;
 }
@@ -880,11 +880,11 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   u_char reclen[2];
 
   // don't go SSL_free in some other thread please
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   SSL *ssl = td->tls_ssl;
 
   if (ssl == NULL) {
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
     tls_please_reopen_tcp(td, 1);
     return 0;
@@ -892,7 +892,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 
   // read record length
   cnt = SSL_read(ssl, reclen, 2);
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 
   if (cnt < 0) {
     if (tls_debug) perror("read record length");
@@ -924,15 +924,15 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     return -1;
   }
 
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((ssl = td->tls_ssl) == NULL) {
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
     tls_please_reopen_tcp(td, 1);
     return 0;
   }
   actual = SSL_read(ssl, buf, rlen);
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 
   if (actual < 0) {
     perror("read record");
@@ -945,15 +945,15 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     // read the remaining data
     int p = actual;
     while (rlen - p > 0) {
-      PTLOCK(tlsdest_lock);
+      PTLOCKN(tlsdest_lock,"tlsdest_lock");
       if ((ssl = td->tls_ssl) == NULL) {
-	PTUNLOCK(tlsdest_lock);
+	PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 	if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
 	tls_please_reopen_tcp(td, 1);
 	return 0;
       }
       actual = SSL_read(ssl, &buf[p], rlen-p);
-      PTUNLOCK(tlsdest_lock);
+      PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
       if (actual < 0) {
 	perror("re-read record");
 	tls_please_reopen_tcp(td, 1);
@@ -1082,7 +1082,7 @@ void * tls_input(void *v)
 
   while (1) {
     FD_ZERO(&rfd);
-    PTLOCK(tlsdest_lock);
+    PTLOCKN(tlsdest_lock,"tlsdest_lock");
     // collect all tls_sock:ets
     maxfd = -1;
     for (i = 0; i < tlsdest_len; i++) {
@@ -1091,7 +1091,7 @@ void * tls_input(void *v)
 	maxfd = (maxfd > tlsdest[i].tls_sock ? maxfd : tlsdest[i].tls_sock);
       }
     }
-    PTUNLOCK(tlsdest_lock);
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     maxfd++;			/* plus 1 */
 
     if (maxfd == 0) {
@@ -1115,14 +1115,14 @@ void * tls_input(void *v)
 	if (FD_ISSET(j, &rfd)) {
 	  tindex = -1;		/* don't know tlsdest index */
 	  // find tlsdest index
-	  PTLOCK(tlsdest_lock);
+	  PTLOCKN(tlsdest_lock,"tlsdest_lock");
 	  for (i = 0; i < tlsdest_len; i++) {
 	    if (tlsdest[i].tls_sock == j) {
 	      tindex = i;
 	      break;
 	    }
 	  }
-	  PTUNLOCK(tlsdest_lock);
+	  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 	  if (tls_debug) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
 	  if (tindex >= 0) {
 	    int serverp = tlsdest[tindex].tls_serverp;
@@ -1206,6 +1206,8 @@ void * tls_input(void *v)
 }
 
 
+// @@@@ consider running this in a separate (perhaps ephemeral) thread,
+// since it might hang on output due to TCP/TLS communication (and the other end having issues)
 void
 forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
@@ -1215,7 +1217,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
   if (debug) fprintf(stderr,"Forward: Sending on TLS from %#o to %#o via %#o/%#o (%d bytes)\n", schad, dchad, rt->rt_dest, rt->rt_braddr, dlen);
 
   struct tls_dest *td = NULL;
-  PTLOCK(tlsdest_lock);
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
   for (i = 0; i < tlsdest_len; i++) {
     if (
 	/* direct link to destination */
@@ -1232,7 +1234,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
       break;
     }
   }
-  PTUNLOCK(tlsdest_lock);
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
   if (td != NULL) {
     htons_buf((u_short *)ch, (u_short *)ch, dlen);
     tls_write_record(td, data, dlen);

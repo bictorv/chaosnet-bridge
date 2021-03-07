@@ -60,3 +60,6 @@ cbridge
 cbridge.conf
 hostat
 finger
+
+# Xcode project (not yet)
+Chaosnet Bridge/**
