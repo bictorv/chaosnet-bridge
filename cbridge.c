@@ -736,9 +736,8 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   u_short dchad = ch_destaddr(ch);
   u_short schad = ch_srcaddr(ch);
 
-  // round up, e.g. because of 11-format text. (A single char is in the second byte, not the first.)
-  if (dlen % 2)
-    dlen++;
+  // round up to full 16-bit word
+  dlen += (dlen % 2);
 
   // Update/add trailer here.
   if (dlen < CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
@@ -770,8 +769,6 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 
   int cks = ch_checksum(data,dlen-2); /* Don't checksum the checksum field */
   tr->ch_hw_checksum = htons(cks);
-
-
 
   int found = 0;
 
@@ -845,18 +842,13 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // EXCEPT the link it came in on
 
   int i, sn, nsubn = ch_ackno(ch)*8;
-  u_char *mask = malloc(ch_ackno(ch));
-  if (mask != NULL) {
-    htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
-    if (debug)
-      fprintf(stderr,"BRD mask %d in %02x%02x%02x%02x => %02x%02x%02x%02x\n", nsubn,
-	      data[CHAOS_HEADERSIZE],data[CHAOS_HEADERSIZE+1],data[CHAOS_HEADERSIZE+2],data[CHAOS_HEADERSIZE+3],
-	      mask[0], mask[1], mask[2], mask[3]);
-  }
-  else {
-    perror("!!!! malloc failed in forward_chaos_broadcast_pkt");
-    return;
-  }
+  u_char mask[32];
+  htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
+  if (debug)
+    fprintf(stderr,"BRD mask %d in %02x%02x%02x%02x => %02x%02x%02x%02x\n", nsubn,
+	    data[CHAOS_HEADERSIZE],data[CHAOS_HEADERSIZE+1],data[CHAOS_HEADERSIZE+2],data[CHAOS_HEADERSIZE+3],
+	    mask[0], mask[1], mask[2], mask[3]);
+
   struct chroute *rt;
   PTLOCKN(rttbl_lock, "rttbl_lock");
   // for all rttbl_host entries except the source, which are direct links,
@@ -884,10 +876,10 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
 	      (mask[sn/8] & (1<<(sn % 8))));
   }
   PTUNLOCKN(rttbl_lock, "rttbl_lock");
-  free(mask);
 }
 
-void forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
+void 
+forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_char src_linktype) 
 {
   struct chaos_header *ch = (struct chaos_header *)data;
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[dlen-CHAOS_HW_TRAILERSIZE];
