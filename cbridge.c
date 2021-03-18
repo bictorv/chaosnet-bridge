@@ -753,17 +753,7 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   // Find proper mychaddr entry if none given
   if (rt->rt_myaddr <= 0) {
     // Should not happen, add_to_routing_table now tries to fill it in.
-    for (i = 0; i < nchaddr; i++) {
-      if ((mychaddr[i] & 0xff00) == (ntohs(tr->ch_hw_destaddr) & 0xff00)) {
-	tr->ch_hw_srcaddr = htons(mychaddr[i]);
-	break;
-      }
-    }
-    if (tr->ch_hw_srcaddr == 0) {
-      if (verbose) fprintf(stderr,"%%%% Can't find my address for net %#o, using default (%#o)\n",
-			   ntohs(tr->ch_hw_destaddr) & 0xff00, mychaddr[0]);
-      tr->ch_hw_srcaddr = htons(mychaddr[0]);  /* better than none? */
-    }
+    tr->ch_hw_srcaddr = htons(mychaddr_on_net(ntohs(tr->ch_hw_destaddr)));
   } else
     tr->ch_hw_srcaddr = htons(rt->rt_myaddr);
 
