@@ -96,6 +96,7 @@ struct conn {
   struct conn_state *conn_state;
   u_char *conn_contact;
   u_char *conn_contact_args;
+  int conn_contact_args_len;
   u_short conn_rhost;
   u_short conn_ridx;
   u_short conn_lhost;

@@ -1113,8 +1113,16 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   case CHOP_RFC:
       if (c->conn_contact_args != NULL) {
 	u_char rfcwithargs[MAX_CONTACT_NAME_LENGTH];
-	sprintf((char *)rfcwithargs, "%s %s", c->conn_contact, c->conn_contact_args);
-	pklen += ch_11_puts(data, rfcwithargs);
+	// Copy contact name, space, args
+	int i, clen = strlen((char *)c->conn_contact);
+	strcpy((char *)rfcwithargs, (char *)c->conn_contact);
+	rfcwithargs[clen] = ' ';
+	// treat this as binary
+	memcpy(&rfcwithargs[clen+1], c->conn_contact_args, c->conn_contact_args_len);
+	clen += c->conn_contact_args_len + 1;
+	// swap it
+	htons_buf((u_short*)rfcwithargs, (u_short *)data, clen);
+	pklen += clen;
       } else
 	pklen += ch_11_puts(data, c->conn_contact);
     break;
@@ -1782,25 +1790,42 @@ parse_contact_name(u_char *in)
   return copy;
 }
 
-u_char * 
-parse_contact_args(u_char *data, u_char *contact) 
+void
+parse_contact_args(struct conn *conn, u_char *data, u_char *contact, int len) 
 {
-  // Note: this doesn't handle binary args (cf. DNS protocol - so use DOMAIN instead)
-  if (strlen((char *)data) > strlen((char *)contact)) {
-    int i, j = strlen((char *)data) - strlen((char *)contact);
+  int stringp = len == 0;
+  // If len > 0, use that for the full length of contact+space+args,
+  // if len == 0, data is a string from a non-packet socket, so assume null-terminated and look for \r or \n
+  if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args contact %s len %d\n",
+			 contact, len);
+  // initialize defaults
+  conn->conn_contact_args_len = 0;
+  conn->conn_contact_args = NULL;
+  if (len == 0)
+    len = strlen((char *)data);
+  if (len > strlen((char *)contact)) {
+    int i, j = len - strlen((char *)contact);
     u_char *e, *p = &data[strlen((char *)contact)];
-    // skip spaces
-    while (*p == ' ') p++;
-    // find end of printable stuff (or string)
-    for (i = 0, e = p; i < j && isprint(*e); e++, i++);
-    // terminate (e.g. CRLF)
-    *e = '\0';
-    if (e == p)
-      return NULL;
-    else
-      return (u_char *)strdup((char *)p);
-  } else
-    return NULL;
+    // find end of string (or end of line)
+    if (stringp) {
+      // skip spaces
+      while (*p == ' ') p++;
+      for (i = 0, e = p; i < j && (*e != '\n') && (*e != '\r'); e++, i++);
+    } else {
+      // data from a packet, just use it
+      e = data+len;
+      if (*p == ' ') p++;	// skip space
+    }
+    if (e > p) {
+      // return a copy
+      u_char *c = (u_char *)calloc(e-p+1, 1);
+      if (c == NULL) { perror("calloc failed in parse_contact_args"); exit(1); }
+      if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %ld bytes\n", e-p);
+      memcpy(c, p, e-p);
+      conn->conn_contact_args_len = e-p;
+      conn->conn_contact_args = c;
+    }
+  }
 }
 
 
@@ -1809,7 +1834,8 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *c
 {
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(contact);
-  conn->conn_contact_args = parse_contact_args(contact, conn->conn_contact);
+  // side-effect conn->conn_contact_args, conn->conn_contact_args_len
+  parse_contact_args(conn, contact, conn->conn_contact, ch_nbytes(ch));
   conn->conn_rhost = ch_srcaddr(ch);
   conn->conn_ridx = ch_srcindex(ch);
   if (ch_destaddr(ch) == 0) 
@@ -1948,10 +1974,12 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
   } 
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(cname);
-  conn->conn_contact_args = parse_contact_args(cname, conn->conn_contact);
+  // side-effect conn->conn_contact_args, conn->conn_contact_args_len
+  parse_contact_args(conn, cname, conn->conn_contact, 
+		     conn->conn_type == CT_Packet ? buflen-(cname-buf) : 0);
   conn->conn_rhost = haddr;
-  if (ncp_debug) printf("NCP parsed RFC line: host %#o contact \"%s\" args \"%s\"\n",
-			haddr, conn->conn_contact, conn->conn_contact_args);
+  if (ncp_debug) printf("NCP parsed RFC line: host %#o contact \"%s\" args \"%s\" (%d)\n",
+			haddr, conn->conn_contact, conn->conn_contact_args, conn->conn_contact_args_len);
   PTUNLOCKN(conn->conn_lock,"conn_lock");
   if (ncp_debug) print_conn("Initiated from RFC line:", conn, 0);
   add_active_conn(conn);
@@ -1962,7 +1990,7 @@ static void
 initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)  
 {
   u_short haddr = 0, netnum, numnets = 0;
-  u_char *cname, *hname, *space;
+  u_char *cname, *hname, *space, *ibuf = buf;
   u_char mask[32];
   memset(mask, 0, sizeof(mask));
 
@@ -2026,10 +2054,12 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
 
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(cname);
-  conn->conn_contact_args = parse_contact_args(cname, conn->conn_contact);
+  // side-effect conn->conn_contact_args, conn->conn_contact_args_len
+  parse_contact_args(conn, cname, conn->conn_contact, 
+		     conn->conn_type  == CT_Packet ? buflen-(cname-ibuf) : 0);
   conn->conn_rhost = 0;
-  if (ncp_debug) printf("NCP parsed BRD line: %d subnets, contact \"%s\" args \"%s\"\n",
-			numnets, conn->conn_contact, conn->conn_contact_args);
+  if (ncp_debug) printf("NCP parsed BRD line: %d subnets, contact \"%s\" args \"%s\" (len %d)\n",
+			numnets, conn->conn_contact, conn->conn_contact_args, conn->conn_contact_args_len);
   PTUNLOCKN(conn->conn_lock,"conn_lock");
   if (ncp_debug) print_conn("Initiated from BRD line:", conn, 0);
   add_active_conn(conn);

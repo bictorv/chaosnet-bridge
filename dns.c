@@ -97,6 +97,12 @@ dns_responder(u_char *rfc, int len)
   struct chaos_header *ch = (struct chaos_header *)rfc;
   struct chaos_dns_req *q = &chreq[chreq_wix];
   int qlen = ch_nbytes(ch)-4; // 4 = "DNS "
+  u_char *data = &rfc[CHAOS_HEADERSIZE+4];
+  if (ch_opcode(ch) == CHOP_BRD) {
+    // skip subnet mask
+    qlen -= ch_ackno(ch);
+    data += ch_ackno(ch);
+  }
   q->srcaddr = ch_srcaddr(ch);
   q->srcindex = ch_srcindex(ch);
   q->dstaddr = ch_destaddr(ch);
@@ -107,7 +113,7 @@ dns_responder(u_char *rfc, int len)
     exit(1);
   }
   // PDP11 swap
-  ntohs_buf((u_short *)&rfc[CHAOS_HEADERSIZE+4], (u_short *)req, qlen);
+  ntohs_buf((u_short *)data, (u_short *)req, qlen);
   q->req = req;
   q->reqlen = qlen;
   // update index for next RFC to come
