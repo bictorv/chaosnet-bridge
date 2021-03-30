@@ -23,7 +23,7 @@ You can also use it to make your "unix-like" host a Chaosnet node, by using and 
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/Chaosnet/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py). Additionally there is also [a little demonstration program](bhostat.py) for the broadcast packet API (see below).
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/PDP-10/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py). Additionally there is also [a little demonstration program](bhostat.py) for the broadcast packet API (see below).
 
 There is also [a simple client program for the FILE protocol](file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems, and a server for the [DOMAIN](domain.py) contact name, which responds to DNS queries over a stream connection (cbridge already handles queries on a simple protocol, but response sizes are limited by the Chaosnet packet size.)
 
@@ -74,7 +74,7 @@ If the user program acts as a client, it opens the socket and writes
 - [*options*] (including the square brackets!) is optional, and specifies (a comma-separated list of) options for the connection. 
 - *host* is either the name or the (octal!) address of the host to be contacted,
 - *contactname* is the contact name, such as `NAME`, `UPTIME`, `TIME` or `STATUS`, and
-- *args* are optional arguments, such as a user name for `NAME`. The *args* are separated from *contactname* with a single space.
+- *args* are optional arguments, such as a user name for `NAME`. The *args* are separated from *contactname* with a single space. (Note that the *args* are treated as a string and can not contain null or CR or LF. If you need such args, use [the packet interface](#chaos_seqpacket), below.)
 
 The NCP sends a corresponding RFC packet to the destination host.
 
@@ -182,7 +182,7 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 
 | Opcode | Data | Type |
 | --- | --- | --- |
-| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
+| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options). (Note that *args* can be any bytes, since the length is given in the header.) |
 | RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
 | BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to. As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | BRD (rcvd) | - | is translated to an RFC (see above) |
@@ -228,9 +228,10 @@ The NCP handles duplicates and flow control, and DAT and DWD packets are deliver
 By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
 
 #### NOTE
-The data part of `RFC`, `OPN` and `FWD` packets are non-standard:
+The data part of `RFC`, `OPN`, `ANS` and `FWD` packets are non-standard:
 - for RFC, it includes the remote host and (optional) options (see above).
-- for OPN, it includes the remote host (see above)
+- for OPN (received), it includes the remote host (see above)
+- for ANS (received), it includes the remote host (see above)
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
 
 #### NOTE further
