@@ -182,8 +182,8 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 
 | Opcode | Data | Type |
 | --- | --- | --- |
-| RFC (sent) | [*options*] *rhost* *contact* *args* | ascii - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options). (Note that *args* can be any bytes, since the length is given in the header.) |
-| RFC (rcvd) | *rhost* *args* | ascii - the *args* part is optional |
+| RFC (sent) | [*options*] *rhost* *contact* *args* | text - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options). (Note that *args* can be any bytes, since the length is given in the header.) |
+| RFC (rcvd) | *rhost* *args* | text - the *args* part is optional. (Note that *args* can be any bytes, since the length is given in the header.)|
 | BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to. As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | BRD (rcvd) | - | is translated to an RFC (see above) |
 | OPN (sent) | none | |
