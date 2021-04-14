@@ -3234,8 +3234,8 @@ socket_to_conn_stream_handler(struct conn *conn)
 	haddr = dns_closest_address_or_los(conn, &buf[4]);
 #else
 	// return a LOS to the user: bad host name '%s'
-	user_socket_los(conn, "Bad host name \"%s\"", hname);
-	return;
+	user_socket_los(conn, "Bad host name \"%s\"", &buf[4]);
+	return -1;
 #endif
       }
       send_fwd_pkt(conn, haddr);
