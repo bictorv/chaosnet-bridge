@@ -15,6 +15,10 @@
 */
 
 #include "cbridge.h"
+#if __linux__
+// for ether_ntoa
+#include <netinet/ether.h>
+#endif
 
 // TODO
 // rewrite using pcap (replace BPF)
@@ -22,6 +26,7 @@
 /* **** Chaos-over-Ethernet functions **** */
 
 #if CHAOS_ETHERP
+// see below
 #define FAKE_CHAOS_ETHER_TRAILER 1
 
 // Look for, and use, a Chaos trailer in Ethernet pkts - don't do this
@@ -29,7 +34,7 @@
 #define USE_CHAOS_ETHER_TRAILER 0
 #endif
 // Slightly less efficent, but useful information:
-// - add a fake "hardware trailer" based on sender MAC and ARP info
+// - add a fake "hardware trailer" based on sender MAC and ARP info, only used internally (not on the network)
 #ifndef FAKE_CHAOS_ETHER_TRAILER
 #define FAKE_CHAOS_ETHER_TRAILER USE_CHAOS_ETHER_TRAILER 
 #endif
@@ -636,19 +641,25 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
 
   if (chether_debug || verbose) {
     struct chaos_header *ch = (struct chaos_header *)packet;
-    printf("Ether: Sending %s: %d bytes with protocol 0x%04x (%s) to address ",
-	   (ethtype == ETHERTYPE_CHAOS ? ch_opcode_name(ch_opcode(ch)) :
-	    (ethtype == ETHERTYPE_ARP ? "ARP" : "?")),
-	   packetlen, ethtype,
-	   (ethtype == ETHERTYPE_ARP ? "ARP" :
-	    (ethtype == ETHERTYPE_CHAOS ? "Chaos" : "?")));
-    for (cc = 0; cc < addrlen-1; cc++)
-      printf("%02X:",addr[cc]);
-    printf("%02X\n",addr[cc]);
+    if (ethtype == ETHERTYPE_CHAOS) {
+      printf("Ether: Sending %s to <%#o,%#x>: %d bytes with protocol 0x%04x (Chaos) to address %s\n",
+	     ch_opcode_name(ch->ch_opcode_x >> 8), // not swapped
+	     htons(ch_destaddr(ch)), htons(ch_destindex(ch)),
+	     packetlen, ethtype,
+	     ether_ntoa((struct ether_addr *)addr));
+    } else if (ethtype == ETHERTYPE_ARP) {
+      printf("Ether: Sending ARP: %d bytes with protocol 0x%04x (ARP) to address %s\n",
+	     packetlen, ethtype,
+	     ether_ntoa((struct ether_addr *)addr));
+    } else {
+      printf("Ether: sending %d bytes with protocol %#04x to address %s\n",
+	     packetlen, ethtype, ether_ntoa((struct ether_addr *)addr));
+    }
     if (debug && (ethtype == ETHERTYPE_CHAOS)) {
       u_char pk[CH_PK_MAXLEN];
       ntohs_buf((u_short *)packet, (u_short *)pk, packetlen);
       ch_dumpkt(pk, packetlen);
+      htons_buf((u_short *)packet, (u_short *)pk, packetlen);
     }
   }
 #if ETHER_BPF
@@ -746,8 +757,8 @@ describe_arp_pkt(u_char *buf)
     printf("%02X ", buf[sizeof(struct arphdr)+i]);
   printf("\n Src Protocol addr: ");
   if (arp->ar_pro == htons(ETHERTYPE_CHAOS))
-    printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln]<<8 |
-			 buf[sizeof(struct arphdr)+(2 * (arp->ar_hln))+arp->ar_pln+1]));
+    printf("%#o ", ntohs(buf[sizeof(struct arphdr)+(arp->ar_hln)]<<8 |
+			 buf[sizeof(struct arphdr)+(arp->ar_hln)+1]));
   else
     for (i = 0; i < arp->ar_pln; i++)
       printf("%#x ", buf[sizeof(struct arphdr)+arp->ar_hln+i]);
@@ -1424,10 +1435,19 @@ ether_input(void *v)
 #endif // 0
 	  // check where it's coming from
 	  u_short srcaddr;
-#if USE_CHAOS_ETHER_TRAILER // see above
+#if FAKE_CHAOS_ETHER_TRAILER // see above
 	  if (len > (ch_nbytes(cha) + CHAOS_HEADERSIZE)) {
 	    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
 	    srcaddr = tr->ch_hw_srcaddr;
+	    // If this link has a configured address, make sure the source is on that subnet,
+	    // or else our default address matches
+	    if ((chethdest[i].cheth_myaddr != 0 && ((chethdest[i].cheth_myaddr & 0xff00) != (srcaddr & 0xff00)))
+		|| ((mychaddr[0] & 0xff00) != (srcaddr & 0xff00))) {
+	      // if (chether_debug || verbose)
+	      fprintf(stderr,"%%%% Ether: dropping pkt from %#o - bad subnet %#o (link %#o, default %#o)\n",
+		      srcaddr, srcaddr>>8, chethdest[i].cheth_myaddr >> 8, mychaddr[0]>>8);
+	      continue;
+	    }
 	  } else
 #endif
 	    srcaddr = ch_srcaddr(cha);
