@@ -702,11 +702,12 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
   }
   else {    
     if (verbose) {
-      fprintf(stderr,"%s pkt for self (%#o) received",
+      fprintf(stderr,"%s pkt for self (%#o) received from <%#o,%#x>",
 	      ch_opcode_name(ch_opcode(ch)),
-	      dchad);
+	      dchad, ch_srcaddr(ch), ch_srcindex(ch));
       if (ch_opcode(ch) == CHOP_RFC) {
 	fprintf(stderr,"; Contact: ");
+	// @@@@ use generic fcn for this
 	int max = ch_nbytes(ch);
 	u_char *cp = &data[CHAOS_HEADERSIZE];
 	u_char *cont = (u_char *)calloc(max+1, sizeof(u_char));
@@ -794,13 +795,8 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
 {
   u_char copy[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)data;
-  u_char *mask = malloc(ch_ackno(ch));
-  if (mask != NULL) {
-    htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
-  } else {
-    perror("!!! malloc failed in forward_chaos_broadcast_on_route");
-    return;
-  }
+  u_char mask[32];
+  memset(mask, 0, sizeof(mask));
   if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
 		       ch_opcode_name(ch_opcode(ch)),
 		       ch_fc(ch),
@@ -813,7 +809,6 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
     mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
     ntohs_buf((u_short *)mask, (u_short *)&data[CHAOS_HEADERSIZE], ch_ackno(ch));
   }
-  free(mask);
   // forward
   PTLOCKN(linktab_lock,"linktab_lock");
   linktab[rt->rt_dest >>8 ].pkt_out++;
