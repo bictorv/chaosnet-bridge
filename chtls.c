@@ -307,16 +307,14 @@ add_tls_route(int tindex, u_short srcaddr)
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
     char ip[INET6_ADDRSTRLEN];
-    fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known (%#o) but route not found - updating to %#o\n",
+    fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known (%#o) but route not found - NOT updating to %#o\n",
 	    tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
 	    tlsdest[tindex].tls_addr, srcaddr);
-    if (srcaddr == 0) {
-      fprintf(stderr,"%%%% but punting since zero is a bad address\n");
-      srcaddr = tlsdest[tindex].tls_addr;
-    }
+    // @@@@ should perhaps close the conn, something is wrong?
+  } else {
+    if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
+    tlsdest[tindex].tls_addr = srcaddr;
   }
-  if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
-  tlsdest[tindex].tls_addr = srcaddr;
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
   return rt;
 }
@@ -1055,9 +1053,18 @@ tls_server(void *v)
 	    fprintf(stderr,"\n");
 	  }
 	  // if there is just one address, use it
-	  // @@@@ search for address on my subnet
 	  if (naddrs == 1)
 	    client_chaddr = claddrs[0];
+	  else {
+	    // search for address on my subnet
+	    int i;
+	    for (i = 0; i < naddrs; i++) {
+	      if (mychaddr_on_net(claddrs[i]) != 0) {
+		client_chaddr = claddrs[i];
+		break;
+	      }
+	    }
+	  }
 	}
 #endif
 	// create tlsdest, fill in stuff
@@ -1158,6 +1165,17 @@ void * tls_input(void *v)
 		srcaddr = ch_srcaddr(cha);
 	      } else {
 		srcaddr = ntohs(tr->ch_hw_srcaddr);
+		if ((srcaddr == 0) || (mychaddr_on_net(srcaddr) == 0)) {
+		  if (tls_debug) {
+		    char ip[INET6_ADDRSTRLEN];
+		    fprintf(stderr,"%%%% TLS input %s from <%#o,%#x> on tlsdest %d %s %s - hw source address %#o not on my net! dropping pkt\n",
+			    ch_opcode_name(ch_opcode(cha)), ch_srcaddr(cha), ch_srcindex(cha), 
+			    tindex, tlsdest[tindex].tls_name, 
+			    ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
+			    srcaddr);
+		  }
+		  continue;
+		}
 		if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
 				       ch_opcode_name(ch_opcode(cha)), srcaddr);
 		if ((cks = ch_checksum((u_char *)&data, dlen)) != 0) {
@@ -1180,7 +1198,10 @@ void * tls_input(void *v)
 	    if ((srcrt == NULL) || (srcrt->rt_link != LINK_TLS)) {
 	      // add route
 	      if (srcrt == NULL) {
-		if (!((ch_opcode(cha) == CHOP_SNS) && (ch_srcindex(cha) == 0) && (ch_destindex(cha) == 0))) {
+		if ((ch_opcode(cha) == CHOP_RUT) && (srcaddr != 0) && (srcaddr == tlsdest[tindex].tls_addr)) {
+		  if (tls_debug) fprintf(stderr,"%%%% TLS: not dropping RUT from expected source\n");
+		} else if (!((ch_opcode(cha) == CHOP_SNS) && (ch_srcindex(cha) == 0) && (ch_destindex(cha) == 0))) {
+
 		  // not the expected start packet, ignore it.
 		  if (tls_debug) {
 		    char ip[INET6_ADDRSTRLEN];
