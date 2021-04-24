@@ -1533,6 +1533,7 @@ parse_link_config()
 #if CHAOS_TLS
   if (rt->rt_link == LINK_TLS) {
     tlsdest[tlsdest_len - 1].tls_addr = addr;
+    tlsdest[tlsdest_len - 1].tls_myaddr = rt->rt_myaddr;
     if (subnetp) {
       fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
 	      "Change\n"
@@ -1744,7 +1745,7 @@ print_stats(int sig)
 #endif
 #if CHAOS_TLS
     if (do_tls || do_tls_server) {
-      printf("Using TLS keyfile %s, certfile %s, ca-chain %s\n", tls_key_file, tls_cert_file, tls_ca_file);
+      printf("Using TLS myaddr %#o, keyfile %s, certfile %s, ca-chain %s\n", tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file);
       if (do_tls_server)
 	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }

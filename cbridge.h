@@ -194,6 +194,7 @@ struct chudest {
 // here is a TLS destination
 struct tls_dest {
   u_short tls_addr;		/* remote chaos address */
+  u_short tls_myaddr;		/* my address on this link */
   char tls_name[TLSDEST_NAME_LEN]; /* name given in (client) config or from CN (in servers) */
   int tls_serverp; /* 1 if server end - don't bother with mutex/cond stuff */
   union {			/* The IP of the other end */
