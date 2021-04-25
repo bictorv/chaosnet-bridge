@@ -797,6 +797,7 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
   struct chaos_header *ch = (struct chaos_header *)data;
   u_char mask[32];
   memset(mask, 0, sizeof(mask));
+  htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
   if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
 		       ch_opcode_name(ch_opcode(ch)),
 		       ch_fc(ch),
@@ -942,8 +943,9 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
   // To me?
   if (is_mychaddr(dchad) || (dchad == 0) || (rt != NULL && rt->rt_myaddr == dchad)) {
     if ((debug || verbose) && (dchad == 0)) 
-      fprintf(stderr,"Broadcast pkt received from %#o hw %#o rt %s type %s, trying to handle it\n",
-	      schad, htons(tr->ch_hw_srcaddr), src != NULL ? rt_linkname(src->rt_link) : "(null)", rt_linkname(src_linktype));
+      fprintf(stderr,"Broadcast pkt received from %#o hw %#o rt %s type %s to %#o, trying to handle it\n",
+	      schad, ntohs(tr->ch_hw_srcaddr), src != NULL ? rt_linkname(src->rt_link) : "(null)", rt_linkname(src_linktype),
+	      dchad);
     handle_pkt_for_me(ch, data, dlen, dchad);
     if (dchad != 0) // check for BRD below
       return;			/* after checking for RUT */
