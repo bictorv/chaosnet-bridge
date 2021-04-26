@@ -129,7 +129,7 @@ char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
 char tls_key_file[PATH_MAX];	/* private key */
 char tls_cert_file[PATH_MAX];	/* certificate */
 // @@@@ should allow for different addrs on different ports/links. Punt for now.
-u_short tls_myaddr = 0;		/* my chaos address on TLS links */
+u_short tls_myaddr = 0;		/* my chaos address on TLS server links */
 int tls_server_port = 42042;
 
 int do_tls = 0, do_tls_server = 0;
@@ -272,10 +272,11 @@ u_short find_closest_addr(u_short haddrs[], int naddrs)
     if ((a = mychaddr_on_net(haddrs[i])) != 0)
       return haddrs[i];
   }
-  // @@@@ how to do this properly?
-  // Example: MX-11 has three addresses: 440, 3040, 7001.
-  // Connecting from net 7, with a route over MX12 which is also on net 6, should use 3040 (on net 6) rather than 7001.
-  // Should not matter, but there seems to be a bug in cbridge(!) which matters in this case.
+
+  // then find a route and use the local end of that
+  struct chroute *rt = find_in_routing_table(haddrs[0], 0, 0);
+  if ((rt != NULL) && (rt->rt_myaddr > 0))
+    return rt->rt_myaddr;
 
   // default
   return haddrs[0];
@@ -288,11 +289,14 @@ u_short find_my_closest_addr(u_short addr)
   if (nchaddr == 1)
     // only one choice
     return mychaddr[0];
-  for (i = 0; i < nchaddr; i++) {
-    if ((mychaddr[i] & 0xff00) == (addr & 0xff00))
-      return mychaddr[i];
-  }
-  // @@@@ then find a route and use the local end of that
+  if ((a = mychaddr_on_net(addr)) != 0)
+    return a;
+
+  // then find a route and use the local end of that
+  struct chroute *rt = find_in_routing_table(addr, 0, 0);
+  if ((rt != NULL) && (rt->rt_myaddr > 0))
+    return rt->rt_myaddr;
+
   // default
   return mychaddr[0];
 }
