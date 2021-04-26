@@ -63,12 +63,14 @@ class StreamConn:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
         # Connect the socket to the port where the server is listening
-        try:
-            self.sock.connect(address)
-            return self.sock
-        except socket.error as msg:
-            print('Socket errror:',msg, file=sys.stderr)
-            sys.exit(1)
+        self.sock.connect(address)
+        return self.sock
+        # try:
+        #     self.sock.connect(address)
+        #     return self.sock
+        # except socket.error as msg:
+        #     print('Socket error for {}: {}'.format(address,msg), file=sys.stderr)
+        #     return None
     
     def send_data(self, data):
         # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
@@ -97,7 +99,11 @@ class StreamConn:
     def get_line(self):
         rline = b""
         b = self.sock.recv(1)
-        while b != b"\r" and b != b"\n":
+        if len(b) == 0:
+            if debug:
+                print("Received empty string", file=sys.stderr)
+            return b
+        while len(b) > 0 and b != b"\r" and b != b"\n":
             rline += b
             b = self.sock.recv(1)
         if b == b"\r":
@@ -114,6 +120,8 @@ class StreamConn:
             print("Listen for {}".format(contact))
         self.send_data("LSN {}\r\n".format(contact))
         inp = self.get_line()
+        if len(inp) == 0:
+            return None
         op,data = inp.split(b' ', maxsplit=1)
         if debug:
             print("{}: {}".format(op,data), file=sys.stderr)
@@ -183,5 +191,13 @@ if __name__ == '__main__':
         debug = True
     # Start e.g. 5 parallel servers and keep them going
     while True:
-        ds = Domain_Server()
-        ds.listen()
+        if debug:
+            print("Starting Domain_Server", file=sys.stderr)
+        try:
+            ds = Domain_Server()
+            ds.listen()
+        except socket.error as msg:
+            if debug:
+                print("Error: {}".format(msg), file=sys.stderr)
+            time.sleep(1)
+        time.sleep(0.2)
