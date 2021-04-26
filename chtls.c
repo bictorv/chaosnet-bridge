@@ -78,9 +78,12 @@ parse_tls_config_line()
       return -1;
     }
   }
-  if ((tls_myaddr == 0) && (mychaddr[0] != 0))
+  if ((tls_myaddr == 0) && (mychaddr[0] != 0)) {
+    if (do_tls_server)
+      fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
     // default - see send_empty_sns below
     tls_myaddr = mychaddr[0];
+  }
   if (verbose) {
     printf("Using TLS myaddr %#o, keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file);
     if (do_tls_server)
@@ -1333,4 +1336,9 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 void init_chaos_tls()
 {
   init_openssl();
+  // @@@@ use PEM_read_X509 on tls_cert_file to get the X509 * struct
+  // to pass to tls_get_cert_cn, to check that the CN has Chaosnet addresses,
+  // and that the tls_myaddr or tls_myaddr_default (for server) is one of them
+  // @@@@ also check expiration date, and warn ahead
+  // @@@@ each tls dest should have its own myaddr!
 }
