@@ -16,6 +16,10 @@
 
 #include "cbridge.h"
 
+// when to start warning about approaching cert expiry
+#define TLS_CERT_EXPIRY_WARNING_DAYS 90
+static int tls_cert_expiry_warning_days = TLS_CERT_EXPIRY_WARNING_DAYS;
+
 extern u_short tls_myaddr;
 extern char tls_ca_file[];
 extern char tls_key_file[];
@@ -48,6 +52,14 @@ parse_tls_config_line()
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no ca-chain file specified\n"); return -1; }
       strncpy(tls_ca_file, tok, PATH_MAX);
+    } else if (strcmp(tok,"expirywarn") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no value for expirywarn specified\n"); return -1; }
+      if ((sscanf(tok, "%d", &tls_cert_expiry_warning_days) != 1) || 
+	  (tls_cert_expiry_warning_days < 0) || (tls_cert_expiry_warning_days > 730)) {
+	fprintf(stderr,"tls: bad value %s for expirywarn specified\n", tok);
+	return -1;
+      }
     } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
@@ -1332,13 +1344,141 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 	    dchad, rt->rt_dest, rt->rt_braddr);
 }
 
+static int
+days_until_expiry(ASN1_TIME *x)
+{
+  // find out how many days until expiry
+  ASN1_TIME *now;
+  if ((now = ASN1_TIME_set(NULL, time(NULL))) == NULL) {
+    perror("ASN1 error");
+    abort();
+  }
+  int days, secs;
+  if (ASN1_TIME_diff(&days, &secs, now, x) == 0) {
+    perror("ASN1 error");
+    abort();
+  }
+  return days;
+}
+
+static int
+validate_cert_file(char *fname)
+{
+  FILE *f = fopen(fname,"r");
+  u_char *client_cn;
+  X509 *cert;
+
+  if (f == NULL) {
+    perror(fname);
+    return -1;
+  }
+  if ((cert = PEM_read_X509(f, NULL, NULL, NULL)) == NULL) {
+    fprintf(stderr,"TLS: Unable to read X509 cert %s\n", fname);
+    ERR_print_errors_fp(stderr);
+    fclose(f);
+    return -1;
+  }
+  fclose(f);
+
+  // Check approaching expiration
+  ASN1_TIME *notAfter = X509_get_notAfter(cert);
+  if (notAfter == NULL) {
+    fprintf(stderr,"%%%% TLS: can't find expiration of cert %s\n", fname);
+    return -1;
+  } else {
+    if (tls_debug) {
+      BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+      int days = days_until_expiry(notAfter);
+      BIO_printf(b, "TLS: certificate %s expires in %d days, on ", fname, days);
+      ASN1_TIME_print(b, notAfter);
+      BIO_printf(b, "\n");
+      BIO_free(b);
+    }
+    int cmp;
+    time_t ptime = time(NULL) + (tls_cert_expiry_warning_days*24*60*60);
+    if ((cmp = X509_cmp_time(notAfter, &ptime)) == 0) {
+      perror("%%%% TLS: failed to compare expiration time");
+      return -1;
+    } else if (cmp < 0) {
+      int days = days_until_expiry(notAfter);
+      BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+      if (days < 0)
+	BIO_printf(b, "%%%% TLS: certificate %s expired %d days ago: ", fname, -days);
+      else 
+	BIO_printf(b, "%%%% TLS: certificate %s expiring in %d days: ", fname, days);
+      ASN1_TIME_print(b, notAfter);
+      BIO_printf(b, "\n%%%% check https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md for how to renew it!\n");
+      BIO_free(b);
+    }
+  }
+
+  // Check there is a CN
+  client_cn = tls_get_cert_cn(cert);
+  if (client_cn == NULL) {
+    fprintf(stderr,"%%%% TLS: no CN found for cert in %s\n", fname);
+    return -1;
+  } else if (tls_debug) 
+    fprintf(stderr,"TLS certificate %s has CN %s\n", fname, client_cn);
+
+#if CHAOS_DNS
+  // Check the addresses of the CN
+  u_short claddrs[4];
+  int i, j, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+  if (tls_debug) {
+    fprintf(stderr, "TLS cert CN %s has %d Chaos address(es): ", client_cn, naddrs);
+    for (i = 0; i < naddrs; i++)
+      fprintf(stderr,"%#o ", claddrs[i]);
+    fprintf(stderr,"\n");
+  }
+  int found = 0;
+  // Check if server address belongs to CN
+  if (do_tls_server) {
+    for (i = 0; i < naddrs; i++) {
+      if (claddrs[i] == tls_myaddr) {
+	found = 1;
+	break;
+      }
+    }
+    if (!found) {
+      u_char hname[256];  /* random size limit */
+      if (dns_name_of_addr(tls_myaddr, hname, sizeof(hname)) < 0)
+	fprintf(stderr,"%%%% TLS: Addresses of cert %s CN %s do not match the configured myaddr %#o\n", 
+		fname, client_cn, tls_myaddr);
+      else
+	fprintf(stderr,"%%%% TLS: Configured myaddr %#o does not belong to cert %s CN %s but to %s\n", 
+		tls_myaddr, fname, client_cn, hname);
+    } else if (tls_debug) 
+      fprintf(stderr,"TLS found myaddr %#o in addresses of %s\n", tls_myaddr, client_cn);
+  }
+  for (i = 0; i < tlsdest_len; i++) {
+    if (tlsdest[i].tls_myaddr != 0) {
+      found = 0;
+      for (j = 0; j < naddrs; j++) {
+	if (tlsdest[i].tls_myaddr == claddrs[j]) {
+	  found = 1;
+	  break;
+	}
+      }
+      if (!found) {
+	u_char hname[256];  /* random size limit */
+	if (dns_name_of_addr(tlsdest[i].tls_myaddr, hname, sizeof(hname)) < 0)
+	  fprintf(stderr,"%%%% TLS: myaddr %#o of tls destination %d (%s) not among addresses of cert %s CN %s\n",
+		  tlsdest[i].tls_myaddr, i, tlsdest[i].tls_name, fname, client_cn);
+	else
+	  fprintf(stderr,"%%%% TLS: myaddr %#o of tls destination %d (%s) does not belong to cert %s CN %s but to %s\n",
+		  tlsdest[i].tls_myaddr, i, tlsdest[i].tls_name, fname, client_cn, hname);
+      } else if (tls_debug)
+	fprintf(stderr,"TLS found tlsdest %d (%s) myaddr %#o in addresses of cert CN %s\n",
+		i, tlsdest[i].tls_name, tlsdest[i].tls_myaddr, client_cn);
+    }
+  }
+#endif // CHAOS_DNS
+  return 0;
+}
+
 // module initialization
 void init_chaos_tls()
 {
   init_openssl();
-  // @@@@ use PEM_read_X509 on tls_cert_file to get the X509 * struct
-  // to pass to tls_get_cert_cn, to check that the CN has Chaosnet addresses,
-  // and that the tls_myaddr or tls_myaddr_default (for server) is one of them
-  // @@@@ also check expiration date, and warn ahead
-  // @@@@ each tls dest should have its own myaddr!
+  validate_cert_file(tls_cert_file);
 }
