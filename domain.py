@@ -1,5 +1,5 @@
-# Copyright © 2020 Björn Victor (bjorn@victor.se)
-# Chaosnet client for DOMAIN protocol
+# Copyright © 2020-2021 Björn Victor (bjorn@victor.se)
+# Chaosnet server/forwarder for DOMAIN protocol
 # Uses the stream API of the NCP of cbridge, the bridge program for various Chaosnet implementations.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,6 +1,6 @@
 # Copyright notice
 
-Copyright © 2005, 2017-2020 Björn Victor (bjorn@victor.se).
+Copyright © 2005, 2017-2021 Björn Victor (bjorn@victor.se).
 
 Bridge program for various Chaosnet implementations.
 

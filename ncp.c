@@ -1,4 +1,4 @@
-/* Copyright © 2020 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2020-2021 Björn Victor (bjorn@victor.se) */
 /*  NCP (Network Control Program) implementing Chaosnet transport layer
     for cbridge, the bridge program for various Chaosnet implementations. */
 /*
