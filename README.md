@@ -138,7 +138,7 @@ Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`
 
 ### Network Control Program
 
-A simple unix sockets interface for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/Chaosnet/supdup).
+A simple unix sockets interface for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup).
 
 ## Routing basics
 
