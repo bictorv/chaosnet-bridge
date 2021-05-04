@@ -19,3 +19,5 @@ Bridge program for various Chaosnet implementations.
 ## Acknowledgements
 
 The code is (initially) based on `echaos` (by Björn), and `chudprt` (by Björn, partly based on one of Brad Parker's chaosd clients). Some code from [LambdaDelta](https://github.com/dseagrav/ld) (the LMI Lambda emulator by Daniel Seagraves), and some from [klh10](https://github.com/PDP-10/klh10) (the PDP10 emulator by Ken Harrenstien).
+
+Many thanks to Eric Swenson <eric@swenson.org> for encouragement, persistance, patience, and help in debugging!
