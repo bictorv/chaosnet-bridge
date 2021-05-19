@@ -62,7 +62,7 @@ BV     @  Bjorn Victor           Last logout 06/02/20 21:50:32  No plan.
 
 This is a socket of type `SOCK_STREAM`.
 
-This socket is for "stream protocols" (see [Section 4.1 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can also be used for Simple protocols (similar to UDP).
+This socket is for "stream protocols" (see [Section 4.1 in Chaosnet](https://chaosnet.net/amber.html#Connection-Establishment), where an RFC starts a stream connection with flow control - this is similar to TCP. It can also be used for Simple protocols (similar to UDP).
 
 ### Client opening
 
@@ -97,7 +97,7 @@ Options are
 
 #### Broadcast:
 
-To send a controlled [broadcast packet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast), write
+To send a controlled [broadcast packet](https://chaosnet.net/amber.html#Broadcast), write
 
 `BRD `[*options*] *CSL* *contactname* *args*
 
@@ -105,7 +105,7 @@ where *options*, *contactname* and *args* are as above, and *CSL* is a comma-sep
 
 For a simple protocol, you can read multiple `ANS` responses.
 
-Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://tumbleweed.nu/r/lm-3/uv/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
+Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://chaosnet.net/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
 
 #### Responses
 
@@ -130,7 +130,7 @@ In the case of OPN, the NCP sets up a stream connection , handles flow control e
 
 Writes from the user program are packaged into DAT packets which are sent to the remote host (when the window allows), and DAT packets from the remote host are written to the user program. No character translation is done in the NCP, so the client needs to handle e.g. translation between "ascii newline" (012) and "lispm newline" (0212).
 
-When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in [Section 4.4 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#End_002dof_002dData), see below).
+When the user program closes the socket, the NCP sends an EOF, waits for it to be acked (see `eofwait` setting), and then sends a CLS to close the connection in a controlled way (not quite as in [Section 4.4 in Chaosnet](https://chaosnet.net/amber.html#End_002dof_002dData), see below).
 
 When the NCP receives a CLS, the user socket is closed. When the NCP receives an EOF, it is immediately acked.
 
@@ -225,7 +225,7 @@ The user program can never send any such packets (so only LSN, RFC, OPN, EOF, DA
 
 The NCP handles duplicates and flow control, and DAT and DWD packets are delivered individually in order to the user program. (LOS and UNC are uncontrolled.)
 
-By the way, the description of the "safe EOF protocol" in [Section 4.4 of Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
+By the way, the description of the bidirectional "safe EOF protocol" in [Section 4.4 of Chaosnet](https://chaosnet.net/amber.html#index-EOF) is not what is implemented in Lisp Machines or, it seems, in ITS.
 
 #### NOTE
 The data part of `RFC`, `OPN`, `ANS` and `FWD` packets are non-standard:
@@ -254,7 +254,7 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6 in Chaosnet](https://tumbleweed.nu/r/lm-3/uv/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
+The foreign protocol type (see [Section 6 in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
@@ -269,7 +269,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a new CONFIG stream command for interacting with the configuration and state. Avoids the 488 byte problem, and would not allow remote access meaning a more limited security issue (only local).
 - [ ] Implement a fabulous web-based Chaosnet display using STATUS, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [x] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection). Done, see [here](domain.py).
-- [ ] Implement a [HOSTAB server](https://tumbleweed.nu/r/lm-3/uv/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there).
+- [ ] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
 - [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
 - [ ] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  A client for FILE is now done, in Python.
-- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs seqpacket.
+- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs `chaos_seqpacket`.

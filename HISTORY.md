@@ -5,7 +5,7 @@ For some more info on the Chaosnet, see [Wikipedia](https://en.wikipedia.org/wik
 For the original Chaosnet report, MIT AI Memo 628 by David A. Moon,
 see the [attached PDF](AIM-628_chaosnet.pdf) (original location
 http://hdl.handle.net/1721.1/6353) or
-https://tumbleweed.nu/r/lm-3/uv/amber.html for an HTML:ized version.
+https://chaosnet.net/amber.html for an HTML:ized version.
 
 The Chaosnet Bridge program was written by Björn Victor
 (bjorn@victor.se) in 2017-2018, based on earlier code (from 2005) for
