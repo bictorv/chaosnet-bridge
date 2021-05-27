@@ -134,8 +134,11 @@ class PacketConn(NCPConn):
             print("> {} to {}".format(len(msg), self), file=sys.stderr)
         self.send_socket_data(self.packet_header(Opcode.DAT, len(msg)) + msg)
 
-    def send_packet(self, opc, data):
-        self.send_socket_data(self.packet_header(opc, len(data))+data)
+    def send_packet(self, opc, data=None):
+        if data is None:
+            self.send_socket_data(self.packet_header(opc, 0))
+        else:
+            self.send_socket_data(self.packet_header(opc, len(data))+data)
 
     def send_los(self, msg):
         self.send_packet(Opcode.LOS, msg)
@@ -154,6 +157,22 @@ class PacketConn(NCPConn):
         if debug:
             print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
         return opc, self.get_bytes(length)
+
+    def listen(self, contact):
+        self.contact = contact
+        if debug:
+            print("Listen for {}".format(contact))
+        self.send_packet(Opcode.LSN,bytes(contact,"ascii"))
+        op,data = self.get_packet()
+        if debug:
+            print("{}: {}".format(op,data), file=sys.stderr)
+        if op == Opcode.RFC:
+            self.remote = str(data,"ascii")
+            self.send_packet(Opcode.OPN)
+            return self.remote
+        else:
+            print("Expected RFC: {}".format(inp), file=sys.stderr)
+            return None
 
     def connect(self, host, contact, args=[], options=None):
         h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
@@ -203,6 +222,22 @@ class StreamConn(NCPConn):
         # Can't do this over stream interface
         pass
 
+    def listen(self, contact):
+        self.contact = contact
+        if debug:
+            print("Listen for {}".format(contact))
+        self.send_data("LSN {}\r\n".format(contact))
+        inp = self.get_line()
+        op,data = inp.split(b' ', maxsplit=1)
+        if debug:
+            print("{}: {}".format(op,data), file=sys.stderr)
+        if op == b"RFC":
+            self.remote = str(data,"ascii")
+            return self.remote
+        else:
+            print("Expected RFC: {}".format(inp), file=sys.stderr)
+            return None
+
     def connect(self, host, contact, args=[], options=None):
         self.contact = contact
         h = ("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args)
@@ -245,6 +280,8 @@ if __name__ == '__main__':
                             help="local window size")
     parser.add_argument("-b","--babel", dest='babelp', action='store_true',
                             help="Use BABEL instead of ECHO")
+    parser.add_argument("-s","--server", dest='serverp', action='store_true',
+                            help="Be a server instead of a client")
     parser.add_argument("--goon", dest='goon', action='store_true',
                             help="Go on after mismatch")
     parser.add_argument("-p","--packet", dest='packetp', action='store_true',
@@ -275,23 +312,36 @@ if __name__ == '__main__':
         cargs['winsize'] = args.winsize
     if len(cargs) == 0:
         cargs = None
-    if c.connect(args.host, "ECHO" if not args.babelp else "BABEL", options=cargs):
-        while True:
+    cont = "ECHO" if not args.babelp else "BABEL"
+    if args.serverp:
+        print("Conn from {}".format(c.listen(cont)))
+    elif not c.connect(args.host, cont, options=cargs):
+        print("Failed to connect to {} on {}".format(args.host, cont), file=sys.stderr)
+        exit(1)
+    while True:
+        if args.serverp:
+            if not args.babelp:
+                d = c.get_message(dlen)
+                c.send_data(d)
+            else:
+                d = xs
+                c.send_data(d)
+        else:
             if not args.babelp:
                 c.send_data(xs)
             d = c.get_message(dlen)
-            n += 1
-            tot += len(d)
-            if d != xs:
-                print(("Echo" if not args.babelp else "Babel") + " failed at {} (in {}): {}".format(n, tot, d))
-                for i in range(0,len(d)):
-                    if xs[i] != d[i]:
-                        print("{}: {!r} != {!r}".format(i, d[i], xs[i]))
-                if not(args.goon):
-                    break
-            if n % args.chunk == 0:
-                print(".", end='', flush=True, file=sys.stderr)
-            if n % (args.chunk*80) == 0:
-                print("", file=sys.stderr)
-            if args.rotatep:
-                xs = xs[2:]+xs[:2]
+        n += 1
+        tot += len(d)
+        if d != xs:
+            print(cont + " failed at {} (in {}): {}".format(n, tot, d))
+            for i in range(0,len(d)):
+                if xs[i] != d[i]:
+                    print("{}: {!r} != {!r}".format(i, d[i], xs[i]))
+            if not(args.goon):
+                break
+        if n % args.chunk == 0:
+            print(".", end='', flush=True, file=sys.stderr)
+        if n % (args.chunk*80) == 0:
+            print("", file=sys.stderr)
+        if args.rotatep:
+            xs = xs[2:]+xs[:2]
