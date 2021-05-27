@@ -1816,15 +1816,21 @@ parse_contact_args(struct conn *conn, u_char *data, u_char *contact, int len)
       e = data+len;
       if (*p == ' ') p++;	// skip space
     }
-    if (e > p) {
-      // return a copy
-      u_char *c = (u_char *)calloc(e-p+1, 1);
-      if (c == NULL) { perror("calloc failed in parse_contact_args"); exit(1); }
-      if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %ld bytes\n", e-p);
-      memcpy(c, p, e-p);
-      conn->conn_contact_args_len = e-p;
-      conn->conn_contact_args = c;
+    if (e == p) {
+      conn->conn_contact_args_len = 0;
+      // no contact args
+      conn->conn_contact_args = NULL;
     }
+    // otherwise return a copy
+    u_char *c = (u_char *)calloc(e-p+1, 1);
+    if (c == NULL) { perror("calloc failed in parse_contact_args"); exit(1); }
+    if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %ld bytes\n", e-p);
+    memcpy(c, p, e-p);
+    conn->conn_contact_args_len = e-p;
+    conn->conn_contact_args = c;
+  } else {
+    conn->conn_contact_args_len = 0;
+    conn->conn_contact_args = NULL;
   }
 }
 
