@@ -135,8 +135,9 @@ def name_server():
     except ConnectionRefusedError as m:
         # cbridge down, try again in a while
         pass
-    except socket.error as msg:
-        print(msg)
+    except (socket.error,BrokenPipeError) as msg:
+        if debug:
+            print(msg)
 
 if __name__ == '__main__':
     import argparse
