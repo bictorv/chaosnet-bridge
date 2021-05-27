@@ -548,6 +548,10 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 	rttbl_net[rsub].rt_cost_updated = time(NULL);
 	PTUNLOCKN(rttbl_lock,"rttbl_lock");
       }
+      else if (debug) {
+	fprintf(stderr," not updating net %#o (cost %d): have type %s, cost %d\n",
+		rsub, rcost, rt_typename(rttbl_net[rsub].rt_type), rttbl_net[rsub].rt_cost);
+      }
     }
     if (verbose && rttbl_updated) print_routing_table();
   } 
