@@ -28,6 +28,8 @@
 # add pathname interpretation based on DNS HINFO
 # - and handle Symbolics syntax, not only ITS and (MIT) LISPM
 
+# Writing files still doesn't work well with ITS, e.g. writing chsgtv/chasta.8
+
 import socket, io
 import sys, subprocess, threading, time
 import re, string
@@ -101,10 +103,10 @@ class LMcodec(codecs.Codec):
             print("LMcodec({!r})".format(errors), file=sys.stderr)
         # LISPM to Unix
         self.decoding_map = codecs.make_identity_dict(range(256))
-        for i in range(0o10, 0o15):
+        for i in range(0o10, 0o15+1):
             self.decoding_map[i] = i+0o200
         self.decoding_map[0o177] = 0o377
-        for i in range(0o210,0o214):
+        for i in range(0o210,0o214+1):
             self.decoding_map[i] = i-0o200
         self.decoding_map[0o212] = 0o15
         self.decoding_map[0o215] = 0o12
@@ -114,12 +116,12 @@ class LMcodec(codecs.Codec):
         #self.encoding_map = codecs.make_encoding_map(self.decoding_map)
         # Unix to LISPM
         self.encoding_map = codecs.make_identity_dict(range(256))
-        for i in range(0o10, 0o14):
+        for i in range(0o10, 0o14+1):
             self.encoding_map[i] = i+0o200
         self.encoding_map[0o12] = 0o215
         self.encoding_map[0o15] = 0o212
         self.encoding_map[0o177] = 0o377
-        for i in range(0o210, 0o215):
+        for i in range(0o210, 0o215+1):
             self.encoding_map[i] = i-0o200
         self.encoding_map[0o377] = 0o177
         # self.encoding_map.update(zip([ ord(c) for c in '\t\n\f\r'],
@@ -145,6 +147,10 @@ class LMcodec(codecs.Codec):
     def encode(self, data, errors='strict', tostring=True):
         if tostring:
             # This always renders a string
+            if False and debug:
+                r = codecs.charmap_encode(data, errors, self.encoding_map)
+                print("LMcode.encode tostring {!r} -> {!r}".format(data, r))
+                return r
             return codecs.charmap_encode(data, errors, self.encoding_map)
         if isinstance(data,str):
             tr = str.maketrans(self.encoding_map)
@@ -154,7 +160,7 @@ class LMcodec(codecs.Codec):
             data = bytes(data)
             r = data.translate(tr)
         if False and debug:
-            print("LMcodec.encode {!r} (len {}) errors {!r}: {!r}".format(type(data), len(data), errors, data), file=sys.stderr)
+            print("LMcodec.encode {!r} (len {}) errors {!r}: {!r} -> {!r}".format(type(data), len(data), errors, data, r), file=sys.stderr)
         return (r,len(r))
         # return (LMencode(data), len(data))
 class LMinc_decoder(LMcodec, codecs.IncrementalDecoder):
@@ -229,6 +235,9 @@ class NCPConn:
         self.get_socket()
     def __str__(self):
         return "<{} {} {}>".format(type(self).__name__, self.contact, "active" if self.active else "passive")
+    def __del__(self):
+        if debug:
+            print("{!s} being deleted".format(self))
 
     def close(self, msg="Thank you"):
         if debug:
@@ -458,6 +467,7 @@ class File(NCPConn):
                     raise FileError(b'BUG', bytes("unexpected opcode in response to EOF+wait: {} ({})".format(Opcode(opc).name, d), "ascii"))
                 print("\n", end='', file=sys.stderr, flush=True)
                 ncp.send_packet(Opcode.SMARK,"")
+                time.sleep(2)
                 return nbytes
             if not binary:
                 d = codecs.encode(d,'lispm')
@@ -1219,6 +1229,43 @@ if __name__ == '__main__':
                                                                             r['created']))
                 elif op == "readraw":
                     ncp.read_file(wdparse(arg[0]), None, raw=True)
+                elif op == "get":
+                    hd, flist = ncp.list_files(wdparse(arg[0].strip()))
+                    if flist:
+                        if len(flist) > 1:
+                            print("Multiple matches: please be more specific: {}".format(list(flist.keys())),
+                                      file=sys.stderr)
+                        else:
+                            fn = list(flist.keys())[0]
+                            binp = True if 'CHARACTERS' not in flist[fn] else False
+                            outf = fn[fn.index(cwd[-1:])+1:].strip().lower()
+                            print("Read into {} <= ".format(outf), end='', file=sys.stderr, flush=True)
+                            try:
+                                os = open(outf, "wb" if binp else "w")
+                                r = ncp.read_file(fn, os, binary=binp)
+                            except FileNotFoundError as e:
+                                print(e, file=sys.stderr)
+                            finally:
+                                os.close()
+                                print("Read {}, {}length {}, created {}".format(r['truename'], "binary, " if r['binary'] else "", r['length'], r['created']))
+                    else:
+                        print("File not found: {}".format(arg[0].strip()), file=sys.stderr)
+                elif op == "mget":
+                    hd, flist = ncp.list_files(wdparse(arg[0].strip()))
+                    if flist:
+                        for fn in flist:
+                            if 'CHARACTERS' in flist[fn]:
+                                outf = fn[fn.index(cwd[-1:])+1:].strip().lower()
+                                print("Read into {} <= ".format(outf), end='', file=sys.stderr, flush=True)
+                                try:
+                                    os = open(outf,"w")
+                                    r = ncp.read_file(fn, os)
+                                except FileNotFoundError as e:
+                                    print(e, file=sys.stderr)
+                                    continue
+                                finally:
+                                    os.close()
+                                print("Read {}, length {}, created {}".format(r['truename'], r['length'], r['created']))
                 elif op == "write":
                     inf,outf = arg[0].split(' ', maxsplit=1)
                     try:
