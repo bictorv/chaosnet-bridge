@@ -24,10 +24,6 @@ from datetime import datetime, timedelta
 from pprint import pprint, pformat
 from enum import IntEnum, auto
 
-from concurrent.futures import TimeoutError, ProcessPoolExecutor
-# Pebble works in 3.6, but seems not yet to work in 3.7
-from pebble import ProcessPool
-
 import dns.resolver
 
 # server_address = '/tmp/chaos_stream'
@@ -335,6 +331,7 @@ class ChaosFinger:
         self.get_finger(subnets, options=options)
     def get_finger(self, subnets, options):
         hlist = []
+        free = []
         if len(subnets) == 1 and subnets[0] == -1:
             subnets = ["all"]
         print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format("User","","Name","Host","Idle","Location"))
@@ -349,7 +346,15 @@ class ChaosFinger:
             fields = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
             if debug:
                 print(hname, fields)
-            print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format(fields[0],fields[4],fields[3],hname,fields[2],fields[1]))
+            if fields[0] == "":
+                free.append([hname,fields])
+            else:
+                # uname affiliation pname hname idle loc
+                print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format(fields[0],fields[4],fields[3],hname,fields[2],fields[1]))
+        if len(free) > 0:
+            print("\nFree (lisp) machines:")
+            for f in free:
+                print("{:17s} {:s} (idle {:s})".format(f[0],f[1][1],f[1][2]))
 
 # The DUMP-ROUTING-TABLE protocol
 class ChaosDumpRoutingTable:
@@ -417,30 +422,79 @@ class ChaosLastSeen:
                     print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
                 first = ""                
 
-# The simple DNS protocol is not suitable for the string interface of the NCP,
-# but the stream DOMAIN protocol should be.
 class ChaosDNS:
     def __init__(self,subnets, options=None, name=None, qtype=None):
-        self.get_dns(subnets, options=options, name=name, qtype=qtype)
-    def get_dns(self, subnets, options, name=None, qtype=None):
+        rts = dict(a=dns.rdatatype.A, ptr=dns.rdatatype.PTR,
+                       hinfo=dns.rdatatype.HINFO, loc=dns.rdatatype.LOC,
+                       mx=dns.rdatatype.MX, ns=dns.rdatatype.NS, rp=dns.rdatatype.RP,
+                       soa=dns.rdatatype.SOA, txt=dns.rdatatype.TXT,
+                       any=dns.rdatatype.ANY)
+        rtype = rts[qtype]
+        self.subnets = subnets
+        self.options = options
+        self.name = name
+        self.qtype = rts[qtype]
+        self.qtype = dns.rdatatype.from_text(qtype)
+        # self.get_dns(subnets, options=options, name=name, qtype=qtype)
+    def get_values(self):
         hlist = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
-        msg = dns.message.make_query(name, qtype, rdclass=dns.rdataclass.CH)
-        print("> {!r} len {}".format(msg, len(msg.to_wire())))
-        print("> {!r}".format(msg.to_text()))
-        for data in Broadcast(subnets,"DNS", args=[msg.to_wire()], options=options):
-            print("< {!r}".format(data))
-            print("< {!r}".format(dns.message.from_wire(data)))
+        values = []
+        if len(self.subnets) == 1 and self.subnets[0] == -1:
+            self.subnets = ["all"]
+        msg = dns.message.make_query(self.name, self.qtype, rdclass=dns.rdataclass.CH)
+        w = msg.to_wire()
+        if debug:
+            print("> {!r}".format(msg.to_text()))
+            print("> {} {!r}".format(len(w), w))
+        # print("> {!r}".format(msg.to_wire().from_wire().to_text()))
+        for data in Broadcast(self.subnets,"DNS", args=[w], options=self.options):
+            src = data[0] + data[1]*256
+            resp = data[2:]
+            if src not in hlist:
+                r = dns.message.from_wire(resp)
+                if r.rcode() == dns.rcode.NXDOMAIN:
+                    print("Non-existing domain: {}".format(self.name), file=sys.stderr)
+                    if not debug:
+                        return None
+                if debug:
+                    print("< {:o} {!r}".format(src,r.to_text()))
+                for t in r.answer:
+                    print("Answer from {:o}: {}".format(src,t.to_text()))
+                    if self.qtype == t.rdtype:
+                        v = []
+                        if self.qtype == dns.rdatatype.PTR:
+                            for d in t:
+                                v.append(d.target.to_text())
+                        elif self.qtype == dns.rdatatype.A:
+                            for d in t:
+                                v.append(d.address)
+                        elif self.qtype == dns.rdatatype.TXT:
+                            for d in t:
+                                v.append(d.strings)
+                        elif self.qtype == dns.rdatatype.HINFO:
+                            for d in t:
+                                v.append(d.to_text())
+                        if len(v) > 0:
+                            if self.qtype == dns.rdatatype.A:
+                                # hack hack
+                                print(("{}: "+", ".join(["{:o}"]*len(v))).format(dns.rdatatype.to_text(self.qtype), *v))
+                            else:
+                                print("{}: {}".format(dns.rdatatype.to_text(self.qtype), v))
+                        values += v
+                if not debug:
+                    # first response is sufficient
+                    return values
+                hlist.append(src)
+        return values
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
-    parser.add_argument("subnets", metavar="S", type=int, nargs='+',
+    parser.add_argument("subnets", metavar="SUBNET", type=int, nargs='+',
                             help="Subnets to broadcast on (must include the local one), or -1 for all subnets")
-    parser.add_argument("-t","--timeout", type=int, default=3,
+    parser.add_argument("-t","--timeout", type=int, default=5,
                             help="Timeout in seconds")
-    parser.add_argument("-r","--retrans", type=int, default=1000,
+    parser.add_argument("-r","--retrans", type=int, default=500,
                             help="Retransmission interval in milliseconds")
     parser.add_argument("-s","--service", default="STATUS",
                             help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING)")
@@ -448,6 +502,8 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("-n",'--no-host-names', dest='no_host_names', action='store_true',
                             help="Prefer not to ask hosts for their names")
+    parser.add_argument("--name", help="Name to ask for address of (DNS)", default="Router.Chaosnet.NET")
+    parser.add_argument("--rtype", help="Resource to ask for (DNS)", default="a")
     args = parser.parse_args()
     if args.debug:
         print(args)
@@ -470,8 +526,12 @@ if __name__ == '__main__':
     elif args.service.upper() == "ROUTING" or args.service.upper() == "DUMP-ROUTING-TABLE":
         c = ChaosDumpRoutingTable
     elif args.service.upper() == "DNS":
-        ChaosDNS(args.subnets,options=dict(timeout=args.timeout, retrans=args.retrans),
-                     name="3143.ch-addr.net.", qtype=dns.rdatatype.PTR)
+        if args.name.isdigit():
+            args.name += ".ch-addr.net"
+            args.rtype = "ptr"
+        c = ChaosDNS(args.subnets,options=dict(timeout=args.timeout, retrans=args.retrans),
+                         name=args.name, qtype=args.rtype)
+        print("Values: {}".format(c.get_values()))
         exit(0)
     else:
         print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table) or LASTCN (in any case)".format(args.service))
