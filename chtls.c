@@ -709,7 +709,24 @@ void *tls_connector(void *arg)
 	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
 	      // one day, do something
 	    }
+	    // just sleep and retry - maybe temporary DNS failure?
+	    sleep(15);
+	    continue;
+#if 0
+	    // close and terminate
+	    SSL_free(ssl);
+	    close(tsock);
+	    pthread_exit(&(int){ 1 });
+#endif
 	  }
+	} else {
+	  if (1 || tls_debug || verbose || debug) {
+	    fprintf(stderr, "%%%% Error: TLS server has no CN in cert, for TLS dest %#o\n", td->tls_addr);
+	  }
+	  // close and terminate
+	  SSL_free(ssl);
+	  close(tsock);
+	  pthread_exit(&(int){ 1 });
 	}
 #endif
 	// create tlsdest, fill in stuff
@@ -1098,13 +1115,27 @@ tls_server(void *v)
 	      }
 	    }
 	  }
+	} else {
+	  if (tls_debug) {
+	    char ip[INET6_ADDRSTRLEN];
+	    fprintf(stderr,"%%%% TLS server: client at %s has no CN in cert, closing\n",
+		    ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
+	  }
+	  // close and wait for more
+	  SSL_free(ssl);
+	  close(tsock);
+	  continue;
 	}
 #endif
 	// create tlsdest, fill in stuff
 	add_server_tlsdest(client_cn, tsock, ssl, (struct sockaddr *)&caddr, clen, client_chaddr);
     } else {
       // no cert
-      if (tls_debug) fprintf(stderr,"TLS server: no client cert, closing\n");
+      if (tls_debug) {
+	char ip[INET6_ADDRSTRLEN];
+	fprintf(stderr,"%%%% TLS server: client at %s has no cert, closing\n",
+		ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
+      }
       SSL_free(ssl);
       close(tsock);
       continue;
