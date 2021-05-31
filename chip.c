@@ -160,8 +160,15 @@ validate_chip_entry(struct chipdest *cd, struct chroute *rt, int subnetp, int nc
 	fprintf(stderr,"CHIP subnet mapping for subnet %o missing \"myaddr\", should be %o (fixing it)\n",
 		cd->chip_addr, (cd->chip_addr << 8) | octet);
       // fix this too
-      if ((nchaddr > 0) && (mychaddr[nchaddr-1] == rt->rt_myaddr))
+      if (rt->rt_myaddr == 0)
+	// need to add it to table
+	add_mychaddr((cd->chip_addr << 8) | octet);
+      else if ((nchaddr > 0) && (mychaddr[nchaddr-1] == rt->rt_myaddr))
+	// it was already added, but wrong
 	mychaddr[nchaddr-1] = (cd->chip_addr << 8) | octet;
+      else if (debug)
+	fprintf(stderr,"%%%% CHIP: no mychaddr fix: nchaddr %d, mychaddr[%d] = %#o, rt_myaddr %#o\n",
+		nchaddr, nchaddr-1, mychaddr[nchaddr-1], rt->rt_myaddr);
       rt->rt_myaddr = (cd->chip_addr << 8) | octet;
     }
 
@@ -350,9 +357,12 @@ add_chip_route(u_short srcaddr)
       fprintf(stderr,"CHIP: not updating static route to %#o via %#o (%s)\n",
 	      srcaddr, rt->rt_braddr, rt_linkname(rt->rt_link));
     }
-  } else {
+  } else if ((rt = find_in_routing_table(srcaddr, 0, 1)) == NULL) {
+    // Unless there is a subnet route
     // Add a host route
     rt = add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_IP, RTCOST_ASYNCH);
+  } else if (chip_debug) {
+    fprintf(stderr,"CHIP: found existing subnet route for source %#o\n", srcaddr);
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
   return rt;
