@@ -332,7 +332,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
-  char qstring[12+6];
+  char qstring[NS_MAXDNAME];
   u_char answer[NS_PACKETSZ];
   int anslen;
   ns_msg m;
