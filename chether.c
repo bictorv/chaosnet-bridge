@@ -1464,26 +1464,27 @@ ether_input(void *v)
 void
 forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
-  int i, done = 0;
+  int i, done = 0, opc = ch_opcode(ch);
   if ((nchethdest == 0) || !((chethdest[0].cheth_arpfd > 0) && (chethdest[0].cheth_chfd > 0))) {
     if (debug) fprintf(stderr,"ether: Forwarding impossible, sockets not open\n");
     return;
   }
 
-  if (chether_debug || debug) fprintf(stderr,"Forward ether from %#o to %#o\n", schad, dchad);
+  if (chether_debug || debug) fprintf(stderr,"Forward ether %s from %#o to %#o\n", ch_opcode_name(opc), schad, dchad);
   // Skip Chaos trailer on Ether, nobody uses it, it's redundant given Ethernet header/trailer
 #if !USE_CHAOS_ETHER_TRAILER
   dlen -= CHAOS_HW_TRAILERSIZE;
 #endif
+  // swap it once, but don't use ch_opcode etc after swapping
   htons_buf((u_short *)ch, (u_short *)ch, dlen);
   for (i = 0; i < nchethdest; i++) {
     if (dchad == 0) {		/* broadcast */
       // If it's a BRD, send on all interfaces; otherwise only on the one matching the source (hmm)
-      if ((ch_opcode(ch) == CHOP_BRD) || ((schad & 0xff00) == chethdest[i].cheth_addr)) {
+      if ((opc == CHOP_BRD) || ((schad & 0xff00) == chethdest[i].cheth_addr)) {
 	if (chether_debug || debug) fprintf(stderr,"Forward: Broadcasting on ether %s from %#o\n", chethdest[i].cheth_ifname, schad);
 	send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
 	done = 1;
-	if (ch_opcode(ch) != CHOP_BRD)
+	if (opc != CHOP_BRD)
 	  break;			/* only one interface from the right source */
       }
     } else {
