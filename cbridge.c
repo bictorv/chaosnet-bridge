@@ -1900,6 +1900,25 @@ main(int argc, char *argv[])
   }
 #endif
 
+  // Check if routes might need some help
+  if (nchaddr > 1) {
+    // Only do this if we have more than one Chaos address, which indicates we are connected to more than one subnet,
+    // with subnet link or a host link to another subnet, or that we might get a dynamic link.
+    int i;
+    for (i = 0; i < rttbl_host_len; i++) {
+      if ((rttbl_host[i].rt_link != LINK_NOLINK) && (rttbl_host[i].rt_link != LINK_TLS)) {
+	if (rttbl_net[rttbl_host[i].rt_dest >> 8].rt_link == LINK_NOLINK) {
+	  int sn = rttbl_host[i].rt_dest >> 8;
+	  fprintf(stderr,"Warning: you have a host %s link to %#o but no subnet route declared\n"
+		  " Consider adding a \"route subnet %o bridge %o\" statement (after all link statements),\n"
+		  " so the rest of the network gets to know about net %#o?\n",
+		  rt_linkname(rttbl_host[i].rt_link), rttbl_host[i].rt_dest,
+		  sn, rttbl_host[i].rt_dest, sn);
+	}
+      }
+    }
+  }
+
 #if 1
   if (verbose)
     // Print config
