@@ -29,6 +29,15 @@ need to configure ITS to use address 6002, see [here](https://github.com/PDP-10/
 
 If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the `link ether` line.
 
+### A single klh10 behind a TLS-connected cbridge
+
+If you run a single klh10 but want to connect to the global Chaosnet using TLS, you can get away without allocating a whole subnet for your local hosts, by using the `mux` parameter. In this example, the local klh10 has been given address 3172, and the cbridge has been given address 3171 on subnet 6.
+
+	; First define the link to my KLH10
+	link chudp my.klh10 host 3172 myaddr 3171
+	; Then define the link to the central, with the mux parameter
+	link tls router.chaosnet.net host 3040 myaddr 3171 mux 3072
+
 ## Example: linux/macOS
 
 If you just want to connect your linux or macOS system to the global Chaosnet, something like this cwould work. 
