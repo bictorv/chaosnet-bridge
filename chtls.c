@@ -114,19 +114,19 @@ send_empty_sns(struct tls_dest *td, u_short onbehalfof)
   u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
   u_short dst = td->tls_addr;
   int i;
-  if (onbehalfof != 0)
-    src = onbehalfof;
 
   struct chroute *rt = find_in_routing_table(dst, 1, 0);
   if (rt == NULL) {
     if (tls_debug) fprintf(stderr,"Can't send SNS to %#o - no route found!\n", dst);
     return;
+  } else if (onbehalfof != 0) {
+    src = onbehalfof;
   } else
     if (rt->rt_myaddr > 0)
       src = rt->rt_myaddr;
 
   if (verbose || debug || tls_debug) 
-    fprintf(stderr,"Sending SNS from %#o to %#o\n", src, dst);
+    fprintf(stderr,"Sending SNS from %#o (obh %#o) to %#o\n", src, onbehalfof, dst);
 
   memset(pkt, 0, sizeof(pkt));
   set_ch_opcode(ch, CHOP_SNS);
@@ -347,7 +347,16 @@ add_tls_route(int tindex, u_short srcaddr)
     if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
     tlsdest[tindex].tls_addr = srcaddr;
   }
-  else if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
+  else if (((tlsdest[tindex].tls_addr >> 8) == (srcaddr >> 8)) && (tlsdest[tindex].tls_addr != srcaddr)) {
+    // add multiplexed dest @@@@ maybe let this be configurable?
+    int j;
+    for (j = 0; j < CHTLS_MAXMUX && tlsdest[tindex].tls_muxed[j] != 0; j++);
+    if (j < CHTLS_MAXMUX) {
+      fprintf(stderr,"Adding %#o to mux list %d of tlsdest %d\n", srcaddr, j, tindex);
+      tlsdest[tindex].tls_muxed[j] = srcaddr;
+    } else
+      fprintf(stderr,"%%%% Warning: Can not add %#o to mux list of tlsdest %d - list full, increase CHTLS_MAXMUX?\n", srcaddr, tindex);
+  } else if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
     char ip[INET6_ADDRSTRLEN];
     fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known (%#o) but route not found - NOT updating to %#o\n",
 	    tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
@@ -369,6 +378,8 @@ close_tlsdest(struct tls_dest *td)
     memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
     // forget remote chaos addr
     td->tls_addr = 0;
+    // forget any mux list
+    memset((void *)&td->tls_muxed, 0, sizeof(td->tls_muxed));
   }
   if (td->tls_ssl != NULL) {
     SSL_free(td->tls_ssl);
@@ -790,6 +801,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 	      td, chaddr, chaddr, inputp, td->tls_name);
       print_tlsdest_config();
     }
+    return;
   } else {
     PTLOCKN(linktab_lock,"linktab_lock");
     if (inputp)
@@ -801,10 +813,11 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 
   if (td->tls_serverp) {
     // no signalling to do, just close/free stuff
-    close_tlsdest(td);    
-    PTLOCKN(rttbl_lock,"rttbl_lock");
-    // also disable routing entry
-    struct chroute *rt = find_in_routing_table(chaddr, 1, 1);
+    int i;
+    struct chroute *rt;
+    // disable routing entries
+    PTLOCKN(rttbl_lock, "rttbl_lock");
+    rt = find_in_routing_table(chaddr, 1, 1);
     if (rt != NULL) {
       if (rt->rt_type != RT_NOPATH)
 	rt->rt_cost_updated = time(NULL); // cost isn't updated, but keep track of state change
@@ -812,12 +825,18 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
     }
     else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
     // need to also disable network routes this is a bridge for
-    int i;
     for (i = 0; i < 0xff; i++) {
       if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
+    // and multiplexed routes
+    for (i = 0; i < CHTLS_MAXMUX && td->tls_muxed[i] != 0; i++) {
+      if ((rt = find_in_routing_table(td->tls_muxed[i], 1, 1)) != NULL) {
+	rt->rt_type = RT_NOPATH;
+      }
+    }
     PTUNLOCKN(rttbl_lock,"rttbl_lock");
+    close_tlsdest(td);    
   } else {
     // let connector thread do the closing/freeing
     if (tls_debug)
@@ -934,7 +953,7 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   }
   else if (wrote != len+2)
     fprintf(stderr,"tcp_write_record: wrote %d bytes != %d\n", wrote, len+2);
-  else if (tls_debug)
+  else if (tls_debug > 1)
     fprintf(stderr,"TLS write record: sent %d bytes (reclen %d)\n", wrote, len);
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 
@@ -985,7 +1004,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
       fprintf(stderr,"TLS read record: MARK read (no data)\n");
     return 0;
   }
-  if (tls_debug)
+  if (tls_debug > 1)
     fprintf(stderr,"TLS read record: record len %d\n", rlen);
   if (rlen > blen) {
     fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
@@ -1028,7 +1047,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 	tls_please_reopen_tcp(td, 1);
 	return -1;
       }
-      if (tls_debug)
+      if (tls_debug > 1)
 	fprintf(stderr,"TLS read record: read %d more bytes\n", actual);
       if (actual == 0) {
 	tls_please_reopen_tcp(td, 1);
@@ -1038,7 +1057,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     }
     actual = p;
   }
-  if (tls_debug)
+  if (tls_debug > 1)
     fprintf(stderr,"TLS read record: read %d bytes total\n", actual);
 
   return actual;
@@ -1222,8 +1241,8 @@ handle_tls_input(int tindex)
     close_tlsdest(&tlsdest[tindex]);
     return;
   }
-  if (tls_debug) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
-			 ch_opcode_name(ch_opcode(cha)), srcaddr);
+  if (tls_debug > 1) fprintf(stderr,"TLS input %s: Using source addr from trailer: %#o\n",
+			     ch_opcode_name(ch_opcode(cha)), srcaddr);
   int cks;
   if ((cks = ch_checksum((u_char *)&data, len)) != 0) {
     // "This can't possibly happen!" - really!
@@ -1238,13 +1257,23 @@ handle_tls_input(int tindex)
   }
 
   // find the route to where from
-  struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
+  if (serverp && (ch_opcode(cha) == CHOP_SNS) && (ch_srcindex(cha) == 0) && (ch_destindex(cha) == 0)
+      && (srcaddr != ch_srcaddr(cha)) && (srcaddr >> 8) == (ch_srcaddr(cha) >> 8)) {
+    if (tls_debug) print_tls_warning(tindex, cha, "Using header source");
+    srcaddr = ch_srcaddr(cha);
+  }
+  struct chroute *srcrt = find_in_routing_table(srcaddr, 1, 0);
 
   if (tls_debug && serverp && (ch_opcode(cha) == CHOP_SNS) && (ch_srcindex(cha) == 0) && (ch_destindex(cha) == 0)) {
     if (srcrt == NULL)
       print_tls_warning(tindex, cha, "NEW empty SNS");
     else
-      print_tls_warning(tindex, cha, "Empty SNS");
+      print_tls_warning(tindex, cha, "Empty SNS but host route exists");
+    if (srcrt != NULL) {
+      struct chroute *rt = srcrt;
+      fprintf(stderr,"Found host route to dest %#o: %s dest %#o %s bridge %#o myaddr %#o\n", srcaddr,
+			 rt_linkname(rt->rt_link), rt->rt_dest, rt_typename(rt->rt_type), rt->rt_braddr, rt->rt_myaddr);
+    }
   }
   // @@@@ use config for whether to allow switching link types
   if ((srcrt == NULL) || (srcrt->rt_link != LINK_TLS)) {
@@ -1348,7 +1377,7 @@ void * tls_input(void *v)
 	    if (tls_debug) fprintf(stderr,"%%%% tls_input: received pkt from unknown socket %d\n", j);
 	    continue;
 	  }
-	  if (tls_debug) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
+	  if (tls_debug > 1) fprintf(stderr,"TLS input: fd %d => tlsdest %d\n", j, tindex);
 	  handle_tls_input(tindex);
  	}
       }
@@ -1356,6 +1385,17 @@ void * tls_input(void *v)
   }
 }
 
+
+static int
+is_in_mux_list(u_short addr, u_short *list)
+{
+  int i;
+  for (i = 0; i < CHTLS_MAXMUX && list[i] != 0; i++) {
+    if (list[i] == addr)
+      return 1;
+  }
+  return 0;
+}
 
 // @@@@ consider running this in a separate (perhaps ephemeral) thread,
 // since it might hang on output due to TCP/TLS communication (and the other end having issues)
@@ -1379,6 +1419,9 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 	/* route to dest */
 	|| 
 	(rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
+	||
+	// multiplexed
+	is_in_mux_list(dchad, &tlsdest[i].tls_muxed)
 	) {
       if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
       td = &tlsdest[i];
