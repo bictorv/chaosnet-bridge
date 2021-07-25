@@ -145,6 +145,11 @@ struct chroute {
   linktype_t rt_link;		/* link implementation */
   u_short rt_cost;		/* cost */
   time_t rt_cost_updated;	/* cost last updated */
+#if CHAOS_TLS
+// Number of addresses we can multiplex on a connection
+#define CHTLS_MAXMUX 4
+  u_short rt_tls_muxed[CHTLS_MAXMUX]; /* Other addresses we're muxing for */
+#endif
 };
 #define RT_BRIDGED(rt) ((rt)->rt_braddr != 0)
 #define RT_DIRECT(rt) ((rt)->rt_braddr == 0)
@@ -208,6 +213,7 @@ struct tls_dest {
   pthread_cond_t tcp_reconnect_cond;
   int tls_sock;			/* TCP socket */
   SSL *tls_ssl;			/* SSL conn */
+  u_short tls_muxed[CHTLS_MAXMUX]; /* See above: Other addresses we're muxing for */
 };
 
 // TLS stuff

@@ -106,7 +106,7 @@ parse_tls_config_line()
 
 // send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
 void
-send_empty_sns(struct tls_dest *td)
+send_empty_sns(struct tls_dest *td, u_short onbehalfof)
 {
   u_char pkt[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)pkt;
@@ -114,6 +114,8 @@ send_empty_sns(struct tls_dest *td)
   u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
   u_short dst = td->tls_addr;
   int i;
+  if (onbehalfof != 0)
+    src = onbehalfof;
 
   struct chroute *rt = find_in_routing_table(dst, 1, 0);
   if (rt == NULL) {
@@ -274,7 +276,7 @@ static void tls_configure_context(SSL_CTX *ctx)
 
 void print_tlsdest_config()
 {
-  int i;
+  int i, j;
   char ip[INET6_ADDRSTRLEN];
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   printf("TLS destination config: %d links\n", tlsdest_len);
@@ -288,11 +290,17 @@ void print_tlsdest_config()
 	   tlsdest[i].tls_name,
 	   tlsdest[i].tls_myaddr);
     if (tlsdest[i].tls_serverp) printf("(server) ");
-    printf("host %s port %d\n",
+    printf("host %s port %d",
 	   ip,
 	   ntohs((tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
 		  ? tlsdest[i].tls_sa.tls_sin.sin_port
 		  : tlsdest[i].tls_sa.tls_sin6.sin6_port)));
+    if (tlsdest[i].tls_muxed[0] != 0) {
+      printf(" mux %o",tlsdest[i].tls_muxed[0]);
+      for (j = 1; j < CHTLS_MAXMUX && tlsdest[i].tls_muxed[j] != 0; j++)
+	printf(",%o", tlsdest[i].tls_muxed[j]);
+    }
+    printf("\n");
   }
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 }
@@ -738,8 +746,14 @@ void *tls_connector(void *arg)
 	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
 	// SNS is supposed to be only for existing connections, but we
 	// can abuse it since the recipient is a cbridge - we handle it.
-	send_empty_sns(td);
-
+	send_empty_sns(td, 0);
+	if (td->tls_muxed[0] != 0) {
+	  // also send a SNS on behalf of all the muxed addresses, to add them to the tls routes of the server end
+	  send_empty_sns(td, td->tls_muxed[0]);
+	  int j;
+	  for (j = 1; j < CHTLS_MAXMUX && td->tls_muxed[j] != 0; j++)
+	    send_empty_sns(td, td->tls_muxed[j]);
+	}
 	// wait for someone to ask us to reconnect
 	tls_wait_for_reconnect_signal(td);
 	// close the old, go back and open new
@@ -1226,6 +1240,12 @@ handle_tls_input(int tindex)
   // find the route to where from
   struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
 
+  if (tls_debug && serverp && (ch_opcode(cha) == CHOP_SNS) && (ch_srcindex(cha) == 0) && (ch_destindex(cha) == 0)) {
+    if (srcrt == NULL)
+      print_tls_warning(tindex, cha, "NEW empty SNS");
+    else
+      print_tls_warning(tindex, cha, "Empty SNS");
+  }
   // @@@@ use config for whether to allow switching link types
   if ((srcrt == NULL) || (srcrt->rt_link != LINK_TLS)) {
     // add route?
