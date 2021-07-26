@@ -1094,7 +1094,7 @@ rut_sender(void *v)
     /* And to all individual hosts */
     for (i = 0; i < rttbl_host_len; i++) {
       struct chroute *rt = &rttbl_host[i];
-      if (RT_DIRECT(rt)) {
+      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
 			     rt->rt_braddr, rt->rt_dest,
 			     rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr);
@@ -1758,11 +1758,33 @@ parse_config(char *cfile)
   }
 }
 
+// Validate that all addresses my mychaddr (declared by "myaddr" params and "chaddr" config)
+// have a corresponding link
+static void
+validate_mychaddrs_links(void)
+{
+  int i, h, found = 0;
+  for (i = 0; i < nchaddr; i++) {
+    for (h = 0; h < rttbl_host_len; h++) {
+      if ((rttbl_host[h].rt_dest >> 8) == (mychaddr[i] >> 8)) {
+	// continue with next mychaddr
+	found = 1;
+	break;
+      }
+    }
+    if (rttbl_net[mychaddr[i] >> 8].rt_link != RT_NOPATH)
+      found = 1;
+    if (!found)
+      fprintf(stderr,"%%%% WARNING: myaddr %#o does not seem to have a link defined?\n", mychaddr[i]);
+    found = 0;
+  }
+}
+
 #if CHAOS_DNS
 // Validate that all addresses in mychaddr (declared by "myaddr" params and "chaddr" config)
 // indeed belong to the Chaos DNS host "mylongname".
 static void
-validate_mychaddrs(u_char *mylongname)
+validate_mychaddrs_dns(u_char *mylongname)
 {
   int i, j;
   u_short myaddrs[16];
@@ -1902,6 +1924,8 @@ main(int argc, char *argv[])
     fprintf(stderr,"Configuration error: no Chaos address known, use global \"chaddr\" or \"myaddr\" link param to set one.\n");
     exit(1);
   }
+  // validate that all myaddr have a link
+  validate_mychaddrs_links();
 
 #if CHAOS_DNS
   // after config, can init DNS
@@ -1914,7 +1938,7 @@ main(int argc, char *argv[])
     if (debug) fprintf(stderr,"Validating address %#o\n", mychaddr[0]);
     if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
       if (debug) fprintf(stderr," found name %s\n", mylongname);
-      validate_mychaddrs(mylongname);
+      validate_mychaddrs_dns(mylongname);
 
       // use first part only
       char *c = index((char *)mylongname, '.');
