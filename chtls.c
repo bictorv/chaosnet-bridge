@@ -352,7 +352,7 @@ add_tls_route(int tindex, u_short srcaddr)
     int j;
     for (j = 0; j < CHTLS_MAXMUX && tlsdest[tindex].tls_muxed[j] != 0; j++);
     if (j < CHTLS_MAXMUX) {
-      fprintf(stderr,"Adding %#o to mux list %d of tlsdest %d\n", srcaddr, j, tindex);
+      if (tls_debug) fprintf(stderr,"Adding %#o to mux list %d of tlsdest %d\n", srcaddr, j, tindex);
       tlsdest[tindex].tls_muxed[j] = srcaddr;
     } else
       fprintf(stderr,"%%%% Warning: Can not add %#o to mux list of tlsdest %d - list full, increase CHTLS_MAXMUX?\n", srcaddr, tindex);
