@@ -83,7 +83,8 @@ Link and route defs take optional arguments.
 
 - `mux` *%o-list*
 
-	For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (see `CHTLS_MAXMUX`).
+    For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (see `CHTLS_MAXMUX`).
+    **NOTE** that the "muxed" addresses *must* be on the same subnet as the TLS link, and *each* must have individual links (directly reachable), defined *before* the TLS link.
 
 ### LINKTYPE:
 
