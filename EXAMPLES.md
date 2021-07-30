@@ -4,7 +4,10 @@ Some examples of configurations.
 
 ## Example: klh10
 
-Assuming you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 14 (octal). In the example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
+A slightly complex, but general, example. See the next example for a simpler setup with a single klh10.
+
+The example assumes you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 14 (octal). 
+In this example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
 
     ; My default Chaosnet address
     chaddr 6001
@@ -28,6 +31,25 @@ The ITS will pick up routing info from cbridge. (Of course you also
 need to configure ITS to use address 6002, see [here](https://github.com/PDP-10/klh10/blob/master/run/ksits/pubits/doc/distrib.its) for instructions.)
 
 If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the `link ether` line.
+
+## Example: A single klh10 behind a TLS-connected cbridge
+
+If you run a single klh10 but want to connect to the global Chaosnet using TLS, you can get away without allocating a whole subnet for your local hosts, by using the `mux` parameter. In this example, the local klh10 has been given address 3172, and the cbridge has been given address 3171 on subnet 6.
+
+For a ITS/klh10 running on the same host as cbridge, you can (similar to the above example) use
+
+    devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=3172 chudpport=42043 chip=3171/localhost:42042
+
+For cbridge, you can use the following (after [getting yourself a cerificate](TLS.md)):
+
+	; Configure my TLS key and cert (see TLS.md)
+	tls key private/my.key.pem cert certs/my.cert.pem
+    ; FIRST define the link to my KLH10
+    link chudp localhost:42043 host 3172 myaddr 3171
+    ; THEN define the link to the central, with the mux parameter
+    link tls router.chaosnet.net host 3040 myaddr 3171 mux 3072
+
+(The "mux" setup works not only for a single klh10, but also up to four local hosts.)
 
 ## Example: linux/macOS
 

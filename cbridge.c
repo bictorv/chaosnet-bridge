@@ -406,13 +406,24 @@ print_routing_table()
   if (rttbl_host_len > 0) {
     printf("Host\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
     for (i = 0; i < rttbl_host_len; i++)
-      if (rttbl_host[i].rt_link != LINK_NOLINK)
-	printf("%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld\n",
+      if (rttbl_host[i].rt_link != LINK_NOLINK) {
+	printf("%#o\t%#o\t%s\t%s\t%#o\t%d\t%ld",
 	       rttbl_host[i].rt_dest, rttbl_host[i].rt_braddr, rt_typename(rttbl_host[i].rt_type),
 	       rt_linkname(rttbl_host[i].rt_link),
 	       rttbl_host[i].rt_myaddr,
 	       rttbl_host[i].rt_cost,
 	       rttbl_host[i].rt_cost_updated > 0 ? time(NULL) - rttbl_host[i].rt_cost_updated : 0);
+#if CHAOS_TLS
+	if (rttbl_host[i].rt_tls_muxed[0] != 0) {
+	  int j;
+	  printf("\tmux: %o", rttbl_host[i].rt_tls_muxed[0]);
+	  for (j = 1; j < CHTLS_MAXMUX && rttbl_host[i].rt_tls_muxed[j] != 0; j++) {
+	    printf(",%o",rttbl_host[i].rt_tls_muxed[j]);
+	  }
+	}
+#endif
+	printf("\n");
+      }
   }
   printf("Net\tBridge\tType\tLink\tMyAddr\tCost\tAge\n");
   for (i = 0; i < 0xff; i++)
@@ -1083,7 +1094,7 @@ rut_sender(void *v)
     /* And to all individual hosts */
     for (i = 0; i < rttbl_host_len; i++) {
       struct chroute *rt = &rttbl_host[i];
-      if (RT_DIRECT(rt)) {
+      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
 			     rt->rt_braddr, rt->rt_dest,
 			     rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr);
@@ -1230,7 +1241,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 	return -1;
       }
     } else {
-      fprintf(stderr,"bad keyword %s for link to %#o\n", tok, addr);
+      fprintf(stderr,"bad keyword %s for link/route to %#o\n", tok, addr);
       return -1;
     }
   }
@@ -1352,6 +1363,32 @@ parse_link_args(struct chroute *rt, u_short addr)
 	fprintf(stderr,"bad cost %s for link to %#o\n", tok, addr);
 	return -1;
       }
+#if CHAOS_TLS
+    } else if (strcasecmp(tok,"mux") == 0) {
+      tok = strtok(NULL," \t\r\n");
+      int nmux = 0;
+      char *cma, *tp = tok;
+      while (nmux < CHTLS_MAXMUX) {
+	if ((sscanf(tp,"%ho", &sval) != 1) || !valid_chaos_host_address(sval)) {
+	  fprintf(stderr,"bad octal mux value %s\n", tp);
+	  return -1;
+	} else if ((sval & 0xff00) != (rt->rt_myaddr & 0xff00)) {
+	  // more sanity checks after parsing: the muxed addresses are directly reachable
+	  fprintf(stderr,"Error: mux address %o must be on my subnet %o\n", sval, (rt->rt_myaddr >> 8));
+	  return -1;
+	} else {
+	  rt->rt_tls_muxed[nmux++] = sval;
+	}
+	if ((cma = index(tp,',')) != NULL) {
+	  tp = cma+1;
+	  if (nmux == CHTLS_MAXMUX)
+	    fprintf(stderr,"%%%% Warning: max number of mux addresses (%d) parsed, skipping the rest. Increase CHTLS_MAXMUX?\n", nmux);
+	  continue;
+	} else {
+	  break;
+	}
+      }
+#endif
     } else {
       fprintf(stderr,"bad keyword %s for link to %#o\n", tok, addr);
       return -1;
@@ -1542,6 +1579,35 @@ parse_link_config()
   }
 #if CHAOS_TLS
   if (rt->rt_link == LINK_TLS) {
+    // Copy the mux addresses for convenience
+    memcpy(tlsdest[tlsdest_len - 1].tls_muxed, rt->rt_tls_muxed, sizeof(tlsdest[tlsdest_len - 1].tls_muxed));
+    int i, j, found = 0;
+    for (i = 0; i < CHTLS_MAXMUX && rt->rt_tls_muxed[i] != 0; i++) {
+      // Check that each muxed address is directly reachable
+      for (j = 0; j < rttbl_host_len; j++) {
+	if ((rttbl_host[j].rt_link != LINK_NOLINK) && RT_DIRECT(&rttbl_host[j]) 
+	    && (rttbl_host[j].rt_dest == rt->rt_tls_muxed[i])) {
+	  found = 1;
+	  break;
+	}
+      }
+      if (!found) {
+	if ((rttbl_net[rt->rt_tls_muxed[i]>>8].rt_link != RT_NOLINK) && RT_DIRECT(&rttbl_net[rt->rt_tls_muxed[i]>>8])) {
+	  fprintf(stderr,"%%%% Warning: using a subnet link for a mux address (%o) might break routing\n", rt->rt_tls_muxed[i]);
+	  // look for next mux address
+	  found = 0;
+	} else {
+	  fprintf(stderr,"Error: muxed address %o not directly reachable through another link\n", rt->rt_tls_muxed[i]);
+	  return -1;
+	}
+      } else
+	found = 0;		// look for next mux address
+    }
+    if ((addr >> 8) != (rt->rt_myaddr >> 8)) {
+      fprintf(stderr,"Error: TLS destination address %o must be on same subnet as TLS \"myaddr\" %o\n",
+	      addr, rt->rt_myaddr);
+	return -1;
+    }
     tlsdest[tlsdest_len - 1].tls_addr = addr;
     tlsdest[tlsdest_len - 1].tls_myaddr = rt->rt_myaddr;
     if (subnetp) {
@@ -1698,11 +1764,33 @@ parse_config(char *cfile)
   }
 }
 
+// Validate that all addresses my mychaddr (declared by "myaddr" params and "chaddr" config)
+// have a corresponding link
+static void
+validate_mychaddrs_links(void)
+{
+  int i, h, found = 0;
+  for (i = 0; i < nchaddr; i++) {
+    for (h = 0; h < rttbl_host_len; h++) {
+      if ((rttbl_host[h].rt_dest >> 8) == (mychaddr[i] >> 8)) {
+	// continue with next mychaddr
+	found = 1;
+	break;
+      }
+    }
+    if (rttbl_net[mychaddr[i] >> 8].rt_link != RT_NOPATH)
+      found = 1;
+    if (!found)
+      fprintf(stderr,"%%%% WARNING: myaddr %#o does not seem to have a link defined?\n", mychaddr[i]);
+    found = 0;
+  }
+}
+
 #if CHAOS_DNS
 // Validate that all addresses in mychaddr (declared by "myaddr" params and "chaddr" config)
 // indeed belong to the Chaos DNS host "mylongname".
 static void
-validate_mychaddrs(u_char *mylongname)
+validate_mychaddrs_dns(u_char *mylongname)
 {
   int i, j;
   u_short myaddrs[16];
@@ -1842,6 +1930,8 @@ main(int argc, char *argv[])
     fprintf(stderr,"Configuration error: no Chaos address known, use global \"chaddr\" or \"myaddr\" link param to set one.\n");
     exit(1);
   }
+  // validate that all myaddr have a link
+  validate_mychaddrs_links();
 
 #if CHAOS_DNS
   // after config, can init DNS
@@ -1854,7 +1944,7 @@ main(int argc, char *argv[])
     if (debug) fprintf(stderr,"Validating address %#o\n", mychaddr[0]);
     if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
       if (debug) fprintf(stderr," found name %s\n", mylongname);
-      validate_mychaddrs(mylongname);
+      validate_mychaddrs_dns(mylongname);
 
       // use first part only
       char *c = index((char *)mylongname, '.');
@@ -1894,7 +1984,9 @@ main(int argc, char *argv[])
 	sprintf(err,"cannot access \"%s\"",files[i]);
 	perror(err);
 	printf(" configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+#if 0
 	exit(1);
+#endif
       }
     }
   }

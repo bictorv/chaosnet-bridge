@@ -81,6 +81,11 @@ Link and route defs take optional arguments.
 
 	sets the cost of the route: `direct`, `ether`, `asynch`. (Should support actual numbers too?)
 
+- `mux` *%o-list*
+
+    For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (currently 4, see `CHTLS_MAXMUX`).
+    **NOTE** that the "muxed" addresses *must* be on the same subnet as the TLS link, and *each* must be directly reachable through (individual) links, defined *before* the TLS link. *Note*: If the link to the muxed address is a `subnet` link (rather than a `host` link), routing might break.
+
 ### LINKTYPE:
 
 For links, you need to specify what link layer implementation is used for it.
