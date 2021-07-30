@@ -1592,10 +1592,16 @@ parse_link_config()
 	}
       }
       if (!found) {
-	fprintf(stderr,"Error: muxed address %o not directly reachable through other host link\n", rt->rt_tls_muxed[i]);
-	return -1;
+	if ((rttbl_net[rt->rt_tls_muxed[i]>>8].rt_link != RT_NOLINK) && RT_DIRECT(&rttbl_net[rt->rt_tls_muxed[i]>>8])) {
+	  fprintf(stderr,"%%%% Warning: using a subnet link for a mux address (%o) might break routing\n", rt->rt_tls_muxed[i]);
+	  // look for next mux address
+	  found = 0;
+	} else {
+	  fprintf(stderr,"Error: muxed address %o not directly reachable through another link\n", rt->rt_tls_muxed[i]);
+	  return -1;
+	}
       } else
-	found = 0;
+	found = 0;		// look for next mux address
     }
     if ((addr >> 8) != (rt->rt_myaddr >> 8)) {
       fprintf(stderr,"Error: TLS destination address %o must be on same subnet as TLS \"myaddr\" %o\n",
