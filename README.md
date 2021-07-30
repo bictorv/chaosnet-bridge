@@ -23,6 +23,11 @@ It also implements the transport layer of Chaosnet (using any of the above link 
 You can configure the bridge to connect subnets and/or individual hosts. 
 
 Use cases could be
+- connecting ITSes running on klh10. Rather than configuring your
+  klh10 to handle all other chudp hosts and iptables to forward chudp
+  pkts over the tun interface, keep routing in the bridge
+  program. Adding new chudp hosts now doesn't require klh10
+  configuration. 
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
   others using LambdaDelta (use a Chaos-over-UDP or -over-TLS or -over-IP
   link between them). 
@@ -31,11 +36,6 @@ Use cases could be
   -over-IP link between them). 
 - connecting remote Chaosnet-over-IP networks, e.g. in case you run a
   [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
-- connecting ITSes running on klh10 - rather than configuring your
-  klh10 to handle all other chudp hosts and iptables to forward chudp
-  pkts over the tun interface, keep routing in the bridge
-  program. Adding new chudp hosts now doesn't require klh10
-  configuration. 
 - and interconnecting these, of course!
 
 There is also support for connecting user programs such as Supdup (in some Unix-like environment) to Chaosnet - [read more](#network-control-program).

@@ -42,10 +42,10 @@ For a ITS/klh10 running on the same host as cbridge, you can (similar to the abo
 
 For cbridge, you can use the following:
 
-	; FIRST define the link to my KLH10
-	link chudp localhost:42043 host 3172 myaddr 3171
-	; THEN define the link to the central, with the mux parameter
-	link tls router.chaosnet.net host 3040 myaddr 3171 mux 3072
+    ; FIRST define the link to my KLH10
+    link chudp localhost:42043 host 3172 myaddr 3171
+    ; THEN define the link to the central, with the mux parameter
+    link tls router.chaosnet.net host 3040 myaddr 3171 mux 3072
 
 (The "mux" setup works not only for a single klh10, but also up to four local hosts.)
 
