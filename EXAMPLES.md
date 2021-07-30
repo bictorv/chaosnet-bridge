@@ -40,8 +40,10 @@ For a ITS/klh10 running on the same host as cbridge, you can (similar to the abo
 
     devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=3172 chudpport=42043 chip=3171/localhost:42042
 
-For cbridge, you can use the following:
+For cbridge, you can use the following (after [getting yourself a cerificate](TLS.md)):
 
+	; Configure my TLS key and cert (see TLS.md)
+	tls key private/my.key.pem cert certs/my.cert.pem
     ; FIRST define the link to my KLH10
     link chudp localhost:42043 host 3172 myaddr 3171
     ; THEN define the link to the central, with the mux parameter
