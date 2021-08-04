@@ -1592,7 +1592,7 @@ parse_link_config()
 	}
       }
       if (!found) {
-	if ((rttbl_net[rt->rt_tls_muxed[i]>>8].rt_link != RT_NOLINK) && RT_DIRECT(&rttbl_net[rt->rt_tls_muxed[i]>>8])) {
+	if ((rttbl_net[rt->rt_tls_muxed[i]>>8].rt_link != LINK_NOLINK) && RT_DIRECT(&rttbl_net[rt->rt_tls_muxed[i]>>8])) {
 	  fprintf(stderr,"%%%% Warning: using a subnet link for a mux address (%o) might break routing\n", rt->rt_tls_muxed[i]);
 	  // look for next mux address
 	  found = 0;
