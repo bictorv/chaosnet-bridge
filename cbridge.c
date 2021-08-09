@@ -353,16 +353,17 @@ void print_host_stats()
   int n, i;
   PTLOCKN(hosttab_lock,"hosttab_lock");
   printf("Host stats:\n"
-	 "Host\t  In\t Via\t Last seen\n");
+	 "Host\t  In\t Via\t Last seen\t FC\n");
   for (n = 0; n < 256; n++) {
     struct hostat *he = hosttab[n];
     if (he != NULL) {
       for (i = 0; i < 256; i++) {
 	// fprintf(stderr,"hosttab[%d][%i] = %p\n", n, i, he[i]);
 	if (he[i].hst_in != 0 || he[i].hst_last_hop != 0 || he[i].hst_last_seen != 0) {
-	  printf("%#o\t%7d\t%#o\t%ld\n", (n << 8) | i,
+	  printf("%#o\t%7d\t%#o\t%ld\t%d\n", (n << 8) | i,
 		 he[i].hst_in, he[i].hst_last_hop,
-		 he[i].hst_last_seen > 0 ? time(NULL) - he[i].hst_last_seen : 0);
+		 he[i].hst_last_seen > 0 ? time(NULL) - he[i].hst_last_seen : 0,
+		 he[i].hst_last_fc);
 	}
       }
     }
@@ -823,12 +824,15 @@ forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int d
 		       ch_srcaddr(ch),
 		       sn, rt->rt_dest, rt->rt_braddr,
 		       rt_linkname(rt->rt_link));
+#if 0
+  // @@@@ instead: clear bit N when receiving from subnet link for N
   // clear bit if we're sending to a subnet link,
   // but if it's a host link, keep it and let the other end resend it if it has further host links to that subnet
   if (RT_SUBNETP(rt) && (sn < ch_ackno(ch)*8)) {
     mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
     ntohs_buf((u_short *)mask, (u_short *)&data[CHAOS_HEADERSIZE], ch_ackno(ch));
   }
+#endif
   // forward
   PTLOCKN(linktab_lock,"linktab_lock");
   linktab[rt->rt_dest >>8 ].pkt_out++;
@@ -918,6 +922,7 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
     he->hst_in++;
     he->hst_last_seen = time(NULL);
     he->hst_last_hop = schad;
+    he->hst_last_fc = ch_fc(ch);
     PTUNLOCKN(hosttab_lock,"hosttab_lock");
   } else if (debug)
     fprintf(stderr,"No source route given in forward from %#o to %#o\n",
@@ -974,9 +979,22 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
     if (ch_opcode(ch) == CHOP_BRD) {
       if (debug) fprintf(stderr,"BRD pkt received, trying to forward it\n");
       // Check that there is a mask, and validate length requirement
-      if ((ch_ackno(ch) > 0) && (ch_ackno(ch) <= 32) && ((ch_ackno(ch) % 4) == 0))
+      if ((ch_ackno(ch) > 0) && (ch_ackno(ch) <= 32) && ((ch_ackno(ch) % 4) == 0)) {
+#if 1
+	// Clear bitmask bit for the subnet we got it from (if it came from a subnet link)
+	// Host links will not reflect the BRD back, by keeping track of where it came from (in forward_chaos_broadcast_pkt)
+	if (src != NULL) { // NULL source means we are the origin, probably
+	  u_int sn = src->rt_dest >> 8;
+	  if (RT_SUBNETP(src) && (sn < ch_ackno(ch) * 8)) {
+	    u_char *mask = &data[CHAOS_HEADERSIZE];
+	    if (debug) fprintf(stderr,"BRD from subnet %#o mask byte %#x => %#x\n", sn, mask[sn/8], mask[sn/8] & ~(1<<(sn % 8)));
+	    mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
+	  } else if (debug) 
+	    fprintf(stderr,"BRD from subnet %#o NOT clearing bit: mask contains %#o subnets\n", sn, ch_ackno(ch) * 8);
+	}
+#endif
 	forward_chaos_broadcast_pkt(src, data, dlen);
-      else if (debug || verbose) {
+      } else if (debug || verbose) {
 	fprintf(stderr,"Bad BRD mask length %d (mod 4 is %d)\n", ch_ackno(ch), ch_ackno(ch) % 4);
       }
     }

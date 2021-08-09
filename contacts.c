@@ -58,7 +58,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   u_char *data = &pkt[CHAOS_HEADERSIZE];
   int i, cost, nroutes = 0;
   // there is a subnet link to the subnet we're constructing a RUT pkt to, and we have a direct link to it
-  int directp = RT_PATHP(&rttbl_net[dest>>8]) && RT_DIRECT(&rttbl_net[dest>>8]);
+  int directdestp = RT_PATHP(&rttbl_net[dest>>8]) && RT_DIRECT(&rttbl_net[dest>>8]);
   int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
   if (maxroutes > 122)
     maxroutes = 122;
@@ -81,9 +81,9 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	       // route for this subnet route is through a host on the dest subnet
 	       // and this subnet route is direct and the bridge has a host route
 	       && (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) &&
-		   directp &&
+		   !directdestp &&
 		   // and we have a host route to the bridge
-		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) != NULL))
+		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) == NULL))
 	       ))
 	) {
       data[nroutes*4+1] = i;
@@ -97,12 +97,12 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	fprintf(stderr, " NOT including net %#o for dest %#o (same subnet)\n", i, dest);
       else if (rttbl_net[i].rt_braddr == dest) 
 	fprintf(stderr, " NOT including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
-      else if (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) && directp && (hostpath != NULL))
+      else if (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) && directdestp && (hostpath != NULL))
 	fprintf(stderr, " NOT including net %#o (bridge %#o is on dest subnet %#o, direct, have host path)\n", i, rttbl_net[i].rt_braddr, dest>>8);
       else 
 	// extra debug
 	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o %s path %p (anyway)\n", 
-		i, rttbl_net[i].rt_braddr, dest, directp ? "direct" : "indirect", hostpath);
+		i, rttbl_net[i].rt_braddr, dest, directdestp ? "direct" : "indirect", hostpath);
     }
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
@@ -368,7 +368,7 @@ lastcn_responder(u_char *rfc, int len)
 
   u_short *dp = (u_short *)&ans[CHAOS_HEADERSIZE];
 
-  int words_per_entry = 7;	// see below
+  int words_per_entry = 8;	// see below
   int maxentries = 244/words_per_entry;
   // Low-order half of 32-bit word comes first
   time_t now = time(NULL);
@@ -385,6 +385,7 @@ lastcn_responder(u_char *rfc, int len)
 	  u_int when = he[i].hst_last_seen > 0 ? now - he[i].hst_last_seen : 0;
 	  *dp++ = htons(when & 0xffff);	 /* how many seconds ago */
 	  *dp++ = htons(when >> 16);
+	  *dp++ = htons(he[i].hst_last_fc); /* forwarding count last time seen */
 	  maxentries--;
 	}
       }

@@ -224,15 +224,20 @@ void print_lastcn(u_char *bp, int len, u_short src)
   
   // @@@@ prettyprint age, host?
   printf("Last seen at host %#o:\n", src);
-  printf("%-8s %-8s %-8s %s\n", "Host","#in","Via","Age(s)");
-  for (i = 0; i < len/2/7; i++) {
+  printf("%-8s %-8s %-8s %-8s %s\n", "Host","#in","Via","FC","Age(s)");
+  for (i = 0; i < len/2; ) {
     u_short wpe = (*dp++);
-    if (wpe != 7) { printf("Unexpected WPE of LASTCN: %d should be 7\n", wpe); exit(1); }
+    if (wpe < 7) { printf("Unexpected WPE of LASTCN: %d should be >= 7\n", wpe); exit(1); }
     u_short addr = (*dp++);
     u_short in = (*dp++); in |= ((*dp++)<<16);
     u_short last = (*dp++);
     u_short age = (*dp++); age |= ((*dp++)<<16);
-    printf("%#-8o %-8d %#-8o %s\n", addr, in, last, seconds_as_interval(age));
+    if (wpe > 7) {
+      u_short fc = (*dp++);
+      printf("%#-8o %-8d %#-8o %-8d %s\n", addr, in, last, fc, seconds_as_interval(age));
+    } else
+      printf("%#-8o %-8d %#-8o %-8s %s\n", addr, in, last, "", seconds_as_interval(age));
+    i += wpe;
   }
 }
 

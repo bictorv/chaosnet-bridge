@@ -175,6 +175,7 @@ struct hostat {
   u_int32_t hst_in;		/* pkts received */
   u_int16_t hst_last_hop;	/* last hop router */
   time_t hst_last_seen;		/* time last seen */
+  u_int8_t hst_last_fc;		/* forwarding count last time seen */
 };
 
 // ================ CHUDP ================
