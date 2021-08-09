@@ -154,6 +154,7 @@ struct chroute {
 #define RT_BRIDGED(rt) ((rt)->rt_braddr != 0)
 #define RT_DIRECT(rt) ((rt)->rt_braddr == 0)
 #define RT_SUBNETP(rt) (((rt)->rt_dest & 0xff) == 0)
+#define RT_PATHP(rt) ((rt)->rt_type != RT_NOPATH)
 
 // STATUS protocol, MIT AIM 628.
 // Info on this host's direct connection to a subnet. 

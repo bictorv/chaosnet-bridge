@@ -57,6 +57,8 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   struct chaos_header *cha = (struct chaos_header *)pkt;
   u_char *data = &pkt[CHAOS_HEADERSIZE];
   int i, cost, nroutes = 0;
+  // there is a subnet link to the subnet we're constructing a RUT pkt to, and we have a direct link to it
+  int directp = RT_PATHP(&rttbl_net[dest>>8]) && RT_DIRECT(&rttbl_net[dest>>8]);
   int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
   if (maxroutes > 122)
     maxroutes = 122;
@@ -66,18 +68,23 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
-    if ((rttbl_net[i].rt_type != RT_NOPATH) 
+    struct chroute *hostpath = NULL;
+    if (RT_PATHP(&rttbl_net[i])
 	// don't send a subnet route to the subnet itself (but to individual hosts)
 	&& (! (((dest & 0xff) == 0) && (i == (dest>>8))))
 	// and not to the bridge itself
 	&& (rttbl_net[i].rt_braddr != dest)
 	// don't include routes which are reachable through the dest
-	// e.g. Peg (on net 7) now sends 1, 6, 13, 16 routes to net 7, while the routes are through pi3 on net 7
 	&& (! (((dest & 0xff) == 0) // subnet dest, and 
 	       // someone else is the bridge and it's not a broadcast/direct route
-	       && (rttbl_net[i].rt_braddr != 0) && (!is_mychaddr(rttbl_net[i].rt_braddr))
+	       && RT_BRIDGED(&rttbl_net[i]) && (!is_mychaddr(rttbl_net[i].rt_braddr))
 	       // route for this subnet route is through a host on the dest subnet
-	       && ((rttbl_net[i].rt_braddr >> 8) == (dest >> 8))))
+	       // and this subnet route is direct and the bridge has a host route
+	       && (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) &&
+		   directp &&
+		   // and we have a host route to the bridge
+		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) != NULL))
+	       ))
 	) {
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
@@ -90,11 +97,12 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	fprintf(stderr, " NOT including net %#o for dest %#o (same subnet)\n", i, dest);
       else if (rttbl_net[i].rt_braddr == dest) 
 	fprintf(stderr, " NOT including net %#o (bridge %#o) for dest %#o\n", i, rttbl_net[i].rt_braddr, dest);
-      else if ((rttbl_net[i].rt_braddr >> 8) == (dest >> 8))
-	fprintf(stderr, " NOT including net %#o (bridge %#o is on dest subnet %#o)\n", i, rttbl_net[i].rt_braddr, dest>>8);
+      else if (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) && directp && (hostpath != NULL))
+	fprintf(stderr, " NOT including net %#o (bridge %#o is on dest subnet %#o, direct, have host path)\n", i, rttbl_net[i].rt_braddr, dest>>8);
       else 
 	// extra debug
-	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o (anyway)\n", i, rttbl_net[i].rt_braddr, dest);
+	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o %s path %p (anyway)\n", 
+		i, rttbl_net[i].rt_braddr, dest, directp ? "direct" : "indirect", hostpath);
     }
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
