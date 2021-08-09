@@ -392,9 +392,9 @@ class ChaosLastSeen:
         if len(subnets) == 1 and subnets[0] == -1:
             subnets = ["all"]
         if show_names:
-            print("{:<20} {:10} {:>8} {:10}  {}".format("Host","Seen","#in","Via","Age"))
+            print("{:<20} {:10} {:>8} {:10}  {}".format("Host","Seen","#in","Via","FC","Age"))
         else:
-            print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","Age"))
+            print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","FC","Age"))
         # @@@@ consider presenting the info based on seen addresses (when seen at a certain bridge)?
         for data in Broadcast(subnets,"LASTCN",options=options):
             src = data[0] + data[1]*256
@@ -404,22 +404,28 @@ class ChaosLastSeen:
             data = data[2:]
             hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) # if not(no_host_names) else "{:o}".format(src)
             cn = dict()
-            for i in range(0,int(len(data)/2/7)):
-                flen = unpack('H',data[i*7*2:i*7*2+2])[0]
-                assert flen == 7
-                addr = unpack('H',data[i*7*2+2:i*7*2+4])[0]
-                inp = unpack('I',data[i*7*2+4:i*7*2+4+4])[0]
-                via = unpack('H',data[i*7*2+4+4:i*7*2+4+4+2])[0]
-                age = unpack('I',data[i*7*2+4+4+2:i*7*2+4+4+2+4])[0]
-                cn[addr] = dict(input=inp,via=via,age=age)
+            i = 0
+            while i < int(len(data)/2):
+                flen = unpack('H',data[i*2:i*2+2])[0]
+                assert flen >= 7
+                addr = unpack('H',data[i*2+2:i*2+4])[0]
+                inp = unpack('I',data[i*2+4:i*2+4+4])[0]
+                via = unpack('H',data[i*2+4+4:i*2+4+4+2])[0]
+                age = unpack('I',data[i*2+4+4+2:i*2+4+4+2+4])[0]
+                if (flen > 7):
+                    fc = unpack('H',data[i*2+4+4+2+4:i*2+4+4+2+4+2])[0]
+                    cn[addr] = dict(input=inp,via=via,age=age,fc=fc)
+                else:
+                    cn[addr] = dict(input=inp,via=via,age=age,fc='')
+                i += flen
             first = hname
             for addr in cn:
                 e = cn[addr]
                 a = timedelta(seconds=e['age'])
                 if show_names:
-                    print("{:<20} {:<10} {:>8} {:<10}  {}".format(first,host_name(addr),e['input'],host_name(e['via']),a))
+                    print("{:<20} {:<10} {:>8} {:<10} {:>4}  {}".format(first,host_name(addr),e['input'],host_name(e['via']),e['fc'],a))
                 else:
-                    print("{:<20} {:>8o} {:>8} {:>8o}  {}".format(first,addr,e['input'],e['via'],a))
+                    print("{:<20} {:>8o} {:>8} {:>8o} {:>4}  {}".format(first,addr,e['input'],e['via'],e['fc'],a))
                 first = ""                
 
 class ChaosDNS:

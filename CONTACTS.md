@@ -28,13 +28,14 @@ info about which hosts the bridge has received packets from, from what
 other host (e.g. another router) and how long ago. Each entry consists of
 the following 16-bit words:
 
- 0. length of entry in 16-bit words (7)
+ 0. length of entry in 16-bit words (8)
  1. host addr which was seen
  2. \# input pkts from that (least significant 16 bits)
  3.   (most significant 16 bits)
  4. address the host was last seen from (e.g. a bridge)
  5. how many seconds ago was the host seen (LSB 16 bits)
  6.   (MSB 16 bits)
+ 7. the forwarding count field of the last seen packet
 
 ### `DNS`
 A non-standard contact `DNS` is also supported, which responds to a
