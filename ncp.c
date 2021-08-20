@@ -498,7 +498,7 @@ static void
 print_conn(char *leader, struct conn *conn, int alsostate)
 {
   time_t now = time(NULL);
-  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld t/o %d ff %d sock %d %s\n",
+  printf("%s conn %p %s contact \"%s\" remote <%#o,%#x> local <%#o,%#x> state %s age %ld t/o %d ff %d sock %d %s\r\n",
 	 leader,
 	 conn, conn_type_name(conn),
 	 conn->conn_contact,
@@ -509,7 +509,7 @@ print_conn(char *leader, struct conn *conn, int alsostate)
 	 conn->conn_sock, conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
-    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld probe %ld\n",
+    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld probe %ld\r\n",
 	   leader, cs->pktnum_made_highest,
 	   cs->foreign_winsize, cs->window_available, pkqueue_length(cs->read_pkts), cs->read_pkts_controlled,
 	   pkqueue_length(cs->received_pkts_ooo), 
@@ -3278,9 +3278,10 @@ socket_to_conn_stream_handler(struct conn *conn)
   // @@@@ shit happens - but debug this!
   else if ((cnt == 2) && (strncmp((char *)buf,"\r\n",2) == 0)) {
     // ignore
-    fprintf(stderr,"@@@@ NCP shit happened: CRLF read, ignoring\n");
-    print_conn("@@ ", conn, 1);
-    ;
+    if (ncp_debug) {
+      fprintf(stderr,"NCP: CRLF read but conn is not open (yet), ignoring\r\n");
+      print_conn("@@ ", conn, 1);
+    }
   }
 #endif
   else if (cs->state != CS_Inactive) {
