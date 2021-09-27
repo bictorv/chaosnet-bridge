@@ -533,7 +533,12 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 		" We have a STATIC route to that subnet - "
 		" bug in network structure or sender's software?\n",
 		rsub, src);
-      if ((rttbl_net[rsub].rt_type == RT_NOPATH)  /* we have no path currently */
+      if ((rcost + cost) > RTCOST_HIGH) {
+	// Don't add routes which are immediately stale
+	if (verbose) fprintf(stderr," Received RUT for subnet %#o from host %#o with high cost already: %d+%d > %d",
+			     rsub, src, rcost, cost, RTCOST_HIGH);
+      }
+      else if ((rttbl_net[rsub].rt_type == RT_NOPATH)  /* we have no path currently */
 	  /* we had a higher (or equal, to update age) cost */
 	  || ((rttbl_net[rsub].rt_cost >= (rcost + cost))
 	      /* but don't update if we have a static route */

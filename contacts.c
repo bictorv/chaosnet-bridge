@@ -70,6 +70,8 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
     struct chroute *hostpath = NULL;
     if (RT_PATHP(&rttbl_net[i])
+	// don't send routes which are already stale
+	&& (rttbl_net[i].rt_cost < RTCOST_HIGH)
 	// don't send a subnet route to the subnet itself (but to individual hosts)
 	&& (! (((dest & 0xff) == 0) && (i == (dest>>8))))
 	// and not to the bridge itself
@@ -101,8 +103,8 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	fprintf(stderr, " NOT including net %#o (bridge %#o is on dest subnet %#o, direct, have host path)\n", i, rttbl_net[i].rt_braddr, dest>>8);
       else 
 	// extra debug
-	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o %s path %p (anyway)\n", 
-		i, rttbl_net[i].rt_braddr, dest, directdestp ? "direct" : "indirect", hostpath);
+	fprintf(stderr, " NOT including net %#o bridge %#o dest %#o %s path %p cost %d (anyway)\n", 
+		i, rttbl_net[i].rt_braddr, dest, directdestp ? "direct" : "indirect", hostpath, rttbl_net[i].rt_cost);
     }
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
