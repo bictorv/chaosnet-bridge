@@ -14,4 +14,5 @@ done
 if [ $i -gt 0 ]; then
    echo "Waited $i rounds for DNS to come up";
 fi
+./cbridge-starter-services.sh &
 exec ./cbridge
