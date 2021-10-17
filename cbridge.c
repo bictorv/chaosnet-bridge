@@ -1991,10 +1991,32 @@ main(int argc, char *argv[])
       char *c = index(myname,'.');  /* only use unqualified part */
       if (c)
 	*c = '\0';
-      *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
+      // Hack hack
+      int l = strlen(myname);
+      if (l > 2) {
+	// check long host names for short alpha prefixes,
+	// and upcase them (e.g. "mx12" => "MX12")
+	int d,i;
+	for (d = 0; d < l && isalpha(myname[d]); d++);
+	if (d < 2) {
+	  for (i = 0; i < d; i++)
+	    myname[i] = toupper(myname[i]);
+	} else
+	  // long name with more alphas at start
+	  // e.g. "pegasus" => "Pegasus"
+	  *myname = toupper(*myname);	/* and prettify lowercase unix-style name */
+      } else {
+	// short host name, upcase it (e.g. "up" => "UP")
+	for (l = 0; myname[l] != '\0'; l++)
+	  myname[l] = toupper(myname[l]);
+      }
     }
   }
 
+  if (strlen(myname) > 32) {
+    // I wonder if this ever will happen.
+    fprintf(stderr,"%%%% Warning: your host name is longer than fits in a STATUS packet (32).\r\n");
+  }
 
 #if CHAOS_TLS
   // Just a little user-friendly config validation

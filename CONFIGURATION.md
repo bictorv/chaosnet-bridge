@@ -26,10 +26,10 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 
 - `chaddr` *%o*
 
-    set my default chaos address - must be set 
+    set my default chaos address - but it might be better to use explicit `myaddr` parameters for each link (except for CHUDP servers, below, which use the `chaddr` parameter, oddly)
 - `myname` *name*
 
-	set my Chaosnet host name, max 32 bytes, for STATUS. Defaults to "real" host name up to first period, first based on Chaosnet DNS name for `chaddr`, then on local host name. 
+	set my Chaosnet host name, max 32 bytes, for STATUS. If DNS is supported, the main/first/default chaos address (e.g. the `chaddr` parameter) is looked up and used for *name* (up to the first period), if available, otherwise defaults to "real" local host name up to first period, prettified a little.
 - `chudp` *portnr* [`dynamic` \| `static` \| `ipv6` \| `debug` off/on ]
 
 	set my chudp portnr (default 42042). If `dynamic`, add new chudp links [dynamically](#dynamic-links-and-routes) when receiving pkts from unknown sources. With ipv6 option, listens to both v4 and v6 (enabled also by defining a chudp link where the host has an ipv6 addr). With debug on, prints some debug stuff. 
