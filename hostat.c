@@ -33,9 +33,11 @@
 
 void usage(char *s) 
 {
-  fprintf(stderr,"usage: %s host [contact]\n"
+  fprintf(stderr,"usage: %s host [options] [contact]\n"
 	  " Handles \"simple\" connectionless Chaosnet protocols.\n"
-	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE. (Not case sensitive.)\n",
+	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE, LASTCN, FINGER.\n"
+	  "  (Contact name is not case sensitive.)\n"
+	  " Options: -q for quiet, -r for raw output, -t sec to set RFC timeout (default 30).\n",
 	  s);
   exit(1);
 }
@@ -43,7 +45,7 @@ void usage(char *s)
 char chaos_socket_directory[] = "/tmp";
 
 static int
-connect_to_named_socket(int socktype, char *path)
+connect_to_named_socket(int socktype, char *path, int quiet)
 {
   int sock, slen;
   struct sockaddr_un local, server;
@@ -55,23 +57,24 @@ connect_to_named_socket(int socktype, char *path)
   } 
   
   if ((sock = socket(AF_UNIX, socktype, 0)) < 0) {
-    perror("socket(AF_UNIX)");
+    if (!quiet) perror("socket(AF_UNIX)");
     exit(1);
   }
   slen = strlen(local.sun_path)+ 1 + sizeof(local.sun_family);
   if (bind(sock, (struct sockaddr *)&local, slen) < 0) {
-    perror("bind(local)");
+    if (!quiet) perror("bind(local)");
     exit(1);
   }
-  if (chmod(local.sun_path, 0777) < 0)
-    perror("chmod(local, 0777)");
+  if (chmod(local.sun_path, 0777) < 0) {
+    if (!quiet) perror("chmod(local, 0777)");
+  }
   
   server.sun_family = AF_UNIX;
   sprintf(server.sun_path, "%s/%s", chaos_socket_directory, path);
   slen = strlen(server.sun_path)+ 1 + sizeof(server.sun_family);
 
   if (connect(sock, (struct sockaddr *)&server, slen) < 0) {
-    perror("connect(server)");
+    if (!quiet) perror("connect(server)");
     exit(1);
   }
   return sock;
@@ -313,11 +316,11 @@ int
 main(int argc, char *argv[])
 {
   signed char c;
-  char opts[] = "r";		// raw
+  char opts[] = "qrt:";		// quiet, raw, timeout X
   char *host, *contact = "STATUS", *pname, *space;
   char buf[CH_PK_MAXLEN+2];
   char *nl, *bp;
-  int i, cnt, sock, anslen, ncnt, raw = 0;
+  int i, cnt, sock, anslen, ncnt, raw = 0, timeout = 0, quiet = 0;
   u_short src;
 
   pname = argv[0];
@@ -325,6 +328,8 @@ main(int argc, char *argv[])
   while ((c = getopt(argc, argv, opts)) != -1) {
     switch (c) {
     case 'r': raw = 1; break;
+    case 'q': quiet = 1; break;
+    case 't': timeout = atoi(optarg); break;
     default:
       fprintf(stderr,"unknown option '%c'\n", c);
       usage(pname);
@@ -340,13 +345,17 @@ main(int argc, char *argv[])
   if (argc > 1)
     contact = argv[1];
 
-  sock = connect_to_named_socket(SOCK_STREAM, "chaos_stream");
+  sock = connect_to_named_socket(SOCK_STREAM, "chaos_stream", quiet);
   
   // printf("Trying %s %s...\n", host, contact);
-  dprintf(sock,"RFC %s %s\r\n", host, contact);
+  if (timeout > 0)
+    dprintf(sock,"RFC [timeout=%d] %s %s\r\n", timeout, host, contact);
+  else
+    dprintf(sock,"RFC %s %s\r\n", host, contact);
 
   if ((cnt = recv(sock, buf, sizeof(buf), 0)) < 0) {
-    perror("recv"); exit(1);
+    if (!quiet) perror("recv"); 
+    exit(1);
   }
   buf[cnt] = '\0';
   nl = index((char *)buf, '\n');
@@ -357,16 +366,16 @@ main(int argc, char *argv[])
 
   if (strncmp(buf, "ANS ", 4) != 0) {
     if (nl != NULL) *nl = '\0';
-    fprintf(stderr,"Unexpected reply from %s: %s\n", host, buf);
+    if (!quiet) fprintf(stderr,"Unexpected reply from %s: %s\n", host, buf);
     exit(1);
   }
   if (sscanf(&buf[4],"%ho", &src) != 1) {
-    fprintf(stderr,"Cannot parse ANS source address: %s\n", buf);
+    if (!quiet) fprintf(stderr,"Cannot parse ANS source address: %s\n", buf);
     exit(1);
   }
   space = index(&buf[4], ' ');
   if ((space == NULL) || sscanf(space+1, "%d", &anslen) != 1) {
-    fprintf(stderr, "Cannot parse ANS length: %s\n", buf);
+    if (!quiet) fprintf(stderr, "Cannot parse ANS length: %s\n", buf);
     exit(1);
   }
 #if 0
@@ -376,7 +385,9 @@ main(int argc, char *argv[])
     cnt += ncnt;
     bp += ncnt;
   }
-  if (raw)
+  if (quiet)
+    ;
+  else if (raw)
     print_buf((u_char *)nl, anslen);
   else if (strcasecmp(contact, "STATUS") == 0)
     print_status((u_char *)nl, anslen, src);
@@ -392,4 +403,5 @@ main(int argc, char *argv[])
     print_lastcn((u_char *)nl, anslen, src);
   else
     print_buf((u_char *)nl, anslen);
+  exit(0);
 }
