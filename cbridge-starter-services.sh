@@ -23,12 +23,12 @@ done
 ./hostat -q -t 3 3040 || echo FYI: No route to MX-11?
 
 if [ $DOMAINP -gt 0 ]; then
-    python3 ./domain.py &;
+    python3 ./domain.py &
 fi
 if [ $NAMEDP -gt 0 ]; then
-    python3 ./named.py &;
+    python3 ./named.py &
 fi
 if [ $FINGERDP -gt 0 ]; then
-    python3 ./fingerd.py &;
+    python3 ./fingerd.py &
 fi
 
