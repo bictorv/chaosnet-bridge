@@ -65,3 +65,7 @@ Restart `cbridge` and check that/if it works. Let Björn know!
 Mostly so I remember (see also https://jamielinux.com/docs/openssl-certificate-authority/sign-server-and-client-certificates.html):
 
     openssl ca -config ../intermediate-ca.cnf -extensions usr_cert -days 375 -notext -md sha256 -in your.csr.pem -out certs/your.cert.pem
+
+and for a combined client+server certificate
+
+    openssl ca -config ../intermediate-ca.cnf -extensions usr_server_cert -days 375 -notext -md sha256 -in your.csr.pem -out certs/your.cert.pem
