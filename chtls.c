@@ -682,6 +682,7 @@ void *tls_connector(void *arg)
       close(tsock);
       SSL_free(ssl);
       // just sleep and retry - maybe conn was dropped between connect and SSL_connect
+      // @@@@ count the number of times, and warn occasionally
       sleep(3);
       continue;
 #if 0
@@ -703,6 +704,7 @@ void *tls_connector(void *arg)
 	  X509_free(ssl_server_cert);				
 	  SSL_free(ssl);
 	  close(tsock);
+	  // @@@@ warn?
 	  continue;
 	}
 	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
@@ -729,6 +731,7 @@ void *tls_connector(void *arg)
 	      // one day, do something
 	    }
 	    // just sleep and retry - maybe temporary DNS failure?
+	    // @@@@ count the number of times, and warn occasionally
 	    sleep(15);
 	    continue;
 #if 0
@@ -942,6 +945,9 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   }
   if ((wrote = SSL_write(ssl, obuf, 2+len)) <= 0) {
     int err = SSL_get_error(ssl, wrote);
+    // @@@@ Check the error, and if it is SSL_ERROR_SYSCALL,
+    // @@@@ find the syscall error and report it.
+    // @@@@ For now:
     // punt;
     fprintf(stderr,"SSL_write error %d\n", err);
     if (tls_debug)
@@ -1497,13 +1503,18 @@ validate_cert_file(char *fname)
     } else if (cmp < 0) {
       int days = days_until_expiry(notAfter);
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-      if (days < 0)
-	BIO_printf(b, "%%%% TLS: certificate %s expired %d days ago: ", fname, -days);
+      if (days == 0)
+	BIO_printf(b, "%%%% TLS: certificate %s expires TODAY: ", fname);
+      else if (days < 0)
+	BIO_printf(b, "%%%% TLS: certificate %s EXPIRED %d days ago: ", fname, -days);
       else 
 	BIO_printf(b, "%%%% TLS: certificate %s expiring in %d days: ", fname, days);
       ASN1_TIME_print(b, notAfter);
       BIO_printf(b, "\n%%%% check https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md for how to renew it!\n");
       BIO_free(b);
+      if (days <= 0)
+	// Make sure to do something about it, like terminate
+	return -1;
     }
   }
 
@@ -1511,6 +1522,7 @@ validate_cert_file(char *fname)
   client_cn = tls_get_cert_cn(cert);
   if (client_cn == NULL) {
     fprintf(stderr,"%%%% TLS: no CN found for cert in %s\n", fname);
+    // Make sure to do something about it, like terminate
     return -1;
   } else if (tls_debug) 
     fprintf(stderr,"TLS certificate %s has CN %s\n", fname, client_cn);
@@ -1542,6 +1554,8 @@ validate_cert_file(char *fname)
       else
 	fprintf(stderr,"%%%% TLS: Configured myaddr %#o does not belong to cert %s CN %s but to %s\n", 
 		tls_myaddr, fname, client_cn, hname);
+      // Make sure to do something about it, like terminate
+      return -1;
     } else if (tls_debug) 
       fprintf(stderr,"TLS found myaddr %#o in addresses of %s\n", tls_myaddr, client_cn);
   }
@@ -1562,6 +1576,8 @@ validate_cert_file(char *fname)
 	else
 	  fprintf(stderr,"%%%% TLS: myaddr %#o of tls destination %d (%s) does not belong to cert %s CN %s but to %s\n",
 		  tlsdest[i].tls_myaddr, i, tlsdest[i].tls_name, fname, client_cn, hname);
+	// Make sure to do something about it, like terminate
+	return -1;
       } else if (tls_debug)
 	fprintf(stderr,"TLS found tlsdest %d (%s) myaddr %#o in addresses of cert CN %s\n",
 		i, tlsdest[i].tls_name, tlsdest[i].tls_myaddr, client_cn);
@@ -1575,5 +1591,8 @@ validate_cert_file(char *fname)
 void init_chaos_tls()
 {
   init_openssl();
-  validate_cert_file(tls_cert_file);
+  if (validate_cert_file(tls_cert_file) < 0) {
+    fprintf(stderr,"TLS: certificate problem - see message above\n");
+    exit(1);
+  }
 }
