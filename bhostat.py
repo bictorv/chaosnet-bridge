@@ -356,6 +356,25 @@ class ChaosFinger:
             for f in free:
                 print("{:17s} {:s} (idle {:s})".format(f[0],f[1][1],f[1][2]))
 
+# The LOAD protocol
+class ChaosLoad:
+    def __init__(self,subnets, options=None):
+        self.get_load(subnets, options=options)
+    def get_load(self, subnets, options):
+        hlist = []
+        free = []
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        for data in Broadcast(subnets,"LOAD",options=options):
+            src = data[0] + data[1]*256
+            if src in hlist:
+                continue
+            hlist.append(src)
+            data = data[2:]
+            hname = host_name("{:o}".format(src))
+            fields = ", ".join(list(map(lambda x: str(x,'ascii'),data.split(b"\r\n"))))
+            print("{}: {}".format(hname,fields))
+
 # The DUMP-ROUTING-TABLE protocol
 class ChaosDumpRoutingTable:
     def __init__(self,subnets, options=None):
@@ -527,6 +546,8 @@ if __name__ == '__main__':
         c = ChaosUptime
     elif args.service.upper() == 'FINGER':
         c = ChaosFinger
+    elif args.service.upper() == 'LOAD':
+        c = ChaosLoad
     elif args.service.upper() == "LASTCN":
         c = lambda sn,ops: ChaosLastSeen(sn,ops,show_names=not(no_host_names))
     elif args.service.upper() == "ROUTING" or args.service.upper() == "DUMP-ROUTING-TABLE":

@@ -37,7 +37,7 @@ void usage(char *s)
 	  " Handles \"simple\" connectionless Chaosnet protocols.\n"
 	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE, LASTCN, FINGER.\n"
 	  "  (Contact name is not case sensitive.)\n"
-	  " Options: -q for quiet, -r for raw output, -t sec to set RFC timeout (default 30).\n",
+	  " Options: -q for quiet, -r for raw output, -a for ascii output, -t sec to set RFC timeout (default 30).\n",
 	  s);
   exit(1);
 }
@@ -135,6 +135,18 @@ void print_buf(u_char *ucp, int len)
     fprintf(stderr, " (11-chars)\r\n");
 #endif
   }
+}
+
+void print_ascii_buf(u_char *bp, int len)
+{
+  char *buf = calloc(1, len+1);
+  if (buf == NULL) {
+    perror("calloc failed");
+    exit(1);
+  }
+  // @@@@ should do standard conversion, at least \215 to \n
+  strncpy(buf, (char *)bp, len);
+  printf("%s\n", buf);
 }
 
 // ;;; Routing table format: for N subnets, N*4 bytes of data, holding N*2 words
@@ -244,6 +256,11 @@ void print_lastcn(u_char *bp, int len, u_short src)
   }
 }
 
+void print_load(u_char *bp, int len, u_short src)
+{
+  print_ascii_buf(bp, len);
+}
+
 void print_status(u_char *bp, int len, u_short src)
 {
   u_char hname[32+1];
@@ -316,11 +333,11 @@ int
 main(int argc, char *argv[])
 {
   signed char c;
-  char opts[] = "qrt:";		// quiet, raw, timeout X
+  char opts[] = "qrat:";		// quiet, raw, timeout X
   char *host, *contact = "STATUS", *pname, *space;
   char buf[CH_PK_MAXLEN+2];
   char *nl, *bp;
-  int i, cnt, sock, anslen, ncnt, raw = 0, timeout = 0, quiet = 0;
+  int i, cnt, sock, anslen, ncnt, raw = 0, ascii = 0, timeout = 0, quiet = 0;
   u_short src;
 
   pname = argv[0];
@@ -328,6 +345,7 @@ main(int argc, char *argv[])
   while ((c = getopt(argc, argv, opts)) != -1) {
     switch (c) {
     case 'r': raw = 1; break;
+    case 'a': ascii = 1; break;
     case 'q': quiet = 1; break;
     case 't': timeout = atoi(optarg); break;
     default:
@@ -401,6 +419,10 @@ main(int argc, char *argv[])
     print_finger_info((u_char *)nl, anslen, host, src);
   else if (strcasecmp(contact, "LASTCN") == 0)
     print_lastcn((u_char *)nl, anslen, src);
+  else if (strcasecmp(contact, "LOAD") == 0)
+    print_load((u_char *)nl, anslen, src);
+  else if (ascii) 
+    print_ascii_buf((u_char *)nl, anslen);
   else
     print_buf((u_char *)nl, anslen);
   exit(0);
