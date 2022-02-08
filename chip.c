@@ -418,6 +418,7 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
 
   // check Chaos trailer (incl checksum)
   if (chlen < xlen) {
+    if (chip_debug || debug)
     fprintf(stderr,"CHIP: short packet (%s) received from %#o (%s), no room for hw trailer: chaos len %d (nbytes %d) (expected %d)\n",
 	    ch_opcode_name(ch_opcode(ch)),
 	    ch_srcaddr(ch), ip46_ntoa(sa, ipaddr, sizeof(ipaddr)),
@@ -426,26 +427,34 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
       dumppkt_raw(chdata, chlen);
       ch_dumpkt(chdata, chlen);
     }
-    PTLOCKN(linktab_lock,"linktab_lock");
-    linktab[srcaddr>>8].pkt_badlen++;
-    PTUNLOCKN(linktab_lock,"linktab_lock");
-    return;
+    if (chlen != (xlen-CHAOS_HW_TRAILERSIZE)) {
+      if (chip_debug || debug) fprintf(stderr,"CHIP: Dropping packet\n");
+      PTLOCKN(linktab_lock,"linktab_lock");
+      linktab[srcaddr>>8].pkt_badlen++;
+      PTUNLOCKN(linktab_lock,"linktab_lock");
+      return;
+    } else {
+      if (chip_debug || debug) fprintf(stderr,"CHIP: letting it pass, just trailer missing\n");
+    }
   } else if (chlen > xlen) {
     if (chip_debug || debug) fprintf(stderr,"CHIP: long pkt received: %d. expected %d\n", chlen, xlen);
   }
 
   if (chip_debug || debug) fprintf(stderr,"CHIP: sockaddr len %d, family %d\n", salen, ((struct sockaddr *)&sa)->sa_family);
-  // Process trailer info
-  struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
-  srcaddr = ntohs(tr->ch_hw_srcaddr);
-  int cks = ch_checksum(chdata, chlen);
-  if (cks != 0) {
-    fprintf(stderr,"%%%% CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
-    PTLOCKN(linktab_lock,"linktab_lock");
-    linktab[srcaddr>>8].pkt_crcerr++;
-    PTUNLOCKN(linktab_lock,"linktab_lock");
-    return;
-  }
+  // Process trailer info, if there is one
+  if (chlen == xlen) {
+    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&chdata[chlen-CHAOS_HW_TRAILERSIZE];
+    srcaddr = ntohs(tr->ch_hw_srcaddr);
+    int cks = ch_checksum(chdata, chlen);
+    if (cks != 0) {
+      fprintf(stderr,"%%%% CHIP: bad checksum %#x from source %#o (%s)\n", cks, srcaddr, ip46_ntoa(sa, ipaddr, sizeof(ipaddr)));
+      PTLOCKN(linktab_lock,"linktab_lock");
+      linktab[srcaddr>>8].pkt_crcerr++;
+      PTUNLOCKN(linktab_lock,"linktab_lock");
+      return;
+    }
+  } else
+    srcaddr = ch_srcaddr(ch);
 
   if (is_mychaddr(srcaddr)) {
     if (chip_debug || debug) fprintf(stderr,"CHIP: received pkt from myself, dropping it\n");
