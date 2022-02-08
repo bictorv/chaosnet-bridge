@@ -262,7 +262,7 @@ class Status:
             data = data[2:]
             dlen = len(data)
             # First is the name of the node
-            hname = str(data[:32].rstrip(b'\0x00'),'ascii')
+            hname = str(data[:32].rstrip(b'\x00'),'ascii')
             if hname in hlist:
                 if debug:
                     print("Extra response from {} ({:o})".format(hname,src), file=sys.stderr)
@@ -271,13 +271,15 @@ class Status:
             fstart = 32
             statuses = dict()
             try:
-                while fstart+14 < dlen:
+                while fstart+4 < dlen:
                     # Two 16-bit words of subnet and field length
                     subnet,flen = unpack('H'*2,data[fstart:fstart+4])
                     # But subnet is +0400
                     assert (subnet > 0o400) and (subnet < 0o1000)
                     subnet -= 0o400
                     # Then a number of doublewords of info
+                    if fstart+flen >= dlen:
+                        break
                     fields = unpack('{}I'.format(int(flen/2)), data[fstart+4:fstart+4+(flen*2)])
                     statuses[subnet] = dict(zip(('inputs','outputs','aborted','lost','crc_errors','hardware','bad_length','rejected'),
                                                     fields))

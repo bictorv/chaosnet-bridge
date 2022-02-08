@@ -285,17 +285,22 @@ void print_status(u_char *bp, int len, u_short src)
     u_short elen = (*dp++);
     u_int in = (*dp++); in |= ((*dp++)<<16);
     u_int out = (*dp++); out |= ((*dp++)<<16);
-    u_int aborted = (*dp++); aborted |= ((*dp++)<<16);
-    u_int lost = (*dp++); lost |= ((*dp++)<<16);
-    u_int crcerr = (*dp++); crcerr |= ((*dp++)<<16);
-    u_int crcerr_post = (*dp++); crcerr_post |= ((*dp++)<<16);
-    u_int badlen = (*dp++); badlen |= ((*dp++)<<16);
-    u_int rejected = 0;
-    if (elen == 16) {
-      rejected = (*dp++); rejected |= ((*dp++)<<16);
+    if (elen == 4) {		/* TOPS-20 */
+      printf("%#o \t%-8d %-8d\n",
+	     subnet, in, out);
+    } else {      
+      u_int aborted = (*dp++); aborted |= ((*dp++)<<16);
+      u_int lost = (*dp++); lost |= ((*dp++)<<16);
+      u_int crcerr = (*dp++); crcerr |= ((*dp++)<<16);
+      u_int crcerr_post = (*dp++); crcerr_post |= ((*dp++)<<16);
+      u_int badlen = (*dp++); badlen |= ((*dp++)<<16);
+      u_int rejected = 0;
+      if (elen == 16) {
+	rejected = (*dp++); rejected |= ((*dp++)<<16);
+      }
+      printf("%#o \t%-8d %-8d %-8d %-8d %-8d %-8d %-8d %-8d\n",
+	     subnet, in, out, aborted, lost, crcerr, crcerr_post, badlen, rejected);
     }
-    printf("%#o \t%-8d %-8d %-8d %-8d %-8d %-8d %-8d %-8d\n",
-	   subnet, in, out, aborted, lost, crcerr, crcerr_post, badlen, rejected);
   }
 }
 
