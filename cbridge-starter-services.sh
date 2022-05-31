@@ -2,11 +2,16 @@
 # Starter script for Chaosnet services not already built-in in cbridge (typically stream services).
 
 # Start DOMAIN server (the stream protocol; cbridge has the simple DNS protocol built-in)
-DOMAINP=1
+DOMAINP=0
 # The NAME protocol (corresponding to TCP finger, port 79)
 NAMEDP=0
 # The FINGER protocol (for lisp machines and other single-user machines)
 FINGERDP=0
+# The LOAD protocol
+LOADDP=0
+
+# Read config file
+[ -f ./cbridge-services.conf ] && . ./cbridge-services.conf
 
 # first allow cbridge to start
 sleep 3
@@ -20,7 +25,7 @@ while [ ! -S /tmp/chaos_stream ]; do
     sleep 2;
 done
 # Run anyway, but notify user
-./hostat -q -t 3 3040 || echo FYI: No route to MX-11?
+./hostat -q -t 3 3040 || echo FYI: No route to Router.Chaosnet.NET?
 
 if [ $DOMAINP -gt 0 ]; then
     python3 ./domain.py &
@@ -30,5 +35,8 @@ if [ $NAMEDP -gt 0 ]; then
 fi
 if [ $FINGERDP -gt 0 ]; then
     python3 ./fingerd.py &
+fi
+if [ $LOADDP -gt 0 ]; then
+    python3 ./loadd.py &
 fi
 

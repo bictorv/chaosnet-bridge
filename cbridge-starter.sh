@@ -1,5 +1,5 @@
 #!/bin/sh
-# Starter script for use with systemctl service cbridge.service.
+# Starter script for use with systemctl service cbridge.service or launchd net.chaosnet.cbridge
 #
 # This is ridiculous.
 # I would have expected After=network.online ns-lookup.target to take care of this,
@@ -13,6 +13,10 @@ while ! /usr/bin/host -t a router.chaosnet.net > /dev/null; do
 done
 if [ $i -gt 0 ]; then
    echo "Waited $i rounds for DNS to come up";
+fi
+# Maybe cd before starting cbridge
+if [ $# -gt 0 ]; then
+    cd $1
 fi
 ./cbridge-starter-services.sh &
 exec ./cbridge
