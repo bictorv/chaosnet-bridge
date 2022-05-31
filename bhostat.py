@@ -566,4 +566,7 @@ if __name__ == '__main__':
         print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table) or LASTCN (in any case)".format(args.service))
         exit(1)
     opts = dict(timeout=args.timeout, retrans=args.retrans)
-    c(args.subnets,opts)
+    try:
+        c(args.subnets,opts)
+    except KeyboardInterrupt:
+        pass
