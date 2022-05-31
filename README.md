@@ -94,6 +94,8 @@ When configured to use Ethernet, ARP for Chaosnet is used:
 - ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
 - Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
 
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
+
 ### Chaos-over-IP
 
 Chaosnet packets are sent in IP/IPv6 packets, using the standard
@@ -111,6 +113,8 @@ Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
 Yet Implemented.
 
 Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` (on Mac, using `port`).
+
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
 
 ### Chaos-over-TLS
 
