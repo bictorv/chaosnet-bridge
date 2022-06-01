@@ -11,6 +11,9 @@
 -- To show only a specific host, and skip all RUT packets (assuming IP header length 20):
 -- sudo tshark -X lua_script:/home/pi/.wireshark/plugins/chaos.lua -O chaos ip proto 16 and ip host 10.0.1.73 and 'ip[21] != 8'
 
+-- Example combination:
+-- sudo tshark -X lua_script:chaos.lua -O chaos \(ether proto 0x804 and 'ether[15] != 8'\) or \(ip proto 16 and 'ip[21] != 8'\)
+
 -- For the Wireshark lua stuff, see https://www.wireshark.org/docs/wsdg_html_chunked/lua_module_Tvb.html
 
 chaos = Proto("chaos", "Chaosnet")
@@ -24,9 +27,25 @@ chaos.experts = { ef_too_short }
 local opc_names = { "RFC", "OPN", "CLS", "FWD", "ANS", "SNS", "STS",
        "RUT", "LOS", "LSN", "MNT", "EOF", "UNC", "BRD" }
 
+-- Parse a BRD packet's subnet mask, returning the number of nets in it, and the list of subnetwork numbers
+function parse_subnet_mask(tvb, len)
+   -- lua is a pretty ghastly language, isn't it?
+   local nets = {}
+   local nnets = 0
+   for i=0,len-1 do
+      for j=0,7 do
+	 local r = tvb(i,1):int()
+	 if r % (2^j + 2^j) >= 2^j then -- see http://lua-users.org/wiki/BitwiseOperators
+	    nets[nnets+1] = i*8+j
+	    nnets = nnets + 1
+	 end
+      end
+   end
+   return nnets,nets
+end
+
 function chaos.dissector(tvb, pinfo, tree)
-   -- print("CHAOS dissector starting")
-   pinfo.cols.protocol = "CHAOS"
+   pinfo.cols.protocol:set("Chaos") -- keep it terse
 
    local pktlen = tvb:reported_length_remaining()
    local pktlen_remaining = pktlen
@@ -42,33 +61,65 @@ function chaos.dissector(tvb, pinfo, tree)
    local chaos_tree = subtree:add(tvb(0, CHAOS_HDR_LEN), "Header")
    -- Note: MSB is opcode, but 16b-word is swapped
    local opcode = tvb(1, 1):uint()
-   chaos_tree:add(tvb(0, 2), "Operation: " .. string.format("%#o",opcode) .. " (" .. opc_names[opcode] .. ")")
+   local opdesc = ""
+   if opcode > 0 and opcode <= #opc_names then
+      opdesc = " (" .. opc_names[opcode] .. ")"
+   elseif opcode >= 128 and opcode < 192 then -- #o200 and #o300 respectively
+      opdesc = " (DAT)"
+   elseif opcode >= 192 then
+      opdesc = " (DAT2)"
+   end
+   chaos_tree:add(tvb(0, 2), "Operation: " .. string.format("%#o",opcode) .. opdesc)
+      
    --- 4 bit forwarding count, 12 bit data count
    -- note swappedness
    local d = tvb:range(2, 2):le_int()
    local forward_count = bit.rshift(d,12)
    local data_count = bit.band(d, 0xfff)
-   chaos_tree:add(tvb(2, 2), "FC: " .. forward_count .. ", Len: " .. data_count)
-   chaos_tree:add(tvb(4, 4), "Dest address " .. string.format("%#o",tvb(4, 2):le_uint()) ..
-                             ", index " .. tvb(6, 2):le_uint())
-   chaos_tree:add(tvb(8, 4), "Source address " .. string.format("%#o",tvb(8, 2):le_uint()) ..
-		             ", index " .. tvb(10, 2):le_uint())
-   chaos_tree:add(tvb(12, 4), "Packet nr: " .. tvb(12, 2):le_uint() ..
-		              ", Ack nr: " .. tvb(14, 2):le_uint())
+   local src = string.format("%#o",tvb(8, 2):le_uint())
+   local srcidx = tvb(10, 2):le_uint()
+   local dest = string.format("%#o",tvb(4, 2):le_uint())
+   local destidx = tvb(6, 2):le_uint()
+   local pktno = tvb(12, 2):le_uint()
+   local ackno = tvb(14, 2):le_uint()
+   -- add the brief info
+   pinfo.cols.info:set("<"..src..","..srcidx.."> => <"..dest..","..destidx..">"..opdesc)
+   chaos_tree:add(tvb(2, 2), "Fwd count: " .. forward_count .. ", Data length: " .. data_count)
+   chaos_tree:add(tvb(4, 4), "Dest address " .. dest .. ", index " .. destidx)
+   chaos_tree:add(tvb(8, 4), "Source address " .. src .. ", index " .. srcidx)
+   chaos_tree:add(tvb(12, 4), "Packet nr: " .. pktno .. ", Ack nr: " .. ackno)
 
    -- Data.
    local repr
+   local truncated = data_count > 64 and "..." or ""
    if opcode == 1 or opcode == 3 or opcode == 9 then		-- RFC or CLS or LOS
-      repr = "String ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()
+      local s = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+      repr = "String ("..data_count.."): " .. s
+      pinfo.cols.info:append(" "..s)
+   elseif opcode == 14 then	-- BRD
+      local ackn = tvb(14,2):le_uint() -- Ack field says how long the subnet bitmap is
+      local subs = tvb(CHAOS_HDR_LEN, ackn) -- subnet mask is here
+      local nn,n = parse_subnet_mask(subs,ackn) -- parse it, get number of nets and a list of them
+      local contact = tvb(CHAOS_HDR_LEN+ackn,data_count-ackn):string() -- contact name
+      local ns
+      if nn > 5 then
+	 ns = n[1].." to "..(#n) -- if many, only give range
+      else
+	 ns = table.concat(n,",") -- else give the full list
+      end
+      repr = "Broadcast to "..nn.." subnets ("..ns.."), contact: "..contact
    else
-      repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64))
+      -- Show it as a string if it is DAT
+      if opcode >= 128 and opcode < 192 then
+	 repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+      else
+	 repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64))..truncated
+      end
    end
    local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), repr)
 
-   -- Fin.
-   pktlen_remaining = pktlen_remaining - CHAOS_HDR_LEN - data_count
-   -- print("CHAOS dissector finished: remaining", pktlen_remaining)
-   return pktlen_remaining
+   -- End. Return the number of bytes we consumed
+   return CHAOS_HDR_LEN + data_count
 end
 
 -- Add it for Chaos-over-IP
