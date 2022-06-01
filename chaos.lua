@@ -92,33 +92,42 @@ function chaos.dissector(tvb, pinfo, tree)
    chaos_tree:add(tvb(12, 4), "Packet nr: " .. pktno .. ", Ack nr: " .. ackno)
 
    -- Data.
-   local repr
-   local truncated = data_count > 64 and "..." or ""
-   if opcode == 1 or opcode == 3 or opcode == 9 then		-- RFC or CLS or LOS
-      local s = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
-      repr = "String ("..data_count.."): " .. s
-      pinfo.cols.info:append(" "..s)
-   elseif opcode == 14 then	-- BRD
-      local ackn = tvb(14,2):le_uint() -- Ack field says how long the subnet bitmap is
-      local subs = tvb(CHAOS_HDR_LEN, ackn) -- subnet mask is here
-      local nn,n = parse_subnet_mask(subs,ackn) -- parse it, get number of nets and a list of them
-      local contact = tvb(CHAOS_HDR_LEN+ackn,data_count-ackn):string() -- contact name
-      local ns
-      if nn > 5 then
-	 ns = n[1].." to "..(#n) -- if many, only give range
-      else
-	 ns = table.concat(n,",") -- else give the full list
+   if opcode == 8 then		-- RUT, complex content
+      local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), "RUT data (routing table)")
+      for i=0,data_count-4,4 do
+	 local netnum = tvb(CHAOS_HDR_LEN+i,2):le_uint()
+	 local cost = tvb(CHAOS_HDR_LEN+i+2,2):le_uint()
+	 data_tree:add(tvb(CHAOS_HDR_LEN+i,4), "Net "..string.format("%#o",netnum).." cost "..cost)
       end
-      repr = "Broadcast to "..nn.." subnets ("..ns.."), contact: "..contact
    else
-      -- Show it as a string if it is DAT
-      if opcode >= 128 and opcode < 192 then
-	 repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+      local repr
+      local truncated = data_count > 64 and "..." or ""
+      if opcode == 1 or opcode == 3 or opcode == 9 then		-- RFC or CLS or LOS
+	 local s = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+	 repr = "String ("..data_count.."): " .. s
+	 pinfo.cols.info:append(" "..s)
+      elseif opcode == 14 then	-- BRD
+	 local ackn = tvb(14,2):le_uint() -- Ack field says how long the subnet bitmap is
+	 local subs = tvb(CHAOS_HDR_LEN, ackn) -- subnet mask is here
+	 local nn,n = parse_subnet_mask(subs,ackn) -- parse it, get number of nets and a list of them
+	 local contact = tvb(CHAOS_HDR_LEN+ackn,data_count-ackn):string() -- contact name
+	 local ns
+	 if nn > 5 then
+	    ns = n[1].." to "..((#n)-1) -- if many, only give range (zero-based)
+	 else
+	    ns = table.concat(n,",") -- else give the full list
+	 end
+	 repr = "Broadcast to "..nn.." subnet"..(nn == 1 and "" or "s").." ("..ns.."), contact: "..contact
       else
-	 repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64))..truncated
+	 -- Show it as a string if it is DAT
+	 if opcode >= 128 and opcode < 192 then
+	    repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+	 else
+	    repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64))..truncated
+	 end
       end
+      local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), repr)
    end
-   local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), repr)
 
    -- End. Return the number of bytes we consumed
    return CHAOS_HDR_LEN + data_count
