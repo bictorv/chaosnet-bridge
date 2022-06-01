@@ -1,18 +1,20 @@
 -- Chaosnet dissector for Wireshark, based on AMS hack for Chaos-over-UDP
--- Install in ~/.wireshark/plugins, but you might still need to use the -X option (see below).
+-- Install in ~/.config/wireshark/plugins (for Linux or macOS).
 
 -- To show Chaosnet packets on Ethernet
--- sudo tshark -X lua_script:/home/pi/.wireshark/plugins/chaos.lua -O chaos ether proto 0x804
+-- sudo tshark -O chaos ether proto 0x804
 -- To skip all RUT packets (assuming ether header length 14):
--- sudo tshark -X lua_script:/home/pi/.wireshark/plugins/chaos.lua -O chaos ether proto 0x804 and 'ether[15] != 8'
+-- sudo tshark -O chaos ether proto 0x804 and 'ether[15] != 8'
 
 -- To show only Chaos-over-IP packets (IP protocol 16):
--- sudo tshark -X lua_script:/home/pi/.wireshark/plugins/chaos.lua -O chaos ip proto 16
+-- sudo tshark -O chaos ip proto 16
 -- To show only a specific host, and skip all RUT packets (assuming IP header length 20):
--- sudo tshark -X lua_script:/home/pi/.wireshark/plugins/chaos.lua -O chaos ip proto 16 and ip host 10.0.1.73 and 'ip[21] != 8'
+-- sudo tshark -O chaos ip proto 16 and ip host 10.0.1.73 and 'ip[21] != 8'
 
 -- Example combination:
--- sudo tshark -X lua_script:chaos.lua -O chaos \(ether proto 0x804 and 'ether[15] != 8'\) or \(ip proto 16 and 'ip[21] != 8'\)
+-- sudo tshark -O chaos \(ether proto 0x804 and 'ether[15] != 8'\) or \(ip proto 16 and 'ip[21] != 8'\)
+
+-- To see less detail, skip "-O chaos".
 
 -- For the Wireshark lua stuff, see https://www.wireshark.org/docs/wsdg_html_chunked/lua_module_Tvb.html
 
