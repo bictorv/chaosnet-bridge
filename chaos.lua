@@ -74,7 +74,8 @@ function chaos.dissector(tvb, pinfo, tree)
    -- It would be nice to just call this with fourth arg true if Chaos-over-UDP case (big-endian),
    -- but adding an argument doesn't seem to work, so here is a horrible workaround.
    -- port_type seems to be 0 for Chaos-over-Ether and Chaos-over-IP, but 3 for Chaos-over-UDP.
-   if pinfo['port_type'] == 3 then -- @@@@ aargh
+   -- Note: Need to do something when CHUDP v2 gets done, with standard order of bytes.
+   if pinfo['port_type'] == 3 then -- aargh
       bendian = true
    end
    -- Shows protocol fields correctly, but for strings only suffixes [BE] to indicated they are swapped.

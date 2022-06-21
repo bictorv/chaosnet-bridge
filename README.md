@@ -68,6 +68,8 @@ When configured to use Chaos-over-UDP ("chudp", see the [configuration](CONFIGUR
   minutes or so, to support dynamic DNS entries (hosts changing
   addresses). (Maybe this should be configurable.)
 
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
+
 ### Chaos-over-Unix-sockets
 
 Chaosnet packets are sent over a named Unix socket, with a 4-byte
