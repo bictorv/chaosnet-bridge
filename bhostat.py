@@ -192,7 +192,7 @@ def host_name(addr, timeout=2):
     s = Simple(addr, "STATUS", options=dict(timeout=timeout))
     src, data = s.result()
     if src:
-        name = str(data[:32].rstrip(b'\0x00'), "ascii")
+        name = str(data[:32].rstrip(b'\x00'), "ascii")
         host_names[addr] = name
     else:
         if debug:
