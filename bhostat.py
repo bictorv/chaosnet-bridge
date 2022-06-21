@@ -31,6 +31,9 @@ packet_address = '/tmp/chaos_packet'
 
 debug = False
 
+# Default DNS resolver for Chaosnet
+dns_resolver = 'DNS.Chaosnet.NET'
+dns_resolver_address = None
   
 # Chaos packet opcodes
 class Opcode(IntEnum):
@@ -148,10 +151,11 @@ class Simple:
             print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data), file=sys.stderr)
             return None
 
-def dns_name_of_address(addrstring, onlyfirst=True):
+def dns_name_of_address(addrstring, onlyfirst=True, timeout=5):
     name = "{}.CH-ADDR.NET.".format(addrstring)
     try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH), '130.238.19.25')
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH),
+                              dns_resolver_address, timeout=timeout)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.PTR:
                     for d in t:
@@ -166,14 +170,17 @@ def dns_name_of_address(addrstring, onlyfirst=True):
         # dnspython not updated with support for Chaos records?
         pass
         # print("Error", e, file=sys.stderr)
+    except dns.exception.Timeout as e:
+        if debug:
+            print("Timeout error:", e, file=sys.stderr)
     except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
+        print("Error:", e, file=sys.stderr)
 
 
 host_names = dict()
 # Prefer not to ask for a host's name
 no_host_names = False
-def host_name(addr):
+def host_name(addr, timeout=2):
     if isinstance(addr,int):
         if addr < 0o400:
             return addr
@@ -182,16 +189,23 @@ def host_name(addr):
     #     return addr
     if addr in host_names:
         return host_names[addr]
-    s = Simple(addr, "STATUS", options=dict(timeout=2))
+    s = Simple(addr, "STATUS", options=dict(timeout=timeout))
     src, data = s.result()
     if src:
         name = str(data[:32].rstrip(b'\0x00'), "ascii")
         host_names[addr] = name
     else:
-        name = dns_name_of_address(addr)
-        host_names[addr] = name
+        if debug:
+            print("No STATUS from {:s}".format(addr), file=sys.stderr)
+        name = dns_name_of_address(addr, timeout=timeout)
+        if debug:
+            print("Got DNS for {:s}: {}".format(addr,name), file=sys.stderr)
+        if name is None:
+            host_names[addr] = addr
+        else:
+            host_names[addr] = name
         # name = "{}".format(addr)
-    return name
+    return host_names[addr]
 
 class Broadcast:
     conn = None
@@ -422,6 +436,8 @@ class ChaosLastSeen:
             if src in hlist:
                 continue
             hlist.append(src)
+            if debug:
+                print("Got LASTCN input from {:o}".format(src), file=sys.stderr)
             data = data[2:]
             hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) # if not(no_host_names) else "{:o}".format(src)
             cn = dict()
@@ -524,12 +540,14 @@ if __name__ == '__main__':
     parser.add_argument("-r","--retrans", type=int, default=500,
                             help="Retransmission interval in milliseconds")
     parser.add_argument("-s","--service", default="STATUS",
-                            help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING)")
+                            help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING, LOAD, LASTCN, DNS)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     parser.add_argument("-n",'--no-host-names', dest='no_host_names', action='store_true',
                             help="Prefer not to ask hosts for their names")
-    parser.add_argument("--name", help="Name to ask for address of (DNS)", default="Router.Chaosnet.NET")
+    parser.add_argument("-R","--resolver", default=dns_resolver,
+                            help="DNS resolver to use (over IP) for Chaosnet data")
+    parser.add_argument("--name", help="Name to ask for Chaosnet data of (DNS)", default="Router.Chaosnet.NET")
     parser.add_argument("--rtype", help="Resource to ask for (DNS)", default="a")
     args = parser.parse_args()
     if args.debug:
@@ -537,6 +555,8 @@ if __name__ == '__main__':
         debug = True
     if args.no_host_names:
         no_host_names = True
+    if args.resolver:
+        dns_resolver_address = socket.gethostbyname(args.resolver)
     if -1 in args.subnets and len(args.subnets) != 1:
         # "all" supersedes all other
         args.subnets = [-1]
@@ -563,7 +583,7 @@ if __name__ == '__main__':
         print("Values: {}".format(c.get_values()))
         exit(0)
     else:
-        print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table) or LASTCN (in any case)".format(args.service))
+        print("Bad service arg {}, please use STATUS, TIME, UPTIME, FINGER, (dump-)ROUTING(-table), LOAD, DNS or LASTCN (in any case)".format(args.service))
         exit(1)
     opts = dict(timeout=args.timeout, retrans=args.retrans)
     try:

@@ -27,7 +27,9 @@ from concurrent.futures import ThreadPoolExecutor
 # The directory of this need to match the "socketdir" ncp setting in cbridge.
 stream_socket_address = '/tmp/chaos_stream'
 # This is the default forwarding server
-dns_forwarder = "130.238.19.25"
+dns_forwarder_name = 'DNS.Chaosnet.NET'
+dns_forwarder_addr = None
+
 # -d
 debug = False
 
@@ -154,8 +156,8 @@ class Domain_Server:
                     print("Got request len {} from {}".format(len(request),rfc), file=sys.stderr)
                 msg = dns.message.from_wire(request)
                 if debug:
-                    print("Made DNS message, sending to {}".format(dns_forwarder), file=sys.stderr)
-                resp = dns.query.tcp(msg, dns_forwarder)
+                    print("Made DNS message, sending to {}".format(dns_forwarder_addr), file=sys.stderr)
+                resp = dns.query.tcp(msg, dns_forwarder_addr)
                 if debug:
                     print("Got DNS response {}, sending to {}".format(resp,rfc), file=sys.stderr)
                 wresp = resp.to_wire()
@@ -179,15 +181,24 @@ debug = False
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet DOMAIN server')
-    parser.add_argument("-f","--forwarder", default="130.238.19.25",
+    parser.add_argument("-f","--forwarder", default=dns_forwarder_name,
                             help="DNS forwarder")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     args = parser.parse_args()
     if args.forwarder:
-        dns_forwarder = args.forwarder
+        try:
+            # Try to parse it as an IPv4 or IPv6 numeric address
+            if socket.inet_pton(socket.AF_INET, args.forwarder):
+                dns_forwarder_addr = args.forwarder
+            if socket.inet_pton(socket.AF_INET6, args.forwarder):
+                dns_forwarder_addr = args.forwarder
+        except:
+            # and then as a name. OK, this misses ipv6, but...
+            dns_forwarder_addr = socket.gethostbyname(args.forwarder)
     if args.debug:
-        print(args)
+        print(args, file=sys.stderr)
+        print("DNS forwarder address: {}".format(dns_forwarder_addr), file=sys.stderr)
         debug = True
     # Start e.g. 5 parallel servers and keep them going
     while True:
