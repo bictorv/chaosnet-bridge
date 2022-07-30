@@ -650,7 +650,7 @@ try_forward_individual_dest(struct chroute *rt, u_short dchad, u_char *data, int
 {
   int i;
   for (i = 0; i < chipdest_len; i++) {
-    if ( // maybe check broadcast at some point
+    if ( // no special broadcast check needed
 	/* direct link */
 	(chipdest[i].chip_addr == dchad) 
 	||

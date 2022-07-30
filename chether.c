@@ -1480,6 +1480,7 @@ forward_on_ether(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   for (i = 0; i < nchethdest; i++) {
     if (dchad == 0) {		/* broadcast */
       // If it's a BRD, send on all interfaces; otherwise only on the one matching the source (hmm)
+      // @@@@ should match the route, rather?
       if ((opc == CHOP_BRD) || ((schad & 0xff00) == chethdest[i].cheth_addr)) {
 	if (chether_debug || debug) fprintf(stderr,"Forward: Broadcasting on ether %s from %#o\n", chethdest[i].cheth_ifname, schad);
 	send_packet(&chethdest[i], chethdest[i].cheth_chfd, ETHERTYPE_CHAOS, eth_brd, ETHER_ADDR_LEN, data, dlen);
