@@ -132,6 +132,11 @@ function chaos.dissector(tvb, pinfo, tree)
 	 local cost = bendian and tvb(CHAOS_HDR_LEN+i+2,2):uint() or tvb(CHAOS_HDR_LEN+i+2,2):le_uint()
 	 data_tree:add(tvb(CHAOS_HDR_LEN+i,4), "Net "..string.format("%#o",netnum).." cost "..cost)
       end
+   elseif opcode == 2 or opcode == 7 then	-- OPN or STS
+      local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), "Window management data")
+      local rcpt = bendian and tvb:range(CHAOS_HDR_LEN, 2):uint() or tvb:range(CHAOS_HDR_LEN, 2):le_uint()
+      local wind = bendian and tvb:range(CHAOS_HDR_LEN+2, 2):uint() or tvb:range(CHAOS_HDR_LEN+2, 2):le_uint()
+      data_tree:add(tvb(CHAOS_HDR_LEN, 4), "Receipt pkt "..rcpt..", window size "..wind)
    else
       local repr
       local truncated = data_count > 64 and "..." or ""
