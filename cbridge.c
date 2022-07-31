@@ -1050,6 +1050,11 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
     if (debug) fprintf(stderr,"%%%% Not sending RUT on %s link to %#o\n",
 		       rt_typename(rt->rt_link), rt->rt_dest);
     return;			/* ignore */
+#if 1
+  default:
+    // Destination of RUT packets should always be 0
+    set_ch_destaddr(cha, 0);	/* broadcast */
+#else    
 #if CHAOS_ETHERP
   case LINK_ETHER:
     set_ch_destaddr(cha, 0);	/* broadcast */
@@ -1075,6 +1080,7 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
       // direct route
       set_ch_destaddr(cha, rt->rt_dest);
     break;
+#endif
   }
   PTLOCKN(linktab_lock,"linktab_lock");
   if (ch_destaddr(cha) == 0)
