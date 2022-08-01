@@ -108,11 +108,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
     }
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
-#if 0
-  set_ch_destaddr(cha, ((dest & 0xff) == 0) ? 0 : dest );  /* well... */
-#else
-  set_ch_destaddr(cha, 0);	/* well no, RUT pkts must be sent to dest 0 */
-#endif
+  set_ch_destaddr(cha, 0);	/* RUT pkts must be sent to dest 0 */
   set_ch_nbytes(cha,nroutes*4);
   if (ch_nbytes(cha) > 0)
     return ch_nbytes(cha)+CHAOS_HEADERSIZE;
