@@ -1045,37 +1045,14 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
   // Update source address
   set_ch_srcaddr(cha, (mya == 0 ? mychaddr[0] : mya));
 
-  switch (rt->rt_link) {
-  case LINK_NOLINK:
+  if (rt->rt_link == LINK_NOLINK) {
     if (debug) fprintf(stderr,"%%%% Not sending RUT on %s link to %#o\n",
 		       rt_typename(rt->rt_link), rt->rt_dest);
     return;			/* ignore */
-#if CHAOS_ETHERP
-  case LINK_ETHER:
-    set_ch_destaddr(cha, 0);	/* broadcast */
-    break;
-#endif // CHAOS_ETHERP
-  case LINK_UNIXSOCK:
-    if ((rt->rt_dest & 0xff) != 0)
-      set_ch_destaddr(cha, rt->rt_dest);  /* host */
-    else
-      set_ch_destaddr(cha, 0);	/* subnet (broadcast) - does chaosd handle this? */
-    break;
-#if CHAOS_TLS
-  case LINK_TLS: // fall through
-#endif
-#if CHAOS_IP
-  case LINK_IP: // fall through
-#endif
-  case LINK_CHUDP:
-    if ((rt->rt_dest & 0xff) == 0) {
-      // subnet route - send it to the bridge
-      set_ch_destaddr(cha, rt->rt_braddr);
-    } else
-      // direct route
-      set_ch_destaddr(cha, rt->rt_dest);
-    break;
   }
+  // Destination of RUT packets should always be 0
+  set_ch_destaddr(cha, 0);	/* broadcast */
+
   PTLOCKN(linktab_lock,"linktab_lock");
   if (ch_destaddr(cha) == 0)
     linktab[rt->rt_dest >> 8].pkt_out++;

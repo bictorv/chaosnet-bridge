@@ -503,10 +503,6 @@ forward_on_chudp(struct chroute *rt, u_short schad, u_short dchad, struct chaos_
   PTLOCKN(chudp_lock,"chudp_lock");
   for (i = 0; (i < chudpdest_len) && !found; i++) {
     if (
-#if 0
-	dchad == 0		/* broadcast: goes on all links */
-	|| 
-#endif
 	/* direct link to destination */
 	(chudpdest[i].chu_addr == dchad)
 	/* route to bridge */
