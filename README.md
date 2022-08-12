@@ -34,7 +34,7 @@ Use cases could be
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
   with others using usim (use a Chaos-over-UDP or -over-TLS or
   -over-IP link between them). 
-- connecting remote Chaosnet-over-IP networks, e.g. in case you run a
+- connecting remote Chaosnet-over-IP networks, e.g. in case you run TOPS-20 with Chaosnet, or a
   [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
 - and interconnecting these, of course!
 
@@ -102,7 +102,7 @@ For tracing traffic, you might want to use [tshark](https://www.wireshark.org/do
 
 Chaosnet packets are sent in IP/IPv6 packets, using the standard
 [IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
-Packets are sent in "big-endian" order, with a ["hardware
+Packets are sent in "big-endian" order, most often (but **not always**) with a ["hardware
 trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
 
 Chaosnet addresses are mapped to IP/IPv6 addresses either
