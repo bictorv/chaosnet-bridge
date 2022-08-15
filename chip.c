@@ -415,6 +415,9 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   int xlen = (CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE);
   if ((xlen % 2) == 1)
     xlen++;			/* alignment */
+  // Be liberal in what you accept: if the IP pkt had odd length, round up
+  if ((chlen % 2) == 1)
+    chlen++;			/* alignment */
 
   // check Chaos trailer (incl checksum)
   if (chlen < xlen) {
@@ -749,6 +752,21 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
     if (chip_debug || debug)
       fprintf(stderr,"CHIP: can't forward on IP - sockets not open yet\n");
     return;
+  }
+
+  // Need to truncate the "hardware trailer" if it doesn't fit,
+  // since TOPS-20 has strict input buffer limits.
+  if (dlen > CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE) {
+    if (ch_nbytes(ch) <= CH_PK_MAX_DATALEN) {
+      if (chip_debug || debug)
+	fprintf(stderr,"CHIP: truncating trailer to fit in max pkt size (%d > %d)\n",
+		dlen, CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE);
+      dlen = ch_nbytes(ch) + CHAOS_HEADERSIZE;
+    } else {
+      if (chip_debug || debug)
+	fprintf(stderr,"CHIP: data length over max size (%d > %d) but skipping trailer wouldn't help\n",
+		dlen, CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE);
+    }
   }
 
   if (RT_BRIDGED(rt))
