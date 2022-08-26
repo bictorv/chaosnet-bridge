@@ -790,6 +790,14 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 {
   u_short chaddr = td->tls_addr;
 
+  // Remove the tls_ssl as soon as possible, to avoid other breakage
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
+  if (td->tls_ssl != NULL) {
+    SSL_free(td->tls_ssl);
+    td->tls_ssl = NULL;
+  }
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
+
   // Count this as a lost/aborted pkt.
   // Lost (on input):
   //  "The number of incoming packets from this subnet lost because the
