@@ -27,8 +27,8 @@ If you let ITS/klh10 use Chaos-over-Ethernet, you do not need the last
 
     devdef chaos ub3 ch11 addr=764140 br=6 vec=270 myaddr=6002 ifmeth=pcap
 
-The ITS will pick up routing info from cbridge. (Of course you also
-need to configure ITS to use address 6002, see [here](https://github.com/PDP-10/klh10/blob/master/run/ksits/pubits/doc/distrib.its) for instructions.)
+The ITS will pick up routing info from cbridge. If you run a recent version of ITS from https://github.com/PDP-10/its, it will also use the address from the `myaddr` parameter automatically. You still need to make sure `SYSHST;H3TEXT` is up-to-date.
+(If you run an older version of ITS, you need to configure it to use address 6002, see [here](https://github.com/PDP-10/klh10/blob/master/run/ksits/pubits/doc/distrib.its) for instructions.)
 
 If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the `link ether` line.
 
