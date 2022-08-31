@@ -84,7 +84,11 @@ def give_finger_response(sock, args):
         if debug:
             print("sending data len {}".format(len(rout)))
         # Nothing special is needed, just write the data. EOF is automatic in this case.
-        sock.sendall(rout)
+        try:
+            sock.sendall(rout)
+        except socket.error as msg:
+            if debug:
+                print("Error sending reply: {}".format(msg), file=sys.stderr)
     if debug:
         print("closing socket")
     sock.close()
@@ -106,7 +110,7 @@ def name_server():
         time.sleep(15)
         return
     except socket.error as msg:
-        print(msg)
+        print(msg, file=sys.stderr)
         sys.exit(1)
 
     # Set up a listener for NAME
