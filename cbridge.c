@@ -692,7 +692,6 @@ get_packet_string(struct chaos_header *pkt, u_char *out, int outsize)
     len = outsize-1;
   } else {
     len = ch_nbytes(pkt);
-    if (len % 2) len++;
   }
   if (ch_opcode(pkt) == CHOP_BRD) {
     // skip bitmask
@@ -704,7 +703,7 @@ get_packet_string(struct chaos_header *pkt, u_char *out, int outsize)
       len -= ch_ackno(pkt);
     }
   }
-  ntohs_buf(dataw, (u_short *)out, len);
+  ntohs_buf(dataw, (u_short *)out, len % 2 ? len+1 : len);
   out[len] = '\0';
   return len;
 }
