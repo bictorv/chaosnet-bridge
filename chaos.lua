@@ -120,9 +120,9 @@ function chaos.dissector(tvb, pinfo, tree)
    -- add the brief info
    pinfo.cols.info:set("<"..src..","..srcidx.."> => <"..dest..","..destidx..">"..opdesc)
    chaos_tree:add(tvb(2, 2), "Fwd count: " .. forward_count .. ", Data length: " .. data_count)
-   chaos_tree:add(tvb(4, 4), "Dest address " .. dest .. ", index " .. destidx)
-   chaos_tree:add(tvb(8, 4), "Source address " .. src .. ", index " .. srcidx)
-   chaos_tree:add(tvb(12, 4), "Packet nr: " .. pktno .. ", Ack nr: " .. ackno)
+   chaos_tree:add(tvb(4, 4), "Dest address " .. dest .. ", index " .. destidx .."("..string.format("%#x",destidx)..")")
+   chaos_tree:add(tvb(8, 4), "Source address " .. src .. ", index " .. srcidx .."("..string.format("%#x",srcidx)..")")
+   chaos_tree:add(tvb(12, 4), "Packet nr: " .. pktno .. " ("..string.format("%#x",pktno).. "), Ack nr: " .. ackno.. " ("..string.format("%#x",ackno).. ")")
 
    -- Data.
    if opcode == 8 then		-- RUT, complex content
