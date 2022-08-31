@@ -152,7 +152,10 @@ class Simple:
             return None
 
 def dns_name_of_address(addrstring, onlyfirst=True, timeout=5):
-    name = "{}.CH-ADDR.NET.".format(addrstring)
+    if type(addrstring) is int:
+        name = "{:o}.CH-ADDR.NET.".format(addrstring)
+    else:
+        name = "{}.CH-ADDR.NET.".format(addrstring)
     try:
         h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH),
                               dns_resolver_address, timeout=timeout)
@@ -254,15 +257,23 @@ class Status:
     def statuses(self):
         return self.slist
     def print_hostat(self,hname,src,sts):
-        # Only print the name for the first subnet entry
-        if True or src > 0o400:
-            # ITS sends ANS from address 1 (UP) or 150206 (ES)
-            first = "{} ({:o})".format(hname, src)
+        if " " in hname and not no_host_names:
+            # This must be a "pretty name", so find the DNS name if possible
+            dname = dns_name_of_address(src,onlyfirst=True,timeout=2)
+            if dname is None:
+                first = "{} ({:o})".format(hname, src)
+            else:
+                first = "{} [{}] ({:o})".format(hname, dname, src)
         else:
-            first = hname
+            first = "{} ({:o})".format(hname, src)
         if sts is not None:
             for s in sts:
-                print(("{:<25s}{:>6o} "+"{:>8} "*len(sts[s])).format(first,s,*sts[s].values()))
+                if len(first) >= 26:
+                    # Make the numeric columns aligned at the cost of another line of output
+                    print("{:s}".format(first))
+                    first = ""
+                print(("{:<25s}{:>6o}"+" {:>8}"*len(sts[s])).format(first,s,*sts[s].values()))
+                # Only print the name for the first subnet entry
                 first = ""
         else:
             print("{} not responding".format(first))
