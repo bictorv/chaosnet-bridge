@@ -41,8 +41,12 @@ from datetime import datetime
 from enum import IntEnum, auto
 from random import randint
 from pprint import pprint, pformat
+from pathlib import Path
 # pip3 install dnspython
 import dns.resolver
+
+dns_resolver_name = 'DNS.Chaosnet.NET'
+dns_resolver_addr = None
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -615,8 +619,8 @@ class File(NCPConn):
 
     #### Here are the commands.
 
-    def login(self, uname):
-        resp, msg = self.execute_operation("LOGIN", options=[uname], dataconn=False)
+    def login(self, uname, passw=""):
+        resp, msg = self.execute_operation("LOGIN", options=[uname,passw], dataconn=False)
         if debug:
             print('Login',resp,msg, file=sys.stderr)
         self.uname = uname
@@ -624,11 +628,14 @@ class File(NCPConn):
         # uname RETURN homedir
         # ITS: b'BV USERS1' [b'Victor, Bjorn', b'@']
         # uname hsname RETURN persname affiliation
+        # TOPS-20: [b'BV', b'TOPS20:<BV>'] [b'???', b'']
         homedir = ""
         if self.ostype == 'ITS':
             homedir = str(resp[1],"ascii")+";"
         elif self.ostype == 'LISPM':
             homedir = str(msg[0],"ascii") if len(msg) > 0 else ""
+        elif self.ostype == 'TOPS-20':
+            homedir = str(resp[1],"ascii") if len(resp) > 1 else ""
         self.homedir = homedir
         return str(resp[0],"ascii")
 
@@ -915,7 +922,7 @@ def get_dns_host_info(name):
     elif isinstance(name,str) and name.isdigit():
         name = dns_name_of_addr(int(name,8)) or name
     try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.CH), '130.238.19.25')
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.CH), dns_resolver_addr)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.HINFO:
                 for d in t:
@@ -935,7 +942,7 @@ def dns_addr_of_name(name):
         name = dns_name_of_addr(int(name,8)) or name
     addrs = []
     try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.CH), '130.238.19.25')
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.CH), dns_resolver_addr)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.A:
                     for d in t:
@@ -959,7 +966,7 @@ def dns_name_of_addr(addr):
             name = "{:o}.CH-ADDR.NET.".format(addr)
         else:
             name = "{}.CH-ADDR.NET.".format(addr)
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH), '130.238.19.25')
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH), dns_resolver_addr)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.PTR:
                     for d in t:
@@ -1031,6 +1038,8 @@ def print_directory_list(hd,fs):
 if __name__ == '__main__':
     codecs.register(LMregentry)
 
+    dns_resolver_addr = socket.gethostbyname(dns_resolver_name)
+
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet FILE protocol client')
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
@@ -1059,6 +1068,10 @@ if __name__ == '__main__':
                 "readinto": '"readinto local remote" reads the remote file into the local file',
                 "breadinto": '"breadinto local remote" reads the remote file into the local file in binary mode, byte-size 16',
                 "readraw": '"readraw fname" reads the fname without translating characters',
+                "get": '"get fname" reads the fname to a local file',
+                "aget": '"aget fname" reads the fname to a local file in ascii mode',
+                "mget": '"mget fspec" reads all matches for fspec to local files',
+                "mput": '"mput fspec" writes all matches for fspec to corresponding remote files',
                 "write": '"write local remote" writes the local file to the remote file',
                 "bwrite": '"bwrite local remote" writes the local file to the remote file in binary mode, byte-size 16',
                 "alldirs": 'lists all (top-level) directories. To list subdirectories, use the "directory" command',
@@ -1084,20 +1097,23 @@ if __name__ == '__main__':
         if f.count(';') > 0:
             # Assume ITS or MIT/LMI LISPM
             return f
+        elif "<" in ncp.homedir and ncp.homedir.endswith(">") and f.count('>') == 0:
+            # TOPS-20
+            return f
         elif ncp.homedir.startswith(">") and ncp.homedir.endswith(">") and f.count('>') > 0:
             # Symbolics or old CADR (e.g. System 78)
             return f
         else:
             return cwd + f
-    def dologin(uname):
-        uid = ncp.login(uname)
+    def dologin(uname, passw=""):
+        uid = ncp.login(uname,passw)
         if ncp.homedir.count(':') > 0:
             # skip any device
             cwd = ncp.homedir[ncp.homedir.index(':')+1:].strip()
         else:
             cwd = ncp.homedir
             print("Logged in as {} (homedir {!r})".format(uid,ncp.homedir))
-        if 'name' in ncp.dnsinfo:
+        if 'name' in ncp.dnsinfo and ncp.dnsinfo['name'] is not None:
             args.host = ncp.dnsinfo['name'].split(".")[0]
         return uid, cwd
 
@@ -1146,7 +1162,7 @@ if __name__ == '__main__':
                         ncp.dnsinfo['name'], ", ".join(["{:o}"]*len(ncp.dnsinfo['addrs'])).format(*ncp.dnsinfo['addrs']),
                               ncp.dnsinfo['os'], ncp.dnsinfo['cpu']))
                 elif op == "login":
-                    uid,cwd = dologin(arg[0])
+                    uid,cwd = dologin(arg[0],arg[1] if len(arg) > 1 else "")
                 elif op == "cd" or op == "cwd":
                     if len(arg) > 0:
                         if arg[0].endswith(ncp.homedir[-1:]):
@@ -1229,7 +1245,7 @@ if __name__ == '__main__':
                                                                             r['created']))
                 elif op == "readraw":
                     ncp.read_file(wdparse(arg[0]), None, raw=True)
-                elif op == "get":
+                elif op == "get" or op == "aget":
                     hd, flist = ncp.list_files(wdparse(arg[0].strip()))
                     if flist:
                         if len(flist) > 1:
@@ -1237,9 +1253,9 @@ if __name__ == '__main__':
                                       file=sys.stderr)
                         else:
                             fn = list(flist.keys())[0]
-                            binp = True if 'CHARACTERS' not in flist[fn] else False
+                            binp = True if 'CHARACTERS' not in flist[fn] and op != "aget" else False
                             outf = fn[fn.index(cwd[-1:])+1:].strip().lower()
-                            print("Read into {} <= ".format(outf), end='', file=sys.stderr, flush=True)
+                            print("Read {} into {} <= ".format("binary" if binp else "ascii",outf), end='', file=sys.stderr, flush=True)
                             try:
                                 os = open(outf, "wb" if binp else "w")
                                 r = ncp.read_file(fn, os, binary=binp)
@@ -1266,6 +1282,21 @@ if __name__ == '__main__':
                                 finally:
                                     os.close()
                                 print("Read {}, length {}, created {}".format(r['truename'], r['length'], r['created']))
+                elif op == "mput":
+                    flist = Path(".").glob(arg[0].strip())
+                    for f in flist:
+                        outf = f.split(".", maxsplit=1).join(" ")
+                        try:
+                            ins = open(f,"r")
+                            r = ncp.write_file(wdparse(outf), ins)
+                        except FileNotFoundError as e:
+                            print(e, file=sys.stderr)
+                            continue
+                        finally:
+                            ins.close()
+                        print("Wrote {}, length {} ({}), created {}".format(r['truename'], r['length'],
+                                                                            "binary" if r['binary'] else "character",
+                                                                                r['created']))
                 elif op == "write":
                     inf,outf = arg[0].split(' ', maxsplit=1)
                     try:
