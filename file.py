@@ -804,7 +804,7 @@ class File(NCPConn):
 
     def file_system_info(self):
         resp, msg = self.execute_operation("file-system-info", dataconn=False)
-        if True or debug:
+        if debug:
             print('file_system_info response',resp,msg, file=sys.stderr)
         return list(map(lambda x: str(x,'ascii'), msg))
 
@@ -988,7 +988,9 @@ def print_directory_list(hd,fs):
         pprint(fs,width=100)
     if fs:
         # Get max pathname length
-        mxlen = len(max(fs, key=len))
+        # First check if there are protections
+        prots = list(filter(lambda x: 'PROTECTION' in fs[x], fs))
+        mxlen = len(max(fs, key=len)) + (2+6 if len(prots) > 0 else 0)
         fmt = string.Template("{:<2} {:$mxlen} {:>7} {:<4} {:<4} {:<19}  {}").substitute(mxlen=mxlen)
         # Handle links (in ITS)
         lks = list(filter(lambda x: 'LINK-TO' in fs[x], fs))
@@ -998,6 +1000,11 @@ def print_directory_list(hd,fs):
         else:
             lfmt = None
         print(fmt.format("","Name","Length","Bs","Flg","Creation","Author"))
+        def fprot(f,fs):
+            if 'PROTECTION' in fs[f]:
+                return ";P{}".format(fs[f]['PROTECTION'])
+            else:
+                return ""
         def ftype(f,fs):
             if 'DELETED' in fs[f] and fs[f]['DELETED']:
                 return "d"
@@ -1017,20 +1024,20 @@ def print_directory_list(hd,fs):
                 return ''
         for f in fs:
             if 'DIRECTORY' in fs[f]:
-                print(fmt.format(ftype(f,fs),
-                                 f, fieldp(f,fs,'LENGTH-IN-BYTES') if not fs[f]['DIRECTORY'] else "(dir)", 
+                print(fmt.format(ftype(f,fs), 
+                                 f+fprot(f,fs), fieldp(f,fs,'LENGTH-IN-BYTES') if not fs[f]['DIRECTORY'] else "(dir)", 
                                  "({})".format(fieldp(f,fs,'BYTE-SIZE')) if not fs[f]['DIRECTORY'] else "",
                                  flags(f,fs),
                                  str(fieldp(f,fs,'CREATION-DATE')), fieldp(f,fs,'AUTHOR')))
             elif 'LINK-TO' in fs[f]:
                 print(lfmt.format(ftype(f,fs),
-                                  f, fs[f]['LINK-TO'], 
+                                  f+fprot(f,fs), fs[f]['LINK-TO'], 
                                  flags(f,fs),
                                  # Is creation-date really wanted/valid for links?
                                  str(fieldp(f,fs,'CREATION-DATE')), fieldp(f,fs,'AUTHOR')))
             else:
-                print(fmt.format(ftype(f,fs),
-                                 f, fieldp(f,fs,'LENGTH-IN-BYTES'), "({})".format(fieldp(f,fs,'BYTE-SIZE')),
+                print(fmt.format(ftype(f,fs), 
+                                 f+fprot(f,fs), fieldp(f,fs,'LENGTH-IN-BYTES'), "({})".format(fieldp(f,fs,'BYTE-SIZE')),
                                  flags(f,fs),
                                  str(fieldp(f,fs,'CREATION-DATE')), fieldp(f,fs,'AUTHOR')))
 
@@ -1050,7 +1057,8 @@ if __name__ == '__main__':
 
     cmdhelp = {"debug": "Toggle debug",
                 "bye": "Close connection and exit program",
-                "cwd": '"cwd dname" changes working directory (local effect only), "cwd" shows the working directory.',
+                "cwd": '"cwd dname" changes working directory (local effect only), "cwd" changes to homedir.',
+                "pwd": 'Print working directory and home directory.',
                 "login":'"login uname" logs in as user uname',
                 "probe": '"probe fname" checks if file fname exists',
                 "complete": '"complete str" tries to complete the str as a filename',
@@ -1077,7 +1085,8 @@ if __name__ == '__main__':
                 "alldirs": 'lists all (top-level) directories. To list subdirectories, use the "directory" command',
                 "directory": '"directory pname" lists files matching the pathname. Can be abbreviated "dir".',
                 "ddirectory": '"ddirectory pname" lists file including deleted ones (if supported). Abbrev "ddir".',
-                "fdirectory": '"fdirectory pname" lists files using the FAST option, without properties. Abbrev "fdir".'
+                "fdirectory": '"fdirectory pname" lists files using the FAST option, without properties. Abbrev "fdir".',
+                "dddirectory": '"dddirectory pname" lists directories matching pname, without properties. Abbrev "dddir".'
                 }
 
     if args.debug:
@@ -1091,15 +1100,20 @@ if __name__ == '__main__':
             return name+';'
         elif ncp.homedir.startswith(">") and ncp.homedir.endswith(">"):
             return name+">"
+        elif "<" in ncp.homedir and ncp.homedir.endswith(">"):
+            return "<"+name+">"
         else:
             return name+";"
     def wdparse(f):
         if f.count(';') > 0:
             # Assume ITS or MIT/LMI LISPM
             return f
-        elif "<" in ncp.homedir and ncp.homedir.endswith(">") and f.count('>') == 0:
+        elif "<" in ncp.homedir and ncp.homedir.endswith(">"):
             # TOPS-20
-            return f
+            if "<" in f and '>' in f:
+                return f
+            else:
+                return cwd + f
         elif ncp.homedir.startswith(">") and ncp.homedir.endswith(">") and f.count('>') > 0:
             # Symbolics or old CADR (e.g. System 78)
             return f
@@ -1112,7 +1126,7 @@ if __name__ == '__main__':
             cwd = ncp.homedir[ncp.homedir.index(':')+1:].strip()
         else:
             cwd = ncp.homedir
-            print("Logged in as {} (homedir {!r})".format(uid,ncp.homedir))
+        print("Logged in as {} (homedir {!r})".format(uid,ncp.homedir))
         if 'name' in ncp.dnsinfo and ncp.dnsinfo['name'] is not None:
             args.host = ncp.dnsinfo['name'].split(".")[0]
         return uid, cwd
@@ -1148,7 +1162,7 @@ if __name__ == '__main__':
                     fmt = string.Template("{:$mxlen}  {}").substitute(mxlen=mxlen)
                     for cmd in cmdhelp:
                         print(fmt.format(cmd, cmdhelp[cmd]))
-                elif op == "bye" or op == "quit":
+                elif op in ["bye","quit"]:
                     print("Bye bye.", file=sys.stderr)
                     try:
                         ncp.send_packet(Opcode.EOF,"")
@@ -1157,19 +1171,23 @@ if __name__ == '__main__':
                     break
                 elif op == "debug":
                     debug = not debug
+                elif op == "pwd":
+                    print("Current {}, homedir {}".format(cwd, ncp.homedir))
                 elif op == "dns":
                     print('DNS info: name {}, addr {!s}, OS {}, CPU {}'.format(
                         ncp.dnsinfo['name'], ", ".join(["{:o}"]*len(ncp.dnsinfo['addrs'])).format(*ncp.dnsinfo['addrs']),
                               ncp.dnsinfo['os'], ncp.dnsinfo['cpu']))
                 elif op == "login":
                     uid,cwd = dologin(arg[0],arg[1] if len(arg) > 1 else "")
-                elif op == "cd" or op == "cwd":
+                elif op in ["cd","cwd"]:
                     if len(arg) > 0:
                         if arg[0].endswith(ncp.homedir[-1:]):
                             cwd = arg[0].strip()
                         else:
                             print("Directory should end with {}".format(ncp.homedir[-1:]), file=sys.stderr)
-                    print("CWD = {}".format(cwd))
+                    else:
+                        cwd = ncp.homedir
+                    print("Current directory {}".format(cwd))
                 elif op == "probe":
                     pb = ncp.probe_file(wdparse(arg[0]))
                     if pb is not None:
@@ -1245,7 +1263,7 @@ if __name__ == '__main__':
                                                                             r['created']))
                 elif op == "readraw":
                     ncp.read_file(wdparse(arg[0]), None, raw=True)
-                elif op == "get" or op == "aget":
+                elif op in ["get", "aget"]:
                     hd, flist = ncp.list_files(wdparse(arg[0].strip()))
                     if flist:
                         if len(flist) > 1:
@@ -1329,7 +1347,8 @@ if __name__ == '__main__':
                     for f in fs:
                         fs[f]['DIRECTORY'] = True
                     print_directory_list(hd,fs)
-                elif op == "directory" or op == "ddirectory" or op == "fdirectory" or op == "dir" or op == "ddir" or op == "fdir":
+                elif op in ["directory","ddirectory","fdirectory","dir","ddir","qdir","qdirectory",
+                                "fdir","dddir","dddirectory"]:
                     dflt = cwd + "*"
                     if len(arg) > 0:
                         a = wdparse(arg[0])
@@ -1337,8 +1356,11 @@ if __name__ == '__main__':
                             a += "*"
                     else:
                         a = dflt
-                    hd,fs = ncp.list_files(a, deleted=True if op.startswith("ddir") else False,
-                                               fast=True if op.startswith("fdir") else False)
+                    if debug:
+                        print("cwd {}, arg {}, a {}".format(cwd,arg,a), file=sys.stderr)
+                    hd,fs = ncp.list_files(a, deleted=True if op.startswith("ddir") or op.startswith("qdir") else False,
+                                               fast=True if op.startswith("fdir") else False,
+                                               directories=True if op.startswith("dddir") else False)
                     print_directory_list(hd,fs)
                 else:
                     print("NYI operation {} not yet implemented".format(op), file=sys.stderr)
