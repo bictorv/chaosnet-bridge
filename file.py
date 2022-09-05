@@ -44,6 +44,7 @@ from pprint import pprint, pformat
 from pathlib import Path
 # pip3 install dnspython
 import dns.resolver
+from getpass import getpass
 
 dns_resolver_name = 'DNS.Chaosnet.NET'
 dns_resolver_addr = None
@@ -620,7 +621,8 @@ class File(NCPConn):
     #### Here are the commands.
 
     def login(self, uname, passw=""):
-        resp, msg = self.execute_operation("LOGIN", options=[uname,passw], dataconn=False)
+        # Third option is account (unused for now)
+        resp, msg = self.execute_operation("LOGIN", options=[uname,passw,""], dataconn=False)
         if debug:
             print('Login',resp,msg, file=sys.stderr)
         self.uname = uname
@@ -983,9 +985,11 @@ def dns_name_of_addr(addr):
 
 def print_directory_list(hd,fs):
     # Format this nicely instead
-    pprint(hd,width=100)
     if debug:
+        pprint(hd,width=100)
         pprint(fs,width=100)
+    else:
+        print("   {}".format(hd['DISK-SPACE-DESCRIPTION']))
     if fs:
         # Get max pathname length
         # First check if there are protections
@@ -1052,6 +1056,8 @@ if __name__ == '__main__':
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     parser.add_argument('--user', '-u', nargs=1, dest='user', help='User to login as')
+    parser.add_argument('--passw', '-p', action='store_true',
+                            help='Ask for password for user given with --user'),
     parser.add_argument("host", help='The host to connect to')
     args = parser.parse_args()
 
@@ -1120,6 +1126,8 @@ if __name__ == '__main__':
         else:
             return cwd + f
     def dologin(uname, passw=""):
+        if debug:
+            print("Logging in as {} with passw {}".format(uname,passw), file=sys.stderr)
         uid = ncp.login(uname,passw)
         if ncp.homedir.count(':') > 0:
             # skip any device
@@ -1137,7 +1145,11 @@ if __name__ == '__main__':
             exit(1)
 
         if args.user and len(args.user) > 0:
-            uid,cwd = dologin(args.user[0])
+            if args.passw:
+                pw = getpass("Password for {}: ".format(args.user[0]))
+                uid, cwd = dologin(args.user[0], pw)
+            else:
+                uid,cwd = dologin(args.user[0])
 
         while True:
             # Wish: a completing/abbreviating command reader
@@ -1178,7 +1190,8 @@ if __name__ == '__main__':
                         ncp.dnsinfo['name'], ", ".join(["{:o}"]*len(ncp.dnsinfo['addrs'])).format(*ncp.dnsinfo['addrs']),
                               ncp.dnsinfo['os'], ncp.dnsinfo['cpu']))
                 elif op == "login":
-                    uid,cwd = dologin(arg[0],arg[1] if len(arg) > 1 else "")
+                    uarg = arg[0].split(' ', maxsplit=1)
+                    uid,cwd = dologin(uarg[0],uarg[1] if len(uarg) > 1 else "")
                 elif op in ["cd","cwd"]:
                     if len(arg) > 0:
                         if arg[0].endswith(ncp.homedir[-1:]):
