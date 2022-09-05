@@ -810,6 +810,32 @@ class File(NCPConn):
             print('file_system_info response',resp,msg, file=sys.stderr)
         return list(map(lambda x: str(x,'ascii'), msg))
 
+    def enable_capabilities(self, caps=["all"]):
+        resp, msg = self.execute_operation("enable-capabilities", options=caps, dataconn=False)
+        if debug:
+            print('enable_capabilities response',resp,msg, file=sys.stderr)
+        # We get back a plist of capabilities and if they are enabled or not, e.g.
+        # [b'WHEEL' b'T' b'OPERATOR' b'NIL']
+        # Convert it to a dictionary, which might be more useful here.
+        clist = dict()
+        while len(resp) > 0:
+            clist[str(resp[0],'ascii')] = True if resp[1] == b'T' else False
+            resp = resp[2:] if len(resp) > 2 else []
+        return clist
+
+    def disable_capabilities(self, caps=["all"]):
+        resp, msg = self.execute_operation("disable-capabilities", options=caps, dataconn=False)
+        if debug:
+            print('disable_capabilities response',resp,msg, file=sys.stderr)
+        # We get back a plist of capabilities and if they are enabled or not, e.g.
+        # [b'WHEEL' b'T' b'OPERATOR' b'NIL']
+        # Convert it to a dictionary, which might be more useful here.
+        clist = dict()
+        while len(resp) > 0:
+            clist[str(resp[0],'ascii')] = True if resp[1] == b'T' else False
+            resp = resp[2:] if len(resp) > 2 else []
+        return clist
+
     def create_link(self, lname, fname):
         resp, msg = self.execute_operation("create-link", args=[lname,fname], dataconn=False)
         if True or debug:
@@ -1066,6 +1092,8 @@ if __name__ == '__main__':
                 "cwd": '"cwd dname" changes working directory (local effect only), "cwd" changes to homedir.',
                 "pwd": 'Print working directory and home directory.',
                 "login":'"login uname" logs in as user uname',
+                "enable":'"enable capname [capname...]" enables the capabilities named (default all)',
+                "disable":'"disable capname [capname...]" disables the capabilities named (default all)',
                 "probe": '"probe fname" checks if file fname exists',
                 "complete": '"complete str" tries to complete the str as a filename',
                 "delete": '"delete fname" deletes the file fname',
@@ -1192,6 +1220,14 @@ if __name__ == '__main__':
                 elif op == "login":
                     uarg = arg[0].split(' ', maxsplit=1)
                     uid,cwd = dologin(uarg[0],uarg[1] if len(uarg) > 1 else "")
+                elif op == "enable":
+                    caparg = ["all"] if len(arg) == 0 else arg[0].split(' ')
+                    resp = ncp.enable_capabilities(caparg)
+                    print("Capabilities now {}".format(resp))
+                elif op == "disable":
+                    caparg = ["all"] if len(arg) == 0 else arg[0].split(' ')
+                    resp = ncp.disable_capabilities(caparg)
+                    print("Capabilities now {}".format(resp))
                 elif op in ["cd","cwd"]:
                     if len(arg) > 0:
                         if arg[0].endswith(ncp.homedir[-1:]):
