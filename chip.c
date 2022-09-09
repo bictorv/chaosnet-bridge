@@ -603,8 +603,11 @@ chip_send_pkt_ipv4(struct sockaddr_in *sout, u_char *pkt, int pklen)
     if (debug) dumppkt_raw(pkt, pklen);
   }
   c = sendto(ip_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in));
-  if (c < 0)
-    perror("chip_send_pkt_ipv4");
+  if (c < 0) {
+    char errmsg[256];
+    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s", inet_ntoa(sout->sin_addr));
+    perror(errmsg);
+  }
   else if (chip_debug || debug)
     fprintf(stderr,"CHIP: chip_send_pkt_ipv4: wrote %d bytes\n", c);
 }
@@ -620,8 +623,12 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
     if (debug) dumppkt_raw(pkt, pklen);
   }
   c = sendto(ip6_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in6));
-  if (c < 0)
-    perror("chip_send_pkt_ipv6");
+  if (c < 0) {
+    char ip6[INET6_ADDRSTRLEN];
+    char errmsg[256];
+    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s", ip46_ntoa((struct sockaddr *)sout, ip6, sizeof(ip6)));
+    perror(errmsg);
+  }
   else if (chip_debug || debug)
     fprintf(stderr,"CHIP: chip_send_pkt_ipv6: wrote %d bytes\n", c);
 }
@@ -760,12 +767,12 @@ forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_hea
     if (ch_nbytes(ch) <= CH_PK_MAX_DATALEN) {
       if (chip_debug || debug)
 	fprintf(stderr,"CHIP: truncating trailer to fit in max pkt size (%d > %d)\n",
-		dlen, CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE);
+		dlen, (int)(CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE));
       dlen = ch_nbytes(ch) + CHAOS_HEADERSIZE;
     } else {
       if (chip_debug || debug)
 	fprintf(stderr,"CHIP: data length over max size (%d > %d) but skipping trailer wouldn't help\n",
-		dlen, CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE);
+		dlen, (int)(CH_PK_MAX_DATALEN + CHAOS_HEADERSIZE));
     }
   }
 
