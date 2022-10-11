@@ -7,16 +7,20 @@ Some examples of configurations.
 A slightly complex, but general, example. See the next example for a simpler setup with a single klh10.
 
 The example assumes you run an ITS system (e.g. on klh10), and a local Chaosnet network over Ethernet, and you use subnet 14 (octal). 
-In this example, you connect to the Global Chaosnet over chudp, and you have been assigned address 3171 for connecting to it (cf Routing Basics).
+In this example, you connect to the Global Chaosnet [over TLS](TLS.md), and you have been assigned address 3171 for connecting to it (cf Routing Basics).
 
     ; My default Chaosnet address
     chaddr 6001
-    ; Define a chaos-over-udp link to the Global Chaosnet router, which has address 3040
-    link chudp router.chaosnet.net host 3040 myaddr 3171
+	; Configure my TLS key and cert (see TLS.md)
+	tls key private/my.key.pem cert certs/my.cert.pem
+    ; Define a Chaos-over-TLS link to the Global Chaosnet router, which has address 3040
+    link tls router.chaosnet.net host 3040 myaddr 3171
     ; Define a local Chaos-over-Ether on the eth0 interface, for subnet nr 14 (hosts 6001-6376)
     link ether eth0 subnet 14
     ; A chaos-over-udp link to the ITS configured below
     link chudp localhost:42043 host 6002
+
+(If you don't use Ethernet, skip that line. If you run more than one klh10, repeat the last line with other ports/addresses.)
 
 For a ITS/klh10 running on the same host as cbridge, you can use
 
@@ -31,6 +35,8 @@ The ITS will pick up routing info from cbridge. If you run a recent version of I
 (If you run an older version of ITS, you need to configure it to use address 6002, see [here](https://github.com/PDP-10/klh10/blob/master/run/ksits/pubits/doc/distrib.its) for instructions.)
 
 If you only run the ITS system, over chudp, and do not use Chaosnet over Ethernet for other purposes, just skip the `link ether` line.
+
+(If you use a [simh](https://github.com/simh/simh)-based system, see its [KL10](https://github.com/simh/simh/blob/master/doc/kl10_doc.doc) or [KS10](https://github.com/simh/simh/blob/master/doc/ks10_doc.doc) documentation for how to set it up.)
 
 ## Example: A single klh10 behind a TLS-connected cbridge
 
