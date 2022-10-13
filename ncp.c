@@ -1442,6 +1442,11 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
   u_char *bp = buf;
   int opc, zero, len = 0;
   while (cnt > 0) {
+    if (cnt < 4) {
+      if (ncp_debug) printf("%%%% NCP packet_conn_parse_and_send_bytes: got only %d bytes, bailing out\n", cnt);
+      user_socket_los(conn,"Bad packet length %d", cnt);
+      return -1;
+    }
     opc = bp[0];
     zero = bp[1];
     len = bp[2];
@@ -1466,7 +1471,8 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
       // go back and try parsing it again
       continue;
     } else {
-      if ((opc == CHOP_EOF) || (opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
+      if ((opc == CHOP_CLS) || (opc == CHOP_EOF) || (opc == CHOP_LOS) || (opc == CHOP_UNC)
+	  || (opc >= CHOP_DAT)) {
 	int pknum, dowait = 0;
 	if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
 	if (opc == CHOP_EOF) {
@@ -1487,7 +1493,7 @@ packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt)
 	  send_to_user_socket(conn, pkt, ackpkt, 0);
 	}
       } else
-	user_socket_los(conn,"Bad opcode %s in state %s, only LOS UNC DAT..DWD are OK", 
+	user_socket_los(conn,"Bad opcode %s in state %s, only CLS LOS UNC DAT..DWD are OK", 
 			ch_opcode_name(opc), conn_state_name(conn));
     }
     cnt -= (4+len);
@@ -2555,6 +2561,7 @@ probe_connection(struct conn *conn)
       send_sns_pkt(conn);
     }
   } else if (pktnum_less(cs->pktnum_sent_acked, cs->pktnum_sent_highest)) {
+    // @@@@ only do this if receipt is less, not acked?
     // still have outstanding acks, ask for ack confirmation
     if ((cs->state == CS_Open) || (cs->state == CS_Finishing)) {
       if (ncp_debug) printf("conn %p (%s) has %d outstanding acks (acked %#x sent %#x), sending SNS\n",
