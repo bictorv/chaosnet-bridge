@@ -605,10 +605,10 @@ chip_send_pkt_ipv4(struct sockaddr_in *sout, u_char *pkt, int pklen)
   c = sendto(ip_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in));
   if (c < 0) {
     extern int errno;
-    if ((errno == -EHOSTDOWN) || (errno == -EHOSTUNREACH))
+    if ((errno == EHOSTDOWN) || (errno == EHOSTUNREACH))
       return;
     char errmsg[256];
-    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s", inet_ntoa(sout->sin_addr));
+    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s (%d)", inet_ntoa(sout->sin_addr), errno);
     perror(errmsg);
   }
   else if (chip_debug || debug)
@@ -628,11 +628,11 @@ chip_send_pkt_ipv6(struct sockaddr_in6 *sout, u_char *pkt, int pklen)
   c = sendto(ip6_sock, pkt, pklen, 0, (struct sockaddr *)sout, sizeof(struct sockaddr_in6));
   if (c < 0) {
     extern int errno;
-    if ((errno == -EHOSTDOWN) || (errno == -EHOSTUNREACH))
+    if ((errno == EHOSTDOWN) || (errno == EHOSTUNREACH))
       return;
     char ip6[INET6_ADDRSTRLEN];
     char errmsg[256];
-    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s", ip46_ntoa((struct sockaddr *)sout, ip6, sizeof(ip6)));
+    sprintf(errmsg, "%%%% CHIP: Failed to send pkt to %s (%d)", ip46_ntoa((struct sockaddr *)sout, ip6, sizeof(ip6)), errno);
     perror(errmsg);
   }
   else if (chip_debug || debug)
