@@ -25,7 +25,7 @@ You can also use it to make your "unix-like" host a Chaosnet node, by using and 
 
 The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/PDP-10/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py). Additionally there is also [a little demonstration program](bhostat.py) for the broadcast packet API (see below).
 
-There is also [a simple client program for the FILE protocol](file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems, and a server for the [DOMAIN](domain.py) contact name, which responds to DNS queries over a stream connection (cbridge already handles queries on a simple protocol, but response sizes are limited by the Chaosnet packet size.)
+There is also [a simple client program for the FILE protocol](file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems, and a server for the [DOMAIN](domain.py) contact name, which responds to DNS queries over a stream connection (cbridge already handles queries on a simple protocol, but response sizes are limited by the Chaosnet packet size.) A [Telnet](telnet.py) client is also available.
 
 
 Example:
