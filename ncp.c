@@ -1097,7 +1097,12 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
 
   if (opcode_uncontrolled(opcode))
-    set_ch_packetno(ch, 0);
+    // Cf Amber section 4, first paragraph
+    //   The packet number field contains sequential numbers in controlled
+    //   packets; in uncontrolled packets it contains the same number as
+    //   the next controlled packet will contain.
+    // ITS, LispM and TOPS-20 seem to deal with 0 here, but BSD does not!
+    set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
   else {
     set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
     cs->pktnum_made_highest = pktnum_1plus(cs->pktnum_made_highest);
@@ -2197,10 +2202,7 @@ clear_send_pkts(struct conn *c)
     free(p);
   }
   update_window_available(cs, cs->foreign_winsize);
-  if (owin + npkts != cs->window_available)
-    printf("%%%% NCP: clear_send_pkts cleared %d pkts with orig window %d, new %d\n",
-	   npkts, owin, cs->window_available);
-  else if (ncp_debug) printf("NCP cleared %d pkts from send_pkts\n", npkts);
+  if (ncp_debug) printf("NCP cleared %d pkts from send_pkts\n", npkts);
   PTUNLOCKN(cs->send_mutex,"send_mutex");
   PTUNLOCKN(cs->window_mutex,"window_mutex");
 }
@@ -2760,12 +2762,10 @@ static void
 update_window_available(struct conn_state *cs, u_short winz) {
   u_short receipt = cs->pktnum_sent_receipt;
   u_short in_air = pktnum_diff(cs->send_pkts_pktnum_highest, receipt);
-  if (in_air < 0) {
-    fprintf(stderr,"%%%% NCP: negative #pkts in the air! %d\n", in_air);
-    in_air = 0;		/* Be safe */
-  }
   if (winz < in_air) {
-    fprintf(stderr,"%%%% NCP: window becoming negative! winz %d, in_air %d\n", winz, in_air);
+    if (ncp_debug)
+      fprintf(stderr,"%%%% NCP: window would become negative! winz %d, shigh %#x, rec %#x, in_air %d\n", 
+	      winz, cs->send_pkts_pktnum_highest, receipt, in_air);
     in_air = winz;		/* Be safe */
   }
   u_short new_avail = winz - in_air;
