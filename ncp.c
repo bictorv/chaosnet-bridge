@@ -1096,17 +1096,14 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   set_ch_ackno(ch, cs->pktnum_read_highest);
   cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
 
-  if (opcode_uncontrolled(opcode))
-    // Cf Amber section 4, first paragraph
-    //   The packet number field contains sequential numbers in controlled
-    //   packets; in uncontrolled packets it contains the same number as
-    //   the next controlled packet will contain.
-    // ITS, LispM and TOPS-20 seem to deal with 0 here, but BSD does not!
-    set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
-  else {
-    set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
+  // Cf Amber section 4, first paragraph
+  //   The packet number field contains sequential numbers in controlled
+  //   packets; in uncontrolled packets it contains the same number as
+  //   the next controlled packet will contain.
+  set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
+  if (!opcode_uncontrolled(opcode))
+    // controlled packets count
     cs->pktnum_made_highest = pktnum_1plus(cs->pktnum_made_highest);
-  }
 
   switch (opcode) {
   case CHOP_BRD:
