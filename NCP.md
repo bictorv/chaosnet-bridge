@@ -80,7 +80,7 @@ The NCP sends a corresponding RFC packet to the destination host.
 
 #### Options:
 Options are
-- `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a time out, a `LOS Connection timed out` response is given to the user program.
+- `timeout=`*%d* to specify a (positive, decimal) timeout value (in seconds) for the connection to open (i.e. a response to be received). The default is 30 seconds. In case of a timeout, a `LOS Connection timed out` response is given to the user program.
 - `retrans=`*%d* to specify a (positive, decimal) retransmission value (in milliseconds) for this connection, see the configuration options above.
 - `winsize=`*%d* to specify a (positive, decimal) local window size for this connection, see the configuration options above.
 - `follow_forward`=*yes/no* to specify whether a FWD response packet should be transparently followed, i.e., result in the RFC being redirected to the target host.
@@ -104,6 +104,7 @@ To send a controlled [broadcast packet](https://chaosnet.net/amber.html#Broadcas
 where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to.
 
 For a simple protocol, you can read multiple `ANS` responses.
+When the timeout expires, a `LOS Connection timed out` response is given to the user program (as described above for `RFC`).
 
 Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://chaosnet.net/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
 

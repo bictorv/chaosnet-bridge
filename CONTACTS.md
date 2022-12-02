@@ -1,6 +1,6 @@
 # Supported Chaosnet protocols
 
-The following Chaosnet contacts (protocol names) are supported by the bridge program.
+The following Chaosnet contacts (protocol names) have built-in support in the bridge program. Additional protocols may be supported through the [NCP](NCP.md).
 
 ### `DUMP-ROUTING-TABLE`
 The bridge responds to the `DUMP-ROUTING-TABLE` contact, which sends the
