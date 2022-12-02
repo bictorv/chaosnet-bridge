@@ -125,8 +125,8 @@ def stream_conn(addr, host, contact, args=[], timeout=None):
     except socket.error:
         return None
 
-def finger(host,user=None):
-    sock = stream_conn(packet_address if packetp else stream_address,host,"NAME",args=(['/W',user] if user is not None else []))
+def finger(host,user=None,contact="NAME"):
+    sock = stream_conn(packet_address if packetp else stream_address,host,contact,args=(['/W',user] if user is not None else []))
     if sock is not None:
         data = []
         ateol = False
@@ -175,6 +175,8 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("--packet",dest='packetp',action='store_true',
                             help='Use packet mode (chaos_seqpacket) instead of plain stream')
+    parser.add_argument("-c","--contact",dest='contact',
+                            help="Contact other than NAME (e.g. BYE or LIMERICK)")
     parser.add_argument('-b','--broadcast',action='store_true',
                             help='Use BRD instead of RFC, and host arg is a comma-but-not-space-separated list of subnets, or "all"')
     parser.add_argument("host", help='The host to check')
@@ -187,6 +189,7 @@ if __name__ == '__main__':
         broadcastp = True
     if args.debug:
         debug = True
+        print(args, file=sys.stderr)
 
-    finger(args.host, args.user)
+    finger(args.host, args.user, args.contact)
 

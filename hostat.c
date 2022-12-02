@@ -35,7 +35,7 @@ void usage(char *s)
 {
   fprintf(stderr,"usage: %s host [options] [contact]\n"
 	  " Handles \"simple\" connectionless Chaosnet protocols.\n"
-	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE, LASTCN, FINGER.\n"
+	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE, LASTCN, FINGER, LOAD.\n"
 	  "  (Contact name is not case sensitive.)\n"
 	  " Options: -q for quiet, -r for raw output, -a for ascii output, -t sec to set RFC timeout (default 30).\n",
 	  s);

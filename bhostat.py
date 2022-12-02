@@ -240,15 +240,14 @@ class Broadcast:
                 src = data[0] + data[1]*256
                 print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
             return data
-        elif opc == Opcode.LOS:
+        elif opc == Opcode.LOS or opc == Opcode.CLS:
+            # LOS from cbridge, CLS from buggy BSD
             if debug:
-                src = data[0] + data[1]*256
-                print("Got LOS from {:o} len {}: {}".format(src,len(data),data), file=sys.stderr)
+                print("Got {}: {}".format(Opcode(opc).name, data), file=sys.stderr)
             raise StopIteration
         else:
-            print("Got {} ({})".format(Opcode(opc).name, data), file=sys.stderr)
-
-
+            print("Got unexpected {} len {}: {}".format(Opcode(opc).name, len(data) if data is not None else 0, data),
+                      file=sys.stderr)
 
 # The STATUS protocol
 class Status:

@@ -194,6 +194,9 @@ class PacketConn(NCPConn):
             self.remote = str(data,"ascii")
             self.contact = contact
             return True
+        elif opc == Opcode.LOS:
+            print("Got LOS: {}".format(str(data,"ascii")))
+            return False
         else:
             print("Expected OPN: {}".format(opc), file=sys.stderr)
             return False
@@ -205,7 +208,7 @@ class PacketConn(NCPConn):
             return None
         elif opc == Opcode.LOS:
             if True or debug:
-                print("{} got LOS: {}".format(self,data), file=sys.stderr)
+                print("LOS: {}".format(str(data,"ascii")), file=sys.stderr)
             return None
         elif opc == Opcode.EOF:
             if debug:
@@ -353,7 +356,7 @@ def input_handler(sock, once=False):
                     print("[IAC]",file=sys.stderr)
                 i = i+1
             elif c == 0o215:
-                if debug:
+                if debug and False:
                     print("[Newline]", file=sys.stderr)
                 print("",flush=True)                 #newline
             elif c > 127:
@@ -361,7 +364,7 @@ def input_handler(sock, once=False):
                     print("[8bit]", file=sys.stderr)
                 print("{:x}".format(c),end='',flush=True)
             else:
-                if debug:
+                if debug and False:
                     print("[normal char {}]".format(c), file=sys.stderr)
                 else:
                     print(chr(c),end='',flush=True)

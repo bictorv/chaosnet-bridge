@@ -1014,8 +1014,10 @@ def print_directory_list(hd,fs):
     if debug:
         pprint(hd,width=100)
         pprint(fs,width=100)
-    else:
+    elif 'DISK-SPACE-DESCRIPTION' in hd:
         print("   {}".format(hd['DISK-SPACE-DESCRIPTION']))
+    elif 'PHYSICAL-VOLUME-FREE-BLOCKS' in hd:
+        print("   Free blocks: {}".format(hd['PHYSICAL-VOLUME-FREE-BLOCKS']))
     if fs:
         # Get max pathname length
         # First check if there are protections
@@ -1286,22 +1288,24 @@ if __name__ == '__main__':
                     # print(s.getvalue(), end='')
                 elif op == "readinto":
                     outf, inf = arg[0].split(' ', maxsplit=1)
+                    if debug:
+                        print("readinto local '{}' remote '{}'".format(outf,inf), file=sys.stderr)
                     try:
                         os = open(outf, "w")
-                        r = ncp.read_file(wdparse(arg[0]), os)
+                        r = ncp.read_file(wdparse(inf), os)
                     except FileNotFoundError as e:
                         print(e, file=sys.stderr)
                         continue
                     finally:
                         os.close()
-                    print("Read {}, length {} ({}), created {}".format(r['truename'], r['length'],
-                                                                            "binary" if r['binary'] else "character",
-                                                                            r['created']))
+                        print("Read {}, length {} ({}), created {}".format(r['truename'], r['length'],
+                                                                               "binary" if r['binary'] else "character",
+                                                                               r['created']))
                 elif op == "breadinto":
                     outf, inf = arg[0].split(' ', maxsplit=1)
                     try:
                         os = open(outf, "wb")
-                        r = ncp.read_file(wdparse(arg[0]), os, binary=True)
+                        r = ncp.read_file(wdparse(inf), os, binary=True)
                     except FileNotFoundError as e:
                         print(e, file=sys.stderr)
                         continue
