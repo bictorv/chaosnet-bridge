@@ -2132,8 +2132,8 @@ main(int argc, char *argv[])
   }
 #endif
 
-  if (nchaddr > 1) {
-    // Only do this if we're directly on more than one net -
+  if ((nchaddr > 1) || (rttbl_host_len > 0)) {
+    // Only do this if we're directly on more than one net, or using host links -
     // otherwise we're not really a bridge, just an NCP interface.
     if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
     if (pthread_create(&threads[ti++], NULL, &rut_sender, NULL) < 0) {
@@ -2141,8 +2141,9 @@ main(int argc, char *argv[])
       exit(1);
     }
   } else {
-    if (verbose) fprintf(stderr,"Not starting RUT sender thread: only %d network%s\n",
-			 nchaddr, nchaddr != 1 ? "s" : "");
+    if (verbose) fprintf(stderr,"Not starting RUT sender thread: only %d network%s, %d host link%s\n",
+			 nchaddr, nchaddr != 1 ? "s" : "",
+			 rttbl_host_len, rttbl_host_len != 1 ? "s" : "");
   }
 
   if (verbose) fprintf(stderr,"Starting route cost updating thread\n");
@@ -2194,7 +2195,7 @@ main(int argc, char *argv[])
 
   while(1) {
     sleep(15);			/* ho hum. */
-    if (stats || verbose) {
+    if (stats) {
       print_stats(0);
     }
   }
