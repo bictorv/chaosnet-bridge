@@ -1375,6 +1375,9 @@ parse_link_args(struct chroute *rt, u_short addr)
 	  // more sanity checks after parsing: the muxed addresses are directly reachable
 	  fprintf(stderr,"Error: mux address %o must be on my subnet %o\n", sval, (rt->rt_myaddr >> 8));
 	  return -1;
+	} else if (rt->rt_tls_muxed[nmux] != 0) {
+	  fprintf(stderr,"Error: mux addresses already defined - use mux with comma-separated list\n");
+	  return -1;
 	} else {
 	  rt->rt_tls_muxed[nmux++] = sval;
 	}
@@ -2129,10 +2132,17 @@ main(int argc, char *argv[])
   }
 #endif
 
-  if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
-  if (pthread_create(&threads[ti++], NULL, &rut_sender, NULL) < 0) {
-    perror("pthread_create(rut_sender)");
-    exit(1);
+  if (nchaddr > 1) {
+    // Only do this if we're directly on more than one net -
+    // otherwise we're not really a bridge, just an NCP interface.
+    if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
+    if (pthread_create(&threads[ti++], NULL, &rut_sender, NULL) < 0) {
+      perror("pthread_create(rut_sender)");
+      exit(1);
+    }
+  } else {
+    if (verbose) fprintf(stderr,"Not starting RUT sender thread: only %d network%s\n",
+			 nchaddr, nchaddr != 1 ? "s" : "");
   }
 
   if (verbose) fprintf(stderr,"Starting route cost updating thread\n");
