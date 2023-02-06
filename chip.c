@@ -260,7 +260,7 @@ init_chaos_ip()
 }
 
 static int
-find_in_chipdest(u_short srcaddr, struct sockaddr *sa)
+find_in_chipdest(u_short srcaddr, struct sockaddr *sa, int trailer)
 {
   char ipaddr[INET6_ADDRSTRLEN];
   int i;
@@ -325,6 +325,18 @@ find_in_chipdest(u_short srcaddr, struct sockaddr *sa)
 	  return 0;
 	}
 	break;
+      }
+    }
+    else if (!trailer) {
+      // neither host or net route found by looking for chaos addr, but srcaddr wasn't in a trailer,
+      // so look for the IP instead
+      if ((chipdest[i].chip_sa.chip_saddr.sa_family == ipfam)
+	  && (((ipfam == AF_INET) &&
+	       (memcmp(&sin->sin_addr, &chipdest[i].chip_sa.chip_sin.sin_addr, sizeof(struct in_addr)) == 0))
+	      ||
+	      ((ipfam == AF_INET6) &&
+	       (memcmp(&sin6->sin6_addr, &chipdest[i].chip_sa.chip_sin6.sin6_addr, sizeof(struct in6_addr)) == 0)))) {
+	return 1;
       }
     }
   }
@@ -401,6 +413,7 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   struct in6_addr ip6_src;	/* ipv6 source */
   struct chaos_header *ch = (struct chaos_header *)chdata;
   char ipaddr[INET6_ADDRSTRLEN];
+  int intrailer = 0;
 
   // Get it in host order
   ntohs_buf((u_short *)chdata, (u_short *)chdata, chlen);
@@ -456,8 +469,11 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
       PTUNLOCKN(linktab_lock,"linktab_lock");
       return;
     }
-  } else
+    intrailer = 1;
+  } else {
+    intrailer = 0;
     srcaddr = ch_srcaddr(ch);
+  }
 
   if (is_mychaddr(srcaddr)) {
     if (chip_debug || debug) fprintf(stderr,"CHIP: received pkt from myself, dropping it\n");
@@ -465,7 +481,8 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   }
 
   // look up source in CHIP table, verify it exists, maybe add
-  int found = find_in_chipdest(srcaddr, sa);
+  // Note: sometimes the pkt comes without trailer (e.g. because TOPS-20 can't deal with it)
+  int found = find_in_chipdest(srcaddr, sa, intrailer);
 
   if (chip_debug || verbose || debug || !found) {
     if (verbose || debug) fprintf(stderr,"CHIP from %s (Chaos hw %#o) received: %d bytes from Chaos source %#o\n",
@@ -483,7 +500,8 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
     }
   }
   // make sure there is an up-to-date route of the right type
-  add_chip_route(srcaddr);
+  if (intrailer && chip_dynamic)
+    add_chip_route(srcaddr);
 
   // Find source route, and dispatch the packet
   struct chroute *srcrt = find_in_routing_table(srcaddr, 0, 0);
