@@ -22,49 +22,49 @@ eol = b"\215"
 
 keynames = dict(os='SYSTEM-TYPE', cpu='MACHINE-TYPE')
 def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
-    data = conn.get_message(1)             #get a packet
-    while data:
-        if debug:
-            print("Got data {}".format(data), file=sys.stderr)
-        name = str(re.split(b"[\215\r]",data,maxsplit=1)[0],"ascii").strip() #split("\r",maxsplit=1)[0]
-        if debug:
-            print("Got data {} => name {}".format(data,name), file=sys.stderr)
-        info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
-        if debug:
-            print("Got info {}".format(info), file=sys.stderr)
-        resp = []
-        if info:
-            for n in info['name']:
-                resp.append("NAME {}".format(n))
-            for k in keynames.keys():
-                if info[k]:
-                    resp.append("{} {}".format(keynames[k],info[k]))
-            if info['addrs']:
-                for a in info['addrs']:
-                    resp.append("CHAOS {:o}".format(a))
-            try:
-                ip = socket.gethostbyname(info['name'][0])
-                if ip:
-                    resp.append("INTERNET {}".format(ip))
-            except socket.error as msg:
-                if debug:
-                    print("gethostbyname: {}".format(msg), file=sys.stderr)
-        else:
-            resp = ["ERROR No such host"]
-        if debug:
-            print("Sending response {}".format(resp), file=sys.stderr)
-        conn.send_data(eol.join(map(lambda s:bytes(s,"ascii"),resp))+eol)
-        try:
+    try:
+        data = conn.get_message(1)             #get a packet
+        while data:
+            if debug:
+                print("Got data {}".format(data), file=sys.stderr)
+            name = str(re.split(b"[\215\r]",data,maxsplit=1)[0],"ascii").strip() #split("\r",maxsplit=1)[0]
+            if debug:
+                print("Got data {} => name {}".format(data,name), file=sys.stderr)
+            info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
+            if debug:
+                print("Got info {}".format(info), file=sys.stderr)
+            resp = []
+            if info:
+                for n in info['name']:
+                    resp.append("NAME {}".format(n))
+                for k in keynames.keys():
+                    if info[k]:
+                        resp.append("{} {}".format(keynames[k],info[k]))
+                if info['addrs']:
+                    for a in info['addrs']:
+                        resp.append("CHAOS {:o}".format(a))
+                try:
+                    ip = socket.gethostbyname(info['name'][0])
+                    if ip:
+                        resp.append("INTERNET {}".format(ip))
+                except socket.error as msg:
+                    if debug:
+                        print("gethostbyname: {}".format(msg), file=sys.stderr)
+            else:
+                resp = ["ERROR No such host"]
+            if debug:
+                print("Sending response {}".format(resp), file=sys.stderr)
+            conn.send_data(eol.join(map(lambda s:bytes(s,"ascii"),resp))+eol)
             conn.send_eof(True)
             data = conn.get_message(1)
-        except OSError as m:
-            # for example EOF[wait] didn't get an ack, then we're broken
-            if debug:
-                print(m, file=sys.stderr)
-            try:
-                conn.close()
-            finally:
-                return
+    except OSError as m:
+        # for example EOF[wait] didn't get an ack, then we're broken
+        if debug:
+            print(m, file=sys.stderr)
+        try:
+            conn.close()
+        finally:
+            return
 
 if __name__ == '__main__':
     import argparse
