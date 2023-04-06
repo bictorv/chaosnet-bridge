@@ -1791,7 +1791,8 @@ parse_contact_name(u_char *in)
   u_char *copy;
   int i = 0;
   while (in[i] != '\0' && !(isspace(in[i]))) {
-    if (islower(in[i])) in[i] = toupper(in[i]);
+    // Important: ITS isn't case-insensitive about contact names
+    if (islower(in[i])) in[i] = toupper(in[i]); 
     i++;
   }
   copy = calloc(1, i+1);
@@ -2843,8 +2844,8 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     if ((cs->state == CS_Open) || (cs->state == CS_Finishing)) 	// ignore SNS if not open
       send_sts_pkt(conn);
     return;
-  } else if (ch_opcode(ch) == CHOP_CLS) {
-    if (ncp_debug) printf("CLS received, clearing send_pkts\n");
+  } else if ((ch_opcode(ch) == CHOP_CLS) || (ch_opcode(ch) == CHOP_LOS)) {
+    if (ncp_debug) printf("%s received, clearing send_pkts\n", ch_opcode_name(ch_opcode(ch)));
     // don't retransmit anything - the other end has gone
     clear_send_pkts(conn);
     // socket end will finish the conn when the CLS pkt reaches it
@@ -2973,6 +2974,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       u_char buf[CH_PK_MAX_DATALEN];
       get_packet_string(ch, buf, sizeof(buf));
       printf("%%%% LOS: %s\n", buf);
+      
       break;
     }
     break;
