@@ -9,6 +9,7 @@ NAMEDP=0
 FINGERDP=0
 # The LOAD protocol
 LOADDP=0
+# The HOSTAB protocol
 
 # Read config file
 [ -f ./cbridge-services.conf ] && . ./cbridge-services.conf
@@ -40,3 +41,6 @@ if [ $LOADDP -gt 0 ]; then
     python3 ./loadd.py &
 fi
 
+if [ $HOSTABP -gt 0 ]; then
+    python3 ./hostabdp.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN
+fi
