@@ -410,10 +410,11 @@ def dns_addr_of_name(name, timeout=5):
     return addrs
 
 # Get all info
-def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address):
+def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, default_domain=None):
     global dns_resolver_address
     dns_resolver_address = dns_address
     isnum = False
+    extra = None
     if isinstance(nameoraddr,int):
         name = dns_name_of_address(nameoraddr,timeout=timeout)
         isnum = nameoraddr
@@ -422,17 +423,20 @@ def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address):
         isnum = int(nameoraddr,8)
     else:
         name = nameoraddr.strip()
+        if default_domain and "." not in name:
+            extra = name
+            name += "."+default_domain
     if name:
         addrs = dns_addr_of_name(name,timeout=timeout)
         if addrs is None or len(addrs) == 0:
             return None
         hinfo = get_dns_host_info(name,timeout=timeout)
-        names = [name]
+        names = [name] if not extra else [name,extra]
         if not isnum:
             # Got a name for nameoraddr, check its reverse mapping
             if debug:
                 print("Trying name of addr {}".format(addrs[0]), file=sys.stderr)
             canonical = dns_name_of_address(addrs[0],timeout=timeout)
             if canonical:
-                names = [canonical,name]  if canonical.lower() != name.lower() else [canonical]
+                names = [canonical]+names  if canonical.lower() != name.lower() else [canonical,extra] if extra else [canonical]
         return dict(name=names, addrs=addrs, os=None if hinfo == None else hinfo['os'], cpu=None if hinfo == None else hinfo['cpu'])
