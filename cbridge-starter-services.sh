@@ -42,5 +42,5 @@ if [ $LOADDP -gt 0 ]; then
 fi
 
 if [ $HOSTABP -gt 0 ]; then
-    python3 ./hostabdp.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN
+    python3 ./hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN
 fi
