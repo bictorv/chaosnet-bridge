@@ -21,6 +21,62 @@ from chaosnet import PacketConn, dns_info_for, dns_resolver_name, dns_resolver_a
 eol = b"\215"
 
 keynames = dict(os='SYSTEM-TYPE', cpu='MACHINE-TYPE')
+
+def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
+    gotip = False
+    # First get Chaosnet info - this usually has os and cpu
+    info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
+    if info is None:
+        # Try Internet class
+        info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain, rclass="IN")
+        if info is not None:
+            if info['addrs']:
+                gotip = True
+        else:
+            # Last resort: try gethostbyname_ex - the given DNS server might not server IN class to us
+            try:
+                hname,aliases,ips = socket.gethostbyname_ex(info['name'][0])
+                gotip = True
+                info = dict()
+                if hname.lower() != name:
+                    info['name'] = [hname,name]
+                else:
+                    info['name'] = [hname]
+                info['name'] += aliases
+                if ips:
+                    info['addrs'] = ips
+            except socket.error as msg:
+                if debug:
+                    print("gethostbyname_ex: {}".format(msg), file=sys.stderr)
+    if debug:
+        print("Got info {}".format(info), file=sys.stderr)
+    resp = []
+    if info:
+        for n in info['name']:
+            resp.append("NAME {}".format(n))
+        for k in keynames.keys():
+            if info[k]:
+                resp.append("{} {}".format(keynames[k],info[k]))
+        if info['addrs']:
+            for a in info['addrs']:
+                if isinstance(a,int):
+                    resp.append("CHAOS {:o}".format(a))
+                else:
+                    resp.append("INTERNET {}".format(a))
+        if not gotip:
+            try:
+                # If we didn't already get some IP address info, get it now
+                hname,aliases,ips = socket.gethostbyname_ex(info['name'][0])
+                if ips:
+                    for ip in ips:
+                        resp.append("INTERNET {}".format(ip))
+            except socket.error as msg:
+                if debug:
+                    print("gethostbyname: {}".format(msg), file=sys.stderr)
+    else:
+        resp = ["ERROR No such host"]
+    return resp
+
 def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
     try:
         data = conn.get_message(1)             #get a packet
@@ -30,28 +86,7 @@ def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
             name = str(re.split(b"[\215\r]",data,maxsplit=1)[0],"ascii").strip() #split("\r",maxsplit=1)[0]
             if debug:
                 print("Got data {} => name {}".format(data,name), file=sys.stderr)
-            info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
-            if debug:
-                print("Got info {}".format(info), file=sys.stderr)
-            resp = []
-            if info:
-                for n in info['name']:
-                    resp.append("NAME {}".format(n))
-                for k in keynames.keys():
-                    if info[k]:
-                        resp.append("{} {}".format(keynames[k],info[k]))
-                if info['addrs']:
-                    for a in info['addrs']:
-                        resp.append("CHAOS {:o}".format(a))
-                try:
-                    ip = socket.gethostbyname(info['name'][0])
-                    if ip:
-                        resp.append("INTERNET {}".format(ip))
-                except socket.error as msg:
-                    if debug:
-                        print("gethostbyname: {}".format(msg), file=sys.stderr)
-            else:
-                resp = ["ERROR No such host"]
+            resp = hostab_server_response(name,timeout,dns_address,default_domain)
             if debug:
                 print("Sending response {}".format(resp), file=sys.stderr)
             conn.send_data(eol.join(map(lambda s:bytes(s,"ascii"),resp))+eol)
@@ -82,7 +117,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    dns_resolver_address = socket.gethostbyname(args.dns_server)
+    dns_resolver_address = chaosnet.set_dns_resolver_address(args.dns_server)
 
     debug = False
     if args.debug:

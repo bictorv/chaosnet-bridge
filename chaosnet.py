@@ -337,6 +337,11 @@ import dns.resolver
 dns_resolver_name = 'DNS.Chaosnet.NET'
 dns_resolver_address = None
 
+def set_dns_resolver_address(adorname):
+    global dns_resolver_address
+    dns_resolver_address = socket.gethostbyname(adorname)
+    return dns_resolver_address
+
 def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
     if type(addrstring) is int:
         name = "{:o}.CH-ADDR.NET.".format(addrstring)
@@ -367,14 +372,14 @@ def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
     except dns.exception.DNSException as e:
         print("Error:", e, file=sys.stderr)
 
-def get_dns_host_info(name, timeout=5):
+def get_dns_host_info(name, timeout=5, rclass="CH"):
     # If it's an address given, look up the name first
     if isinstance(name,int):
         name = dns_name_of_address(name, timeout=timeout) or name
     elif isinstance(name,str) and name.isdigit():
         name = dns_name_of_address(int(name,8), timeout=timeout) or name
     try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.CH),
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.from_text(rclass)),
                               dns_resolver_address, timeout=timeout)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.HINFO:
@@ -387,7 +392,7 @@ def get_dns_host_info(name, timeout=5):
     except dns.exception.DNSException as e:
         print("Error", e, file=sys.stderr)
 
-def dns_addr_of_name(name, timeout=5):
+def dns_addr_of_name(name, timeout=5, rclass="CH"):
     # If it's an address given, look up the name first, to collect all its addresses
     if isinstance(name,int):
         name = dns_name_of_address(name, timeout=timeout) or name
@@ -395,7 +400,7 @@ def dns_addr_of_name(name, timeout=5):
         name = dns_name_of_address(int(name,8), timeout=timeout) or name
     addrs = []
     try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.CH),
+        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.from_text(rclass)),
                               dns_resolver_address, timeout=timeout)
         for t in h.answer:
             if t.rdtype == dns.rdatatype.A:
@@ -410,9 +415,9 @@ def dns_addr_of_name(name, timeout=5):
     return addrs
 
 # Get all info
-def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, default_domain=None):
-    global dns_resolver_address
-    dns_resolver_address = dns_address
+def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, default_domain=None, rclass="CH"):
+    if dns_address:
+        set_dns_resolver_address(dns_address)
     isnum = False
     extra = None
     if isinstance(nameoraddr,int):
@@ -427,12 +432,12 @@ def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, defaul
             extra = name
             name += "."+default_domain
     if name:
-        addrs = dns_addr_of_name(name,timeout=timeout)
+        addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
         if addrs is None or len(addrs) == 0:
             return None
-        hinfo = get_dns_host_info(name,timeout=timeout)
+        hinfo = get_dns_host_info(name,timeout=timeout,rclass=rclass)
         names = [name] if not extra else [name,extra]
-        if not isnum:
+        if not isnum and rclass == "CH":
             # Got a name for nameoraddr, check its reverse mapping
             if debug:
                 print("Trying name of addr {}".format(addrs[0]), file=sys.stderr)
