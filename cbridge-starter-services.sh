@@ -1,6 +1,9 @@
 #!/bin/sh
 # Starter script for Chaosnet services not already built-in in cbridge (typically stream services).
 
+# Make sure the chaosnet library is found
+PYTHONPATH=.:$PYTHONPATH
+
 # Start DOMAIN server (the stream protocol; cbridge has the simple DNS protocol built-in)
 DOMAINP=0
 # The NAME protocol (corresponding to TCP finger, port 79)
