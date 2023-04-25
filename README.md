@@ -160,8 +160,8 @@ links.
 
 ### Private non-routed subnet
 In order to minimise address collisions and routing problems, the
-subnet 0376 octal, is allocated for private non-routed use, such as
-experiments.  
+subnet 0376 octal, is reserved for private non-routed use, such as
+experiments. 
 No routing information about that subnet should be sent
 outside that subnet, no packets from that subnet should be sent to
 other subnets, and any packets received from that subnet on another
