@@ -45,6 +45,15 @@
 #endif
 #endif
 
+// This subnet is allocated for private non-routed use.
+// No routing information about that subnet should be sent outside
+// that subnet, no packets from that subnet should be sent to other
+// subnets, and any packets received from that subnet on another
+// subnet should be dropped. This is similar to the IP private
+// networks such as 10.x.y.z or 192.168.x.y.
+// @@@@ consider making this a configurable thing, at least being able to _add_ private subnets?
+#define PRIVATE_CHAOS_SUBNET 0376
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -296,6 +305,7 @@ u_short find_closest_addr(u_short addrs[], int naddrs);
 u_short find_my_closest_addr(u_short addr);
 void add_mychaddr(u_short addr);
 int valid_chaos_host_address(u_short addr);
+int is_private_subnet(u_short subnet);
 
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);

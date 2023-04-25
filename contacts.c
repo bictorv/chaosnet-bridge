@@ -69,6 +69,14 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
     struct chroute *hostpath = NULL;
+#ifdef PRIVATE_CHAOS_SUBNET
+    if (is_private_subnet(i)) {
+      // Don't advertise route to this subnet
+      if (debug || verbose)
+	fprintf(stderr," NOT including private subnet %#o\n", i);
+      continue;
+    }
+#endif
     if (RT_PATHP(&rttbl_net[i])
 	// don't send routes which are already stale
 	&& (rttbl_net[i].rt_cost < RTCOST_HIGH)
@@ -125,6 +133,7 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 // ;;; subnet.  pkt[2n+1] has the host's idea of the cost.
 // (Stupid format, can only handle subnets up to decimal #122 - RUT
 // handles 122 subnets regardless of their actual subnet number.)
+// Note: thus no need to filter out PRIVATE_CHAOS_SUBNET. Unless it would fit.
 
 static int
 make_dump_routing_table_pkt(u_char *pkt, int pklen)
@@ -141,6 +150,13 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
     struct chroute *rt = &rttbl_net[sub];
+#ifdef PRIVATE_CHAOS_SUBNET
+    if (is_private_subnet(sub)) {
+      if (debug || verbose) 
+	fprintf(stderr," NOT adding routing for private subnet %#o\n", sub);
+      continue;
+    }
+#endif
     if (rt->rt_type != RT_NOPATH) {
       // Method: if < 0400: interface number; otherwise next hop address
       if (RT_DIRECT(rt) || (is_mychaddr(rt->rt_braddr))) {
@@ -317,6 +333,16 @@ status_responder(u_char *rfc, int len)
   for (i = 1; i < 256 && maxentries > 0; i++) {
     if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)
 	 || (linktab[i].pkt_aborted != 0) || (linktab[i].pkt_lost != 0)) {
+#ifdef PRIVATE_CHAOS_SUBNET
+      if ((i != (src>>8)) &&
+	  ((is_private_subnet(i) && !is_private_subnet(src>>8)) ||
+	   (!is_private_subnet(i) && is_private_subnet(src>>8)))) {
+	// Don't leak between private/public subnets
+	if (debug || verbose)
+	  fprintf(stderr,"STATUS: NOT including subnet %#o to dest %#o\n", i, src);
+	continue;
+      }
+#endif
       maxentries--;
       *dp++ = htons(i + 0400);		/* subnet + 0400 */
       *dp++ = htons(16);		/* length in 16-bit words */

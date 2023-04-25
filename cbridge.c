@@ -317,6 +317,12 @@ int valid_chaos_host_address(u_short addr)
   return ((addr > 0xff) && ((addr & 0xff) != 0));
 }
 
+int is_private_subnet(u_short subnet)
+{
+  // @@@@ extend this if more are added by config
+  return (subnet == PRIVATE_CHAOS_SUBNET);
+}
+
 void print_link_stats() 
 {
   int i;
@@ -528,6 +534,16 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
     for (i = 0; i < pkdlen; i += 4) {
       rsub = WORD16(&data[i]);	/* subnet nr */
       rcost = WORD16(&data[i+2]);  /* cost from that bridge */
+#ifdef PRIVATE_CHAOS_SUBNET
+      if (is_private_subnet(rsub)) {
+	// Never mind about somebody's private network
+	// They should not announce it: print warning, @@@@ but not every time
+	fprintf(stderr," Received RUT info for subnet %#o from host %#o,\n"
+		" but that subnet is private and should not be announced.\n",
+		rsub, src);
+	continue;
+      }
+#endif
       if (rttbl_net[rsub].rt_type == RT_STATIC && (verbose||debug) )
 	fprintf(stderr,"DEBUG: Received RUT info for subnet %#o from host %#o.\n"
 		" We have a STATIC route to that subnet - "
@@ -761,6 +777,22 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   u_short dchad = ch_destaddr(ch);
   u_short schad = ch_srcaddr(ch);
 
+#ifdef PRIVATE_CHAOS_SUBNET
+  // Don't forward between private and non-private subnets (but OK within the same (private) subnet)
+  if (((schad >> 8) != (dchad >> 8)) &&
+      ((is_private_subnet(schad >> 8) && !is_private_subnet(dchad >> 8)) ||
+       (is_private_subnet(dchad >> 8) && !is_private_subnet(schad >> 8)))) {
+    if (debug || verbose) 
+      fprintf(stderr,"Not forwarding between private and non-private subnets: src %#o dst %#o\n",
+	      schad, dchad);
+    // incf dropped packets
+    PTLOCKN(linktab_lock,"linktab_lock");
+    linktab[schad>>8].pkt_rejected++;
+    PTUNLOCKN(linktab_lock,"linktab_lock");
+    return;
+  }
+#endif
+
   // round up to full 16-bit word
   dlen += (dlen % 2);
 
@@ -855,6 +887,9 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // EXCEPT the link it came in on
 
   int i, sn, nsubn = ch_ackno(ch)*8;
+#ifdef PRIVATE_CHAOS_SUBNET
+  u_short ssubnet = ch_srcaddr(ch) >> 8;
+#endif
   u_char mask[32];
   htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
   if (debug)
@@ -869,6 +904,17 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   for (i = 0; i < rttbl_host_len; i++) {
     rt = &rttbl_host[i];
     sn = (rt->rt_dest)>>8;
+#ifdef PRIVATE_CHAOS_SUBNET
+    if ((sn != ssubnet) &&
+	((is_private_subnet(sn) && !is_private_subnet(ssubnet)) ||
+	 (!is_private_subnet(sn) && is_private_subnet(ssubnet)))) {
+      // Don't forward between private and non-private subnets
+      if (debug || verbose)
+	fprintf(stderr,"BRD not forwarded (private) from subnet %#o to host %#o on subnet %#o\n", 
+		ssubnet, rt->rt_dest, sn);
+      continue;
+    }
+#endif
     if ((sn < nsubn) && (RT_DIRECT(rt)) && (src != rt) && (mask[sn/8] & (1<<(sn % 8)))) {
       forward_chaos_broadcast_on_route(rt, sn, data, dlen);
     } else if (debug)
@@ -879,6 +925,17 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // for all rttbl_net entries except the source, which are direct links
   //   if the subnet is set, forward there (after clearing bit)
   for (sn = 1; sn < 256 && sn < nsubn; sn++) {
+#ifdef PRIVATE_CHAOS_SUBNET
+    if ((sn != ssubnet) &&
+	((is_private_subnet(sn) && !is_private_subnet(ssubnet)) ||
+	 (!is_private_subnet(sn) && is_private_subnet(ssubnet)))) {
+      // Don't forward between private and non-private subnets
+      if (debug || verbose)
+	fprintf(stderr,"BRD not forwarded (private) from subnet %#o to subnet %#o\n", 
+		ssubnet, sn);
+      continue;
+    }
+#endif
     rt = &rttbl_net[sn];
     if ((src != rt) && (rttbl_net[sn].rt_link != LINK_NOLINK) && 
 	(RT_DIRECT(rt)) && (mask[sn/8] & (1<<(sn % 8)))) {

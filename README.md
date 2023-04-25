@@ -158,11 +158,27 @@ A bridge between two subnets needs an address on each one of them. In
 the [configuration](CONFIGURATION.md), see the `myaddr` parameter for
 links.
 
+### Private non-routed subnet
+In order to minimise address collisions and routing problems, the
+subnet 0376 octal, is allocated for private non-routed use, such as
+experiments.  
+No routing information about that subnet should be sent
+outside that subnet, no packets from that subnet should be sent to
+other subnets, and any packets received from that subnet on another
+subnet should be dropped. This is similar to the IP private networks
+such as 10.x.y.z or 192.168.x.y.
+
 ## Other features
 
 If the process receives a SIGUSR1 signal, it prints things about its
 configuration, routing and statistics. If SIGINFO is defined (e.g. on
 macOS, using ctrl-T in bash), that signal does the same.
+
+## Thoughts - let me know what you think
+
+Should BRD packets be forwarded towards subnets in the bitmask which we know a route to? 
+This would make it possible to do a "remote broadcast" on a net we're not directly connected to.
+(Currently they are only forwarded on subnets we are directly connected to, which means they can still reach remote subnets, but only by being broadcast on every net along the way.)
 
 ## Future work (let me know if you do it!):
 
