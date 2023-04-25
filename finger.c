@@ -145,6 +145,7 @@ main(int argc, char *argv[])
     exit(1);
   }
 
+  i = 0;
   while ((cnt = recv(sock, buf, sizeof(buf), 0)) > 0) {
     for (i = 0; i < cnt; i++)
       switch ((u_char)buf[i]) {
@@ -154,5 +155,9 @@ main(int argc, char *argv[])
       case 0215: putchar('\n'); break; // CRLF
       default: putchar(buf[i]);
       }
+  }
+  if ((i > 1) && ((u_char)buf[i-1] != 0215) && (buf[i-1] != '\n')) {
+    // finish the line, if there was one (LISPMs don't always end with newline)
+    putchar('\n');
   }
 }
