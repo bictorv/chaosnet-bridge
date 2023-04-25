@@ -15,7 +15,7 @@
 
 import sys, socket, threading, re, time
 
-from chaosnet import PacketConn, dns_info_for, dns_resolver_name, dns_resolver_address
+from chaosnet import PacketConn, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
 
 # The typical chaosnet end-of-line (#\return)
 eol = b"\215"
@@ -117,7 +117,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    dns_resolver_address = chaosnet.set_dns_resolver_address(args.dns_server)
+    dns_resolver_address = set_dns_resolver_address(args.dns_server)
 
     debug = False
     if args.debug:
