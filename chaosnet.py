@@ -14,7 +14,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import socket, io, sys
+import socket, io, sys, time
 from enum import IntEnum, auto
 
 # The directories of these need to match the "socketdir" ncp setting in cbridge.
