@@ -428,11 +428,27 @@ def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, defaul
         isnum = int(nameoraddr,8)
     else:
         name = nameoraddr.strip()
-        if default_domain and "." not in name:
-            extra = name
-            name += "."+default_domain
     if name:
-        addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
+        if "." not in name:
+            # Try each domain in the list
+            if isinstance(default_domain,list) and len(default_domain) > 0:
+                extra = name
+                for d in default_domain:
+                    n = name+"."+d
+                    addrs = dns_addr_of_name(n,timeout=timeout,rclass=rclass)
+                    if addrs is not None and len(addrs) > 0:
+                        name = n
+                        break
+            # Try the given domain
+            elif isinstance(default_domain,str):
+                extra = name
+                name = name+"."+default_domain
+                addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
+            # Well try it anyway
+            else:
+                addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
+        else:
+            addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
         if addrs is None or len(addrs) == 0:
             return None
         hinfo = get_dns_host_info(name,timeout=timeout,rclass=rclass)

@@ -108,8 +108,8 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("-s",'--dns-server',default=dns_resolver_name,
                             help='DNS server to use, default '+dns_resolver_name)
-    parser.add_argument("-D",'--default-domain',
-                            help='Default domain if names have none')
+    parser.add_argument("-D",'--default-domain',action='append',
+                            help='Default domain if names have none (repeat to have more than one)')
     parser.add_argument("-t",'--timeout',default=2,type=int,
                             help='DNS timeout in seconds, default 2')
     parser.add_argument("-m",'--maxthreads',default=10,type=int,
