@@ -1,5 +1,7 @@
 # Copyright © 2023 Björn Victor (bjorn@victor.se)
 # Chaosnet server for HOSTAB protocol.
+# As an extension, the request can also be a Chaosnet address (octal), which is looked up
+# giving the same response as if the corresponding name had been requested.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -24,6 +26,7 @@ keynames = dict(os='SYSTEM-TYPE', cpu='MACHINE-TYPE')
 
 def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
     gotip = False
+    name = name.upper()                   #Traditions
     # First get Chaosnet info - this usually has os and cpu
     info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
     if info is None:
@@ -56,7 +59,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
             resp.append("NAME {}".format(n))
         for k in keynames.keys():
             if info[k]:
-                resp.append("{} {}".format(keynames[k],info[k]))
+                resp.append("{} {}".format(keynames[k],info[k].upper()))
         if info['addrs']:
             for a in info['addrs']:
                 if isinstance(a,int):
