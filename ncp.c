@@ -46,6 +46,7 @@
 
 #if CHAOS_DNS
 #include <resolv.h>
+#include <arpa/nameser.h>
 #endif
 
 // ms to wait for ack of final EOF

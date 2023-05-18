@@ -1,20 +1,21 @@
 OS_NAME = $(shell uname)
 MACH_NAME = $(shell uname -m)
 
-ifeq ($(OS_NAME), Darwin)
-OS = OSX
-endif
-
-ifeq ($(OS_NAME), Linux)
-OS = LINUX
-endif
-
 # Mac OSX
-ifeq ($(OS), OSX)
+ifeq ($(OS_NAME), Darwin)
 CFLAGS = -I/opt/local/include -g
 LDFLAGS = -L/opt/local/lib
 else
 CFLAGS = -g
+endif
+
+LIBRESOLV=-lresolv
+
+# For OpenBSD, do "pkg_add libbind"
+ifeq ($(OS_NAME), OpenBSD)
+CFLAGS = -I/usr/local/include/bind -g
+LDFLAGS = -L/usr/local/lib/libbind
+LIBRESOLV = -lbind
 endif
 
 all: cbridge hostat finger
@@ -23,9 +24,9 @@ OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o c
 
 # YMMV, but sometimes openssl etc are in /opt/local.
 # -lssl and -lcrypto are needed only for TLS.
-# -lresolv needed only for dns.o
+# -lresolv needed only for dns.o (use -lbind for OpenBSD)
 cbridge: $(OBJS) chaosd.h cbridge-chaos.h chudp.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -lpthread -lssl -lcrypto -lresolv
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -lpthread -lssl -lcrypto $(LIBRESOLV)
 
 cbridge.o: cbridge.c cbridge.h cbridge-chaos.h 
 	$(CC) -c $(CFLAGS) -o $@ $<
