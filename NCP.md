@@ -167,7 +167,7 @@ where *addr* is an octal address, results in a FWD packet to the remote host, in
 
 To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
 
-## chaos_seqpacket
+## chaos_packet
 
 This is also a socket of type `SOCK_STREAM`.
 
