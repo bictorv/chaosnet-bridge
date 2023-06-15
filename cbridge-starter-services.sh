@@ -38,12 +38,16 @@ if [ $NAMEDP -gt 0 ]; then
     python3 ./named.py &
 fi
 if [ $FINGERDP -gt 0 ]; then
-    python3 ./fingerd.py &
+    if [ "$AFFILIATION" != "" ]; then
+	python3 ./fingerd.py -a $AFFILIATION &
+    else
+	python3 ./fingerd.py &
+    fi
 fi
 if [ $LOADDP -gt 0 ]; then
     python3 ./loadd.py &
 fi
 
 if [ $HOSTABP -gt 0 ]; then
-    python3 ./hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN
+    python3 ./hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN &
 fi
