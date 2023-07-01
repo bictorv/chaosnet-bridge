@@ -831,6 +831,14 @@ find_existing_conn(struct chaos_header *ch)
 	 (c->conn_lhost == dest) &&
 	 (c->conn_lidx == didx))
 	||
+	// Retransmitted RFC before our OPN was received
+	((c->conn_state->state == CS_Open_Sent) &&
+	 (opc == CHOP_RFC) &&
+	 (c->conn_rhost == src) &&
+	 (c->conn_ridx == sidx) &&
+	 (c->conn_lhost == dest) &&
+	 (didx == 0))
+	||
 	// answer to RFC: remote index of conn is 0, but remote host matches
 	// answer to BRD: both remote index and host are 0
 	(((((c->conn_state->state == CS_RFC_Sent) && (c->conn_rhost == src)) ||
@@ -3133,7 +3141,7 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
     }
 
     if ((sval = select(sock+1, &fds, NULL, NULL, &timeout)) < 0) {
-      if (sval == EINTR) {
+      if (errno == EINTR) {
 	// timed out, try again
 	sval = 0;
       } else {
@@ -3232,8 +3240,14 @@ socket_to_conn_stream_handler(struct conn *conn)
     // In inactive state, the first thing from the user socket is a "string command" (RFC or LSN)
     if (strncasecmp((char *)buf,"LSN ", 4) == 0) {
       cname = parse_contact_name(&buf[4]);
-      if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
-      add_listener(conn, cname);	// also changes state
+      if ((cname != NULL) && (strlen(cname) > 0)) {
+	if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
+	add_listener(conn, cname);	// also changes state
+      } else {
+	if (ncp_debug) printf("Stream \"LSN %s\", contact name missing?\n", cname);
+	user_socket_los(conn, "Contact name missing");
+	return -1;
+      }
     } else if (strncasecmp((char *)buf,"RFC ", 4) == 0) {
       // create conn and send off an RFC pkt
       if (ncp_debug) printf("Stream \"%s\"\n", buf);
@@ -3391,8 +3405,14 @@ socket_to_conn_packet_handler(struct conn *conn)
 	memcpy(argbuf, &buf[4], len);
 	argbuf[len] = '\0';
 	cname = parse_contact_name(argbuf);
-	if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
-	add_listener(conn, cname);	// also changes state
+	if ((cname != NULL) && (strlen(cname) > 0)) {
+	  if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
+	  add_listener(conn, cname);	// also changes state
+	} else {
+	  if (ncp_debug) printf("Packet \"LSN %s\", contact name missing?\n", cname);
+	  user_socket_los(conn, "Contact name missing");
+	  return -1;
+	}
       } else if (opc == CHOP_RFC) {
 	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
 	memcpy(argbuf, &buf[4], len);
@@ -3614,8 +3634,10 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     char argsbuf[MAX_CONTACT_NAME_LENGTH], *space;
     char *args = argsbuf;
     len = ch_nbytes(pkt);
+#if 0 // Turns out this is not so useful for a program to interpret
 #if CHAOS_DNS
     if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
+#endif
 #endif
       sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
