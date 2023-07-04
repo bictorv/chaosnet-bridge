@@ -37,7 +37,7 @@ void usage(char *s)
 	  " Handles \"simple\" connectionless Chaosnet protocols.\n"
 	  " Contact defaults to STATUS. Try also TIME, UPTIME, DUMP-ROUTING-TABLE, LASTCN, FINGER, LOAD.\n"
 	  "  (Contact name is not case sensitive.)\n"
-	  " Options: -q for quiet, -r for raw output, -a for ascii output, -t sec to set RFC timeout (default 30).\n",
+	  " Options: -q quiet, -v verbose, -r raw output, -a ascii output, -t sec to set RFC timeout (default 30).\n",
 	  s);
   exit(1);
 }
@@ -168,26 +168,6 @@ void print_routing_table(u_char *bp, int len, u_short src)
   }
 }
 
-void print_time(u_char *bp, int len, u_short src)
-{
-  u_short *dp = (u_short *)bp;
-  char tbuf[64];
-
-  if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
-
-  time_t t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
-#if __APPLE__
-  // imagine this
-  t &= 0xffffffff;
-#endif
-  if (t > 2208988800UL) {  /* see RFC 868 */
-    t -= 2208988800UL;
-    strftime(tbuf, sizeof(tbuf), "%F %T", localtime(&t));
-    printf("%s\n", tbuf);
-  } else 
-    printf("Unexpected time value %ld <= %ld\n", t, 2208988800UL);
-}
-
 char *seconds_as_interval(u_int t)
 {
   char tbuf[64], *tp = tbuf;
@@ -195,6 +175,12 @@ char *seconds_as_interval(u_int t)
   if (t == 0)
     return strdup("now");
 
+  if (t > 365*60*60*24) {
+    int y = t/(365*60*60*24);
+    sprintf(tp, "%d year%s ", y, y==1 ? "" : "s");
+    t %= 365*60*60*24;
+    tp += strlen(tp);
+  }
   if (t > 60*60*24*7) {
     int w = t/(60*60*24*7);
     sprintf(tp, "%d week%s ", w, w == 1 ? "" : "s");
@@ -218,6 +204,31 @@ char *seconds_as_interval(u_int t)
   else
     sprintf(tp, "%d s", t);
   return strdup(tbuf);
+}
+
+void print_time(u_char *bp, int len, u_short src, int verbose)
+{
+  u_short *dp = (u_short *)bp;
+  char tbuf[64];
+
+  if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
+
+  time_t t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
+  time_t here = time(NULL);
+#if __APPLE__
+  // imagine this
+  t &= 0xffffffff;
+#endif
+  if (t > 2208988800UL) {  /* see RFC 868 */
+    t -= 2208988800UL;
+    strftime(tbuf, sizeof(tbuf), "%F %T", localtime(&t));
+    if (verbose)
+      printf("%s (diff %s%s)\n", tbuf, (t-here)==0?"": (t-here) > 0 ? "+":"-", 
+	     (t-here)==0 ?"none":seconds_as_interval(labs(t-here)));
+    else
+      printf("%s\n", tbuf);
+  } else 
+    printf("Unexpected time value %ld <= %ld\n", t, 2208988800UL);
 }
 
 void print_uptime(u_char *bp, int len, u_short src)
@@ -338,11 +349,11 @@ int
 main(int argc, char *argv[])
 {
   signed char c;
-  char opts[] = "qrat:";		// quiet, raw, timeout X
+  char opts[] = "qvrat:";		// quiet, verbose, raw, timeout X
   char *host, *contact = "STATUS", *pname, *space;
   char buf[CH_PK_MAXLEN+2];
   char *nl, *bp;
-  int i, cnt, sock, anslen, ncnt, raw = 0, ascii = 0, timeout = 0, quiet = 0;
+  int i, cnt, sock, anslen, ncnt, raw = 0, ascii = 0, timeout = 0, quiet = 0, verbose = 0;
   u_short src;
 
   pname = argv[0];
@@ -352,6 +363,7 @@ main(int argc, char *argv[])
     case 'r': raw = 1; break;
     case 'a': ascii = 1; break;
     case 'q': quiet = 1; break;
+    case 'v': verbose = 1; break;
     case 't': timeout = atoi(optarg); break;
     default:
       fprintf(stderr,"unknown option '%c'\n", c);
@@ -415,7 +427,7 @@ main(int argc, char *argv[])
   else if (strcasecmp(contact, "STATUS") == 0)
     print_status((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "TIME") == 0)
-    print_time((u_char *)nl, anslen, src);
+    print_time((u_char *)nl, anslen, src, verbose);
   else if (strcasecmp(contact, "UPTIME") == 0)
     print_uptime((u_char *)nl, anslen, src);
   else if (strcasecmp(contact, "DUMP-ROUTING-TABLE") == 0)
