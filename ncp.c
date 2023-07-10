@@ -1252,7 +1252,8 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   c->conn_lhost = find_my_closest_addr(c->conn_rhost);
   if (ncp_debug) printf("NCP: my closest addr to %#o (%#x) is %#o (%#x)\n",
 			c->conn_rhost, c->conn_rhost, c->conn_lhost, c->conn_lhost);
-  c->conn_lidx = make_fresh_index();
+  if (c->conn_lidx == 0)
+    c->conn_lidx = make_fresh_index();
   PTUNLOCKN(c->conn_lock,"conn_lock");
   if (ncp_debug > 1) print_conn("Updated", c, 0);
 
@@ -2970,7 +2971,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   case CS_Open_Sent:	       // Should only happen for the STS above
   case CS_RFC_Received:	       // Should only get retransmitted RFCs
   case CS_Answered: // should not get pkts (other than retransmitted ANS?)
-    if ((conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
+    if ((ch_opcode(ch) == CHOP_ANS) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
       // Allow more ANS for broadcast conns
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
@@ -3240,7 +3241,7 @@ socket_to_conn_stream_handler(struct conn *conn)
     // In inactive state, the first thing from the user socket is a "string command" (RFC or LSN)
     if (strncasecmp((char *)buf,"LSN ", 4) == 0) {
       cname = parse_contact_name(&buf[4]);
-      if ((cname != NULL) && (strlen(cname) > 0)) {
+      if ((cname != NULL) && (strlen((char *)cname) > 0)) {
 	if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
 	add_listener(conn, cname);	// also changes state
       } else {
@@ -3405,7 +3406,7 @@ socket_to_conn_packet_handler(struct conn *conn)
 	memcpy(argbuf, &buf[4], len);
 	argbuf[len] = '\0';
 	cname = parse_contact_name(argbuf);
-	if ((cname != NULL) && (strlen(cname) > 0)) {
+	if ((cname != NULL) && (strlen((char *)cname) > 0)) {
 	  if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
 	  add_listener(conn, cname);	// also changes state
 	} else {
