@@ -69,14 +69,6 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (i = 0; (i < 0xff) && (nroutes <= maxroutes); i++) {
     struct chroute *hostpath = NULL;
-#ifdef PRIVATE_CHAOS_SUBNET
-    if (is_private_subnet(i)) {
-      // Don't advertise route to this subnet
-      if (debug || verbose)
-	fprintf(stderr," NOT including private subnet %#o\n", i);
-      continue;
-    }
-#endif
     if (RT_PATHP(&rttbl_net[i])
 	// don't send routes which are already stale
 	&& (rttbl_net[i].rt_cost < RTCOST_HIGH)
@@ -96,6 +88,14 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) == NULL))
 	       ))
 	) {
+#ifdef PRIVATE_CHAOS_SUBNET
+      if (is_private_subnet(i)) {
+	// Don't advertise route to this subnet
+	if (debug || verbose)
+	  fprintf(stderr," NOT including private subnet %#o\n", i);
+	continue;
+      }
+#endif
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
       data[nroutes*4+2] = (cost >> 8);
