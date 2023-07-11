@@ -3559,19 +3559,10 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       strcat((char *)&obuf[len+4], "\r\n");
       len += 4+2;
       break;
-    case CHOP_FWD: {
-#if CHAOS_DNS
-      char fhost[NS_MAXDNAME];
-#else
-      char fhost[32];
-#endif
-#if CHAOS_DNS
-      if (dns_name_of_addr(ch_ackno(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
-#endif
-	sprintf((char *)fhost, "%#o", ch_ackno(pkt));
-      sprintf((char *)obuf, "FWD %s", fhost);
+    case CHOP_FWD:
+      // Use the octal host address, easier to handle for a program
+      sprintf((char *)obuf, "FWD %#o", ch_ackno(pkt));
       len = strlen((char *)obuf);
-    }
       break;
     default:
       memcpy(obuf, buf, len);
@@ -3627,20 +3618,12 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   }
 
   if ((cs->state == CS_Listening) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
-#if CHAOS_DNS
-    char fhost[NS_MAXDNAME];
-#else
     char fhost[32];
-#endif
     char argsbuf[MAX_CONTACT_NAME_LENGTH], *space;
     char *args = argsbuf;
     len = ch_nbytes(pkt);
-#if 0 // Turns out this is not so useful for a program to interpret
-#if CHAOS_DNS
-    if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)fhost, sizeof(fhost)) < 0)
-#endif
-#endif
-      sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
+    // Just use the octal host address, which is easier to interpret for a program
+    sprintf((char *)fhost, "%#o", ch_srcaddr(pkt));
     // skip contact (listener knows that), just get args
     int nstrbytes = get_packet_string(pkt, (u_char *)args, sizeof(argsbuf));
     if (ncp_debug) printf("NCP %s %d bytes data: \"%s\"\n", ch_opcode_name(opc), nstrbytes, args);
@@ -3668,10 +3651,8 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     len = 2;
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
-#if CHAOS_DNS
-    if (dns_name_of_addr(ch_srcaddr(pkt), (u_char *)buf, NS_MAXDNAME > CH_PK_MAX_DATALEN ? CH_PK_MAX_DATALEN : NS_MAXDNAME) < 0)
-#endif
-      sprintf((char *)buf, "%#o", ch_srcaddr(pkt));
+    // Remote address in octal
+    sprintf((char *)buf, "%#o", ch_srcaddr(pkt));
     len = strlen(buf);
     if (ncp_debug) printf("To socket %s (%d bytes): [OPN] %s", conn_sockaddr_path(conn), len, buf);
   } else if ((opc == CHOP_LOS) || (opc == CHOP_CLS)) {

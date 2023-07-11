@@ -147,7 +147,7 @@ The NCP then notes that the user program is listening for connections to *contac
 
 `RFC `*rhost* *args*
 
-to the user program, where *rhost* is the remote host (name or octal address), and *args* are the arguments given in the RFC packet, if any.
+to the user program, where *rhost* is the remote host (octal address), and *args* are the arguments given in the RFC packet, if any.
 
 The user program is then supposed to handle the RFC and respond to it by either an OPN, ANS or CLS, as follows:
 
@@ -184,11 +184,11 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | Opcode | Data | Type |
 | --- | --- | --- |
 | RFC (sent) | [*options*] *rhost* *contact* *args* | text - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options). (Note that *args* can be any bytes, since the length is given in the header.) |
-| RFC (rcvd) | *rhost* *args* | text - the *args* part is optional. (Note that *args* can be any bytes, since the length is given in the header.)|
+| RFC (rcvd) | *rhost* *args* | text - *rhost* is in octal digits, the *args* part is optional. (Note that *args* can be any bytes, since the length is given in the header.)|
 | BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to. As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | BRD (rcvd) | - | is translated to an RFC (see above) |
 | OPN (sent) | none | |
-| OPN (rcvd) | *rhost* | ascii, which is FQDN or octal address |
+| OPN (rcvd) | *rhost* | ascii, an octal address |
 | LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
 | ANS (rcvd) | *src* *data* | *src* is the source address (two bytes: LSB, MSB), followed by *data* which is the original binary data (not interpreted by NCP) |
 | ANS (sent) | *data* | binary data (not interpreted by NCP) |
