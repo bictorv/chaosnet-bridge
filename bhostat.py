@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from pprint import pprint, pformat
 from enum import IntEnum, auto
 
+# pip3 install dnspython
 import dns.resolver
 
 # server_address = '/tmp/chaos_stream'
@@ -437,7 +438,7 @@ class ChaosLastSeen:
         if len(subnets) == 1 and subnets[0] == -1:
             subnets = ["all"]
         if show_names:
-            print("{:<20} {:10} {:>8} {:10}  {}".format("Host","Seen","#in","Via","FC","Age"))
+            print("{:<20} {:20} {:>8} {:10}  {}".format("Host","Seen","#in","Via","FC","Age"))
         else:
             print("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","FC","Age"))
         # @@@@ consider presenting the info based on seen addresses (when seen at a certain bridge)?
@@ -470,7 +471,7 @@ class ChaosLastSeen:
                 e = cn[addr]
                 a = timedelta(seconds=e['age'])
                 if show_names:
-                    print("{:<20} {:<10} {:>8} {:<10} {:>4}  {}".format(first,host_name(addr),e['input'],host_name(e['via']),e['fc'],a))
+                    print("{:<20} {:<20} {:>8} {:<10} {:>4}  {}".format(first,"{} ({:o})".format(host_name(addr),addr),e['input'],host_name(e['via']),e['fc'],a))
                 else:
                     print("{:<20} {:>8o} {:>8} {:>8o} {:>4}  {}".format(first,addr,e['input'],e['via'],e['fc'],a))
                 first = ""                
