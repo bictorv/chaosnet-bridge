@@ -704,7 +704,6 @@ dns_describe_packet(u_char *pkt, int len)
   struct __res_state chres;
   res_state statp = &chres;
   ns_msg m;
-  ns_rr rr;
 
   init_chaos_dns_state(statp);
 

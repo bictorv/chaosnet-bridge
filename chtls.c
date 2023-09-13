@@ -113,7 +113,6 @@ send_empty_sns(struct tls_dest *td, u_short onbehalfof)
   // use correct source for this link
   u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
   u_short dst = td->tls_addr;
-  int i;
 
   struct chroute *rt = find_in_routing_table(dst, 1, 0);
   if (rt == NULL) {
@@ -166,10 +165,10 @@ static u_char *
 tls_get_cert_cn(X509 *cert)
 {
   // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
-  int common_name_loc = -1, subj_alt_name_loc = -1;
-  X509_NAME_ENTRY *common_name_entry = NULL, *subj_alt_name_entry = NULL;
-  ASN1_STRING *common_name_asn1 = NULL, *subj_alt_name_asn1 = NULL;
-  char *common_name_str = NULL, *subj_alt_name_str = NULL;
+  int common_name_loc = -1;
+  X509_NAME_ENTRY *common_name_entry = NULL;
+  ASN1_STRING *common_name_asn1 = NULL;
+  char *common_name_str = NULL;
 
   // Find the position of the CN field in the Subject field of the certificate
   common_name_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) cert), NID_commonName, -1);
@@ -677,7 +676,6 @@ void *tls_connector(void *arg)
     int v = 0;
     if ((v = SSL_connect(ssl)) <= 0) {
       fprintf(stderr,"%%%% Error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
-      int err = SSL_get_error(ssl, v);
       ERR_print_errors_fp(stderr);
       close(tsock);
       SSL_free(ssl);
@@ -1436,7 +1434,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 	 (rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
 	 ||
 	 // multiplexed
-	 is_in_mux_list(dchad, &tlsdest[i].tls_muxed)
+	 is_in_mux_list(dchad, tlsdest[i].tls_muxed)
 	 )) {
       if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
       td = &tlsdest[i];

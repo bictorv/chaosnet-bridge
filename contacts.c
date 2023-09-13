@@ -136,7 +136,6 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 static int
 make_dump_routing_table_pkt(u_char *pkt, int pklen)
 {
-  struct chaos_header *cha = (struct chaos_header *)pkt;
   u_short *data = (u_short *)&pkt[CHAOS_HEADERSIZE];
   int sub, cost, nroutes = 0;
   int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
@@ -434,8 +433,6 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
 	    ch_srcaddr(ch), ch_srcindex(ch), ch_destaddr(ch), ch_destindex(ch));
     return 0;
   }
-  int slen;
-  slen = get_packet_string(ch, (u_char *)cname, sizeof(cname));
   char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);

@@ -155,8 +155,8 @@ void print_ascii_buf(u_char *bp, int len)
 // ;;; subnet.  pkt[2n+1] has the host's idea of the cost.
 void print_routing_table(u_char *bp, int len, u_short src)
 {
-  u_short *ep, *dp = (u_short *)bp;
-  int i, sub, maxroutes = len/4;
+  u_short *dp = (u_short *)bp;
+  int sub, maxroutes = len/4;
 
   printf("Routing table received from host %#o\n", src);
   printf("%-8s %-8s %s\n", "Subnet", "Method", "Cost");
@@ -353,7 +353,7 @@ main(int argc, char *argv[])
   char *host, *contact = "STATUS", *pname, *space;
   char buf[CH_PK_MAXLEN+2];
   char *nl, *bp;
-  int i, cnt, sock, anslen, ncnt, raw = 0, ascii = 0, timeout = 0, quiet = 0, verbose = 0;
+  int cnt, sock, anslen, ncnt, raw = 0, ascii = 0, timeout = 0, quiet = 0, verbose = 0;
   u_short src;
 
   pname = argv[0];

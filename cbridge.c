@@ -293,7 +293,7 @@ u_short find_my_closest_addr(u_short addr)
 {
   // search mychaddrs for the address closest to the one given
   // Simplest: just look for an addr on the same subnet
-  int i, a;
+  int a;
   if (nchaddr == 1)
     // only one choice
     return mychaddr[0];
@@ -776,7 +776,6 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
 void
 forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen) 
 {
-  int i;
   struct chaos_header *ch = (struct chaos_header *)data;
 
   u_short dchad = ch_destaddr(ch);
@@ -819,8 +818,6 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 
   int cks = ch_checksum(data,dlen-2); /* Don't checksum the checksum field */
   tr->ch_hw_checksum = htons(cks);
-
-  int found = 0;
 
   switch (rt->rt_link) {
 #if CHAOS_ETHERP
@@ -1732,7 +1729,7 @@ parse_private_subnet()
     }
 #ifdef PRIVATE_CHAOS_SUBNET
     if (addr == PRIVATE_CHAOS_SUBNET)
-      fprintf(stderr,"Note: subnet %#o is globally private, no need to add it in \"private subnet\" config.\n",
+      fprintf(stderr,"Note: subnet %#lo is globally private, no need to add it in \"private subnet\" config.\n",
 	      addr);
 #endif
     private_subnet[addr] = 1;
