@@ -88,14 +88,12 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) == NULL))
 	       ))
 	) {
-#ifdef PRIVATE_CHAOS_SUBNET
       if (is_private_subnet(i)) {
 	// Don't advertise route to this subnet
 	if (debug || verbose)
 	  fprintf(stderr," NOT including private subnet %#o\n", i);
 	continue;
       }
-#endif
       data[nroutes*4+1] = i;
       cost = rttbl_net[i].rt_cost;
       data[nroutes*4+2] = (cost >> 8);
@@ -150,13 +148,11 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
     struct chroute *rt = &rttbl_net[sub];
-#ifdef PRIVATE_CHAOS_SUBNET
     if (is_private_subnet(sub)) {
       if (debug || verbose) 
 	fprintf(stderr," NOT adding routing for private subnet %#o\n", sub);
       continue;
     }
-#endif
     if (rt->rt_type != RT_NOPATH) {
       // Method: if < 0400: interface number; otherwise next hop address
       if (RT_DIRECT(rt) || (is_mychaddr(rt->rt_braddr))) {
@@ -333,7 +329,6 @@ status_responder(u_char *rfc, int len)
   for (i = 1; i < 256 && maxentries > 0; i++) {
     if ((linktab[i].pkt_in != 0) || (linktab[i].pkt_out != 0) || (linktab[i].pkt_crcerr != 0)
 	 || (linktab[i].pkt_aborted != 0) || (linktab[i].pkt_lost != 0)) {
-#ifdef PRIVATE_CHAOS_SUBNET
       if ((i != (src>>8)) &&
 	  ((is_private_subnet(i) && !is_private_subnet(src>>8)) ||
 	   (!is_private_subnet(i) && is_private_subnet(src>>8)))) {
@@ -342,7 +337,6 @@ status_responder(u_char *rfc, int len)
 	  fprintf(stderr,"STATUS: NOT including subnet %#o to dest %#o\n", i, src);
 	continue;
       }
-#endif
       maxentries--;
       *dp++ = htons(i + 0400);		/* subnet + 0400 */
       *dp++ = htons(16);		/* length in 16-bit words */

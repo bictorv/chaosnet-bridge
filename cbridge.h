@@ -50,8 +50,8 @@
 // that subnet, no packets from that subnet should be sent to other
 // subnets, and any packets received from that subnet on another
 // subnet should be dropped. This is similar to the IP private
-// networks such as 10.x.y.z or 192.168.x.y.
-// @@@@ consider making this a configurable thing, at least being able to _add_ private subnets?
+// networks such as 10.x.y.z or 192.168.x.y.  Subnet 376 is the
+// default, which can be reconfigured by "private subnet".
 #define PRIVATE_CHAOS_SUBNET 0376
 
 #include <stdio.h>

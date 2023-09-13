@@ -85,6 +85,13 @@ static int ncp_trace = 0;
 struct listener *registered_listeners;
 // list of active conns
 struct conn_list *conn_list;
+// list of hostnames from the hosts file
+struct node_addr {
+  char *name;
+  u_short addr;
+};
+struct node_addr *local_nodes = NULL;
+int number_of_local_nodes = 0;
 
 static void update_window_available(struct conn_state *cs, u_short winz);
 static void print_conn(char *leader, struct conn *conn, int alsostate);
@@ -1751,6 +1758,90 @@ user_socket_los(struct conn *conn, char *fmt, ...)
 
 //////////////// parsing rfcs
 
+static void
+add_node(char *name, u_short addr)
+{
+  struct node_addr * x;
+  x = realloc(local_nodes, (number_of_local_nodes + 1) * sizeof(struct node_addr));
+  if (x == NULL) {
+    fprintf(stderr, "Out of memory for local host table.\n");
+    exit(1);
+  }
+  local_nodes = x;
+  local_nodes[number_of_local_nodes].name = strdup(name);
+  local_nodes[number_of_local_nodes].addr = addr;
+  if (ncp_debug)
+    printf("Adding node %s address %o from hosts file.\n", name, addr);
+  number_of_local_nodes++;
+}
+
+static int
+parse_hosts_line(char *line)
+{
+  char *tok, *end;
+  unsigned long addr;
+
+  tok = strtok(line, " \t\r\n");
+  if (tok == NULL || *tok == 0 || *tok == '#')
+    return 0;
+
+  addr = strtoul(tok, &end, 8);
+  if (*end == tok || *end != 0) {
+    fprintf(stderr, "bad host node number: %s\n", tok);
+    return -1;
+  }
+  if (addr > 0177777) {
+    fprintf(stderr, "bad host node number: %lo\n", addr);
+    return -1;
+  }
+
+  for (;;) {
+    tok = strtok(NULL, " \t\r\n");
+    if (tok == NULL || *tok == 0)
+      break;
+    add_node(tok, addr);
+  }
+
+  return 0;
+}
+
+int
+parse_hosts_file(char *file)
+{
+  FILE *f = fopen(file, "r");
+  char buf[512];
+
+  if (f == NULL) {
+    fprintf(stderr, "Error opening hosts file %s\n", file);
+    return -1;
+  }
+
+  while (!feof(f)) {
+    if (fgets(buf, sizeof(buf), f) != NULL) {
+      if (parse_hosts_line(buf) < 0)
+	return -1;
+    }
+  }
+
+  return 0;
+}
+
+static u_short
+hosts_addrs_of_name(u_char *namestr)
+{
+  int i;
+  if (ncp_debug >= 2)
+    printf("Looking up name %s in hosts file.\n", namestr);
+  for (i = 0; i < number_of_local_nodes; i++) {
+    if (strcasecmp(namestr, local_nodes[i].name) == 0) {
+      if (ncp_debug >= 2)
+	printf("Found address %o in hosts file.\n", local_nodes[i].addr);
+      return local_nodes[i].addr;
+    }
+  }
+  return 0;
+}
+
 #if CHAOS_DNS
 static u_short 
 dns_closest_address_or_los(struct conn *conn, u_char *hname) 
@@ -1993,11 +2084,16 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
 
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
 #if CHAOS_DNS
-    haddr = dns_closest_address_or_los(conn, hname);
+    haddr = hosts_addrs_of_name(hname);
+    if (haddr == 0)
+      haddr = dns_closest_address_or_los(conn, hname);
 #else
-    // return a LOS to the user: bad host name '%s'
-    user_socket_los(conn, "Bad host name \"%s\"", hname);
-    return;
+    haddr = hosts_addrs_of_name(hname);
+    if (haddr == 0) {
+      // return a LOS to the user: bad host name '%s'
+      user_socket_los(conn, "Bad host name \"%s\"", hname);
+      return;
+    }
 #endif
   } 
   PTLOCKN(conn->conn_lock,"conn_lock");
