@@ -27,7 +27,7 @@ endif
 
 CFLAGS+=-Wall
 
-all: cbridge hostat finger
+all: cbridge hostat finger rtape
 
 OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o
 
@@ -76,6 +76,15 @@ hostat: hostat.c cbridge-chaos.h
 finger: finger.c cbridge-chaos.h
 	$(CC) $(CFLAGS) -o $@ $<
 
+rtape.o: rtape.c cbridge-chaos.h tape-image.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+tape-image.o: tape-image.c tape-image.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+rtape: rtape.o tape-image.o
+	$(CC) $(CFLAGS) -Wall -o $@ $^
+
 clean:
-	rm -f cbridge hostat finger $(OBJS)
+	rm -f cbridge hostat finger rtape $(OBJS)
 
