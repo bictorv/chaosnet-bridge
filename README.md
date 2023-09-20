@@ -168,6 +168,11 @@ other subnets, and any packets received from that subnet on another
 subnet should be dropped. This is similar to the IP private networks
 such as 10.x.y.z or 192.168.x.y.
 
+Additional private non-routed subnets can be defined using the
+`private` keyword in the [configuration](CONFIGURATION.md), which can
+also define a file for hostname-address mappings for private
+networks. (Such networks typically do not have DNS entries.)
+
 ## Other features
 
 If the process receives a SIGUSR1 signal, it prints things about its

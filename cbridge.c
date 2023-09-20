@@ -123,9 +123,11 @@ pthread_mutex_t linktab_lock = PTHREAD_MUTEX_INITIALIZER;
 struct chudest chudpdest[CHUDPDEST_MAX];
 int chudpdest_len = 0;
 
+// Private, non-routed subnets
 static u_short private_subnet[256];
-
-static char *hosts_file = NULL;
+static u_short number_of_private_subnets = 0;
+// Hosts file for private subnets
+static char *private_hosts_file = NULL;
 
 #if CHAOS_TLS
 
@@ -168,8 +170,9 @@ extern int ncp_enabled;
 void *ncp_user_server(void *v);
 int parse_ncp_config_line(void);
 void packet_to_conn_handler(u_char *pkt, int len);
-void print_ncp_stats();
-int parse_hosts_file(char *f);
+void print_ncp_stats(void);
+int parse_private_hosts_file(char *f);
+void print_private_hosts_config(void);
 
 time_t boottime;
 
@@ -1723,11 +1726,12 @@ parse_private_subnet()
       fprintf(stderr, "bad private subnet list: %s\n", tok);
       return -1;
     }
-    if (addr > 0377) {
+    if ((addr > 0377) || (addr == 0)) {
       fprintf(stderr, "bad private subnet number: %lo\n", addr);
       return -1;
     }
     private_subnet[addr] = 1;
+    number_of_private_subnets++;
   }
 
   return 0;
@@ -1741,7 +1745,7 @@ parse_private_hosts()
     fprintf(stderr, "expected hosts file name\n");
     return -1;
   }
-  hosts_file = strdup(tok);
+  private_hosts_file = strdup(tok);
   return 0;
 }
 
@@ -1759,7 +1763,8 @@ parse_private_config()
   do {
     if (strcasecmp(tok, "subnet") == 0) {
       // Private subnets explicitly configured, throw out the defaults.
-      memset(private_subnet, 0, sizeof(private_subnet));
+      // @@@@ No: net 376 is always globally private
+      // memset(private_subnet, 0, sizeof(private_subnet));
       if (parse_private_subnet() < 0)
 	return -1;
     }
@@ -1984,6 +1989,17 @@ print_stats(int sig)
       printf(" DNS forwarder enabled\n");
     }
 #endif
+    if (number_of_private_subnets > 0) {
+      printf("Configured %d private subnet%s: ", number_of_private_subnets, 
+	     number_of_private_subnets != 1 ? "s" : "");
+      for (int i = 0; i < 256; i++)
+	if (private_subnet[i]) printf("%#o ", i);
+      printf("\n");
+      if (private_hosts_file != NULL) {
+	printf(" and private hosts from file \"%s\" follow:\n", private_hosts_file);
+	print_private_hosts_config();
+      }
+    }
   }
 #if CHAOS_ETHERP
   print_arp_table();
@@ -2053,13 +2069,14 @@ main(int argc, char *argv[])
   memset(private_subnet, 0, sizeof(private_subnet));
 #ifdef PRIVATE_CHAOS_SUBNET
   private_subnet[PRIVATE_CHAOS_SUBNET] = 1;
+  number_of_private_subnets = 1;
 #endif
 
   // parse config
   parse_config(cfile);
 
-  if (hosts_file != NULL && parse_hosts_file(hosts_file) < 0) {
-    fprintf(stderr, "Configuration error: bad hosts file %s\n", hosts_file);
+  if (private_hosts_file != NULL && parse_private_hosts_file(private_hosts_file) < 0) {
+    fprintf(stderr, "Configuration error: bad private hosts file %s\n", private_hosts_file);
     exit(1);
   }
 

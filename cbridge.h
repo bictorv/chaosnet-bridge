@@ -51,7 +51,7 @@
 // subnets, and any packets received from that subnet on another
 // subnet should be dropped. This is similar to the IP private
 // networks such as 10.x.y.z or 192.168.x.y.  Subnet 376 is the
-// default, which can be reconfigured by "private subnet".
+// standard, and more can be configured by "private subnet".
 #define PRIVATE_CHAOS_SUBNET 0376
 
 #include <stdio.h>
