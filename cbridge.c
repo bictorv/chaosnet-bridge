@@ -123,6 +123,12 @@ pthread_mutex_t linktab_lock = PTHREAD_MUTEX_INITIALIZER;
 struct chudest chudpdest[CHUDPDEST_MAX];
 int chudpdest_len = 0;
 
+// Private, non-routed subnets
+static u_short private_subnet[256];
+static u_short number_of_private_subnets = 0;
+// Hosts file for private subnets
+static char *private_hosts_file = NULL;
+
 #if CHAOS_TLS
 
 char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
@@ -164,7 +170,9 @@ extern int ncp_enabled;
 void *ncp_user_server(void *v);
 int parse_ncp_config_line(void);
 void packet_to_conn_handler(u_char *pkt, int len);
-void print_ncp_stats();
+void print_ncp_stats(void);
+int parse_private_hosts_file(char *f);
+void print_private_hosts_config(void);
 
 time_t boottime;
 
@@ -319,8 +327,7 @@ int valid_chaos_host_address(u_short addr)
 
 int is_private_subnet(u_short subnet)
 {
-  // @@@@ extend this if more are added by config
-  return (subnet == PRIVATE_CHAOS_SUBNET);
+  return private_subnet[subnet];
 }
 
 void print_link_stats() 
@@ -534,7 +541,6 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
     for (i = 0; i < pkdlen; i += 4) {
       rsub = WORD16(&data[i]);	/* subnet nr */
       rcost = WORD16(&data[i+2]);  /* cost from that bridge */
-#ifdef PRIVATE_CHAOS_SUBNET
       if (is_private_subnet(rsub)) {
 	// Never mind about somebody's private network
 	// They should not announce it: print warning, @@@@ but not every time
@@ -543,7 +549,6 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
 		rsub, src);
 	continue;
       }
-#endif
       if (rttbl_net[rsub].rt_type == RT_STATIC && (verbose||debug) )
 	fprintf(stderr,"DEBUG: Received RUT info for subnet %#o from host %#o.\n"
 		" We have a STATIC route to that subnet - "
@@ -777,7 +782,6 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   u_short dchad = ch_destaddr(ch);
   u_short schad = ch_srcaddr(ch);
 
-#ifdef PRIVATE_CHAOS_SUBNET
   // Don't forward between private and non-private subnets (but OK within the same (private) subnet)
   if (((schad >> 8) != (dchad >> 8)) &&
       ((is_private_subnet(schad >> 8) && !is_private_subnet(dchad >> 8)) ||
@@ -791,7 +795,6 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
     PTUNLOCKN(linktab_lock,"linktab_lock");
     return;
   }
-#endif
 
   // round up to full 16-bit word
   dlen += (dlen % 2);
@@ -887,9 +890,7 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // EXCEPT the link it came in on
 
   int i, sn, nsubn = ch_ackno(ch)*8;
-#ifdef PRIVATE_CHAOS_SUBNET
   u_short ssubnet = ch_srcaddr(ch) >> 8;
-#endif
   u_char mask[32];
   htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
   if (debug)
@@ -904,7 +905,6 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   for (i = 0; i < rttbl_host_len; i++) {
     rt = &rttbl_host[i];
     sn = (rt->rt_dest)>>8;
-#ifdef PRIVATE_CHAOS_SUBNET
     if ((sn != ssubnet) &&
 	((is_private_subnet(sn) && !is_private_subnet(ssubnet)) ||
 	 (!is_private_subnet(sn) && is_private_subnet(ssubnet)))) {
@@ -914,7 +914,6 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
 		ssubnet, rt->rt_dest, sn);
       continue;
     }
-#endif
     if ((sn < nsubn) && (RT_DIRECT(rt)) && (src != rt) && (mask[sn/8] & (1<<(sn % 8)))) {
       forward_chaos_broadcast_on_route(rt, sn, data, dlen);
     } else if (debug)
@@ -925,7 +924,6 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
   // for all rttbl_net entries except the source, which are direct links
   //   if the subnet is set, forward there (after clearing bit)
   for (sn = 1; sn < 256 && sn < nsubn; sn++) {
-#ifdef PRIVATE_CHAOS_SUBNET
     if ((sn != ssubnet) &&
 	((is_private_subnet(sn) && !is_private_subnet(ssubnet)) ||
 	 (!is_private_subnet(sn) && is_private_subnet(ssubnet)))) {
@@ -935,7 +933,6 @@ forward_chaos_broadcast_pkt(struct chroute *src, u_char *data, int dlen)
 		ssubnet, sn);
       continue;
     }
-#endif
     rt = &rttbl_net[sn];
     if ((src != rt) && (rttbl_net[sn].rt_link != LINK_NOLINK) && 
 	(RT_DIRECT(rt)) && (mask[sn/8] & (1<<(sn % 8)))) {
@@ -1712,6 +1709,79 @@ parse_link_config()
 }
 
 static int
+parse_private_subnet()
+{
+  char *tok = strtok(NULL," \t\r\n");
+  unsigned long addr;
+  char *s, *end = tok;
+
+  if (tok == NULL) {
+    fprintf(stderr, "expected subnet list\n");
+    return -1;
+  }
+
+  for (s = tok; *end != 0; s = end + 1) {
+    addr = strtoul(s, &end, 8);
+    if (*end != ',' && *end != 0) {
+      fprintf(stderr, "bad private subnet list: %s\n", tok);
+      return -1;
+    }
+    if ((addr > 0377) || (addr == 0)) {
+      fprintf(stderr, "bad private subnet number: %lo\n", addr);
+      return -1;
+    }
+    private_subnet[addr] = 1;
+    number_of_private_subnets++;
+  }
+
+  return 0;
+}
+
+static int
+parse_private_hosts()
+{
+  char *tok = strtok(NULL," \t\r\n");
+  if (tok == NULL) {
+    fprintf(stderr, "expected hosts file name\n");
+    return -1;
+  }
+  private_hosts_file = strdup(tok);
+  return 0;
+}
+
+static int
+parse_private_config()
+{
+  // private [subnet <list>] [hosts <file>]
+  char *tok = strtok(NULL," \t\r\n");
+
+  if (tok == NULL) {
+    fprintf(stderr,"bad private config: no parameters\n");
+    return -1;
+  }
+
+  do {
+    if (strcasecmp(tok, "subnet") == 0) {
+      // Private subnets explicitly configured, throw out the defaults.
+      // @@@@ No: net 376 is always globally private
+      // memset(private_subnet, 0, sizeof(private_subnet));
+      if (parse_private_subnet() < 0)
+	return -1;
+    }
+    else if (strcasecmp(tok, "hosts") == 0) {
+      return parse_private_hosts();
+    }
+    else {
+      fprintf(stderr,"bad private keyword %s, expected \"subnet\" or \"hosts\"\n", tok);
+      return -1;
+    }
+    tok = strtok(NULL," \t\r\n");
+  } while(tok != NULL);
+
+  return 0;
+}
+
+static int
 parse_config_line(char *line)
 {
   char *tok = NULL;
@@ -1793,6 +1863,9 @@ parse_config_line(char *line)
   }
   else if (strcasecmp(tok, "link") == 0) {
     return parse_link_config();
+  }
+  else if (strcasecmp(tok, "private") == 0) {
+    return parse_private_config();
   }
   else {
     fprintf(stderr,"config keyword %s unknown\n", tok);
@@ -1916,6 +1989,17 @@ print_stats(int sig)
       printf(" DNS forwarder enabled\n");
     }
 #endif
+    if (number_of_private_subnets > 0) {
+      printf("Configured %d private subnet%s: ", number_of_private_subnets, 
+	     number_of_private_subnets != 1 ? "s" : "");
+      for (int i = 0; i < 256; i++)
+	if (private_subnet[i]) printf("%#o ", i);
+      printf("\n");
+      if (private_hosts_file != NULL) {
+	printf(" and private hosts from file \"%s\" follow:\n", private_hosts_file);
+	print_private_hosts_config();
+      }
+    }
   }
 #if CHAOS_ETHERP
   print_arp_table();
@@ -1981,8 +2065,20 @@ main(int argc, char *argv[])
   // clear myname
   memset(myname, 0, sizeof(myname));
 
+  // initialize private subnets
+  memset(private_subnet, 0, sizeof(private_subnet));
+#ifdef PRIVATE_CHAOS_SUBNET
+  private_subnet[PRIVATE_CHAOS_SUBNET] = 1;
+  number_of_private_subnets = 1;
+#endif
+
   // parse config
   parse_config(cfile);
+
+  if (private_hosts_file != NULL && parse_private_hosts_file(private_hosts_file) < 0) {
+    fprintf(stderr, "Configuration error: bad private hosts file %s\n", private_hosts_file);
+    exit(1);
+  }
 
   // Check config, validate settings
   if (mychaddr[0] == 0) {

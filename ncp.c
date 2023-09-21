@@ -85,6 +85,13 @@ static int ncp_trace = 0;
 struct listener *registered_listeners;
 // list of active conns
 struct conn_list *conn_list;
+// list of hostnames from the hosts file
+struct private_host_addr {
+  char *name;
+  u_short addr;
+};
+struct private_host_addr *private_hosts = NULL;
+int number_of_private_hosts = 0;
 
 static void update_window_available(struct conn_state *cs, u_short winz);
 static void print_conn(char *leader, struct conn *conn, int alsostate);
@@ -1751,6 +1758,105 @@ user_socket_los(struct conn *conn, char *fmt, ...)
 
 //////////////// parsing rfcs
 
+static void
+add_private_host(char *name, u_short addr)
+{
+  struct private_host_addr * x;
+  x = realloc(private_hosts, (number_of_private_hosts + 1) * sizeof(struct private_host_addr));
+  if (x == NULL) {
+    fprintf(stderr, "Out of memory for private host table.\n");
+    exit(1);
+  }
+  private_hosts = x;
+  private_hosts[number_of_private_hosts].name = strdup(name);
+  private_hosts[number_of_private_hosts].addr = addr;
+  if (ncp_debug)
+    printf("Adding private node %s address %o from hosts file.\n", name, addr);
+  number_of_private_hosts++;
+}
+
+static int
+parse_private_hosts_line(char *line)
+{
+  char *tok, *end;
+  unsigned long addr;
+
+  tok = strtok(line, " \t\r\n");
+  if (tok == NULL || *tok == 0 || *tok == '#')
+    return 0;
+
+  addr = strtoul(tok, &end, 8);
+  if (end == tok || *end != 0) {
+    fprintf(stderr, "bad private host node number: %s\n", tok);
+    return -1;
+  }
+  if ((addr > 0177777) || ((addr & 0xff) == 0)) {
+    fprintf(stderr, "bad private host node number: %lo\n", addr);
+    return -1;
+  }
+  // Only use the hosts file for hosts on private subnets!
+  // Note: the "private" config has already been parsed when we get here.
+  if (!is_private_subnet(addr>>8)) {
+    fprintf(stderr,"Error: private host address %lo must be on a private subnet.\n"
+	    "Perhaps you need to revise the \"private subnet\" definition in your config file?\n", addr);
+    return -1;
+  }
+
+  while (1) {
+    tok = strtok(NULL, " \t\r\n");
+    if (tok == NULL || *tok == 0)
+      break;
+    add_private_host(tok, addr);
+  }
+
+  return 0;
+}
+
+int
+parse_private_hosts_file(char *file)
+{
+  FILE *f = fopen(file, "r");
+  char buf[512];
+
+  if (f == NULL) {
+    fprintf(stderr, "Error opening private hosts file %s\n", file);
+    return -1;
+  }
+
+  while (!feof(f)) {
+    if (fgets(buf, sizeof(buf), f) != NULL) {
+      if (parse_private_hosts_line(buf) < 0)
+	return -1;
+    }
+  }
+
+  return 0;
+}
+
+void
+print_private_hosts_config(void)
+{
+  int i;
+  for (i = 0; i < number_of_private_hosts; i++)
+    printf("%o %s\n", private_hosts[i].addr, private_hosts[i].name);
+}
+
+static u_short
+private_hosts_addrs_of_name(u_char *namestr)
+{
+  int i;
+  if (ncp_debug > 1)
+    printf("Looking up name %s in hosts file.\n", namestr);
+  for (i = 0; i < number_of_private_hosts; i++) {
+    if (strcasecmp((char *)namestr, private_hosts[i].name) == 0) {
+      if (ncp_debug > 1)
+	printf("Found address %o in hosts file.\n", private_hosts[i].addr);
+      return private_hosts[i].addr;
+    }
+  }
+  return 0;
+}
+
 #if CHAOS_DNS
 static u_short 
 dns_closest_address_or_los(struct conn *conn, u_char *hname) 
@@ -1993,11 +2099,16 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
 
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
 #if CHAOS_DNS
-    haddr = dns_closest_address_or_los(conn, hname);
+    haddr = private_hosts_addrs_of_name(hname);
+    if (haddr == 0)
+      haddr = dns_closest_address_or_los(conn, hname);
 #else
-    // return a LOS to the user: bad host name '%s'
-    user_socket_los(conn, "Bad host name \"%s\"", hname);
-    return;
+    haddr = private_hosts_addrs_of_name(hname);
+    if (haddr == 0) {
+      // return a LOS to the user: bad host name '%s'
+      user_socket_los(conn, "Bad host name \"%s\"", hname);
+      return;
+    }
 #endif
   } 
   PTLOCKN(conn->conn_lock,"conn_lock");

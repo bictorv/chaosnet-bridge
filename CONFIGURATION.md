@@ -49,6 +49,10 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 
 	set the DNS IP server (which should handle CH records, default above), the domain of "local" CH class addresses (default above, no ending dot), enable/disable forwarding of pkts received on the "DNS" contact name (default off), and enable trace printouts (default off). DNS is used internally by the TLS server/client to look up the certificate CN (of server and client) as Chaos hosts, looking for their addresses, and also by the [NCP](NCP.md) to look up addresses.
 
+- `private` [ `subnet` *list* ] [ `hosts` *hostsfile* ]
+
+	Provide a list of private, non-routed subnets, where *list* is a list of comma-separated octal subnets, and *hostsfile* an optional hosts file defining hostname-address mapping for private subnets (including the standard private subnet 376).  The hosts file format is similar to a standard `/etc/hosts` file: lines beginning with `#` are ignored, other lines start with an octal address followed by whitespace and a list of whitespace-separated host names.
+
 ### LINKDEF:
 You can define links of two types: for whole subnets, and for individual hosts.
 
