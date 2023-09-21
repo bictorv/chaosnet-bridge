@@ -1730,6 +1730,11 @@ parse_private_subnet()
       fprintf(stderr, "bad private subnet number: %lo\n", addr);
       return -1;
     }
+#ifdef PRIVATE_CHAOS_SUBNET
+    if (addr == PRIVATE_CHAOS_SUBNET)
+      fprintf(stderr,"Note: subnet %#o is globally private, no need to add it in \"private subnet\" config.\n",
+	      addr);
+#endif
     private_subnet[addr] = 1;
     number_of_private_subnets++;
   }
@@ -1762,9 +1767,6 @@ parse_private_config()
 
   do {
     if (strcasecmp(tok, "subnet") == 0) {
-      // Private subnets explicitly configured, throw out the defaults.
-      // @@@@ No: net 376 is always globally private
-      // memset(private_subnet, 0, sizeof(private_subnet));
       if (parse_private_subnet() < 0)
 	return -1;
     }
