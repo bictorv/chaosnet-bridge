@@ -74,11 +74,35 @@ First, [create a certificate request](TLS.md) and get a certificate back. Then, 
 
 This should enable you to use e.g. [supdup](https://github.com/PDP-10/supdup) to connect to ITS systems,  [hostat](hostat.c) to check the status of systems, or [finger](finger.py) to check who is logged in.
 
+
+### On your local subnet
+If you already have a cbridge running on some local server, e.g. to connect a bunch of emulators to the global Chaosnet, and want to connect your personal (e.g. laptop) linux/macOS over a local network, you can do without TLS and certificates.
+You can instead use UDP or IP or Ethernet, e.g. like this (for the UDP case, assuming the local main cbridge has Chaos address 7701 and has hostname `local-main-cbridge`):
+
+	; My Chaosnet address
+	chaddr 7077
+	; Enable the NCP, so you can connect using linux/macOS programs
+	ncp enabled yes
+    ; Listen to CHUDP on the standard port
+    chudp 42042
+	; Define a CHUDP link to the main local cbridge
+	link chudp local-main-cbridge host 7701
+
+On the local main cbridge, you need to add (assuming your personal laptop is named `laptop`):
+
+     link chudp laptop host 7077
+
+Also make sure the local main cbridge has enabled the chudp server (which is likely, if it was serving a bunch of emulators):
+
+    chudp 42042
+
+**Please note** that you should only use UDP or IP links for local non-routed networks (like 10.x.y.z, 192.168.x.y etc). (To avoid making you paranoid, I won't mention the [zero trust](https://en.wikipedia.org/wiki/Zero_trust_security_model) model. If I did, you'd need TLS and certificates.)
+
 ## Example: MX-11
 
-A different example is the config for MX-11 (aka router.chaosnet.net).
+A different example is the (historical) config for MX-11 (aka router.chaosnet.net). (It has long been superseded by MX12, with a more complex config.)
 
-The MX-11 serves as a hub for a number of hosts connecting through
+The MX-11 served as a hub for a number of hosts connecting through
 CHUDP (mostly ITS systems, but also BSD and MINITS). They have
 individual addresses on net 6. 
 
@@ -107,7 +131,7 @@ use) an address specific to each net.
     link ether eth0 subnet 1 myaddr 440
 
 To tell cbridge to send routing info about net 6, which only has
-individual host links, a route declaration is necessary.
+individual host links, a route declaration is necessary. You will probably never need this.
 
     route subnet 6 bridge 3040 cost asynch
 
