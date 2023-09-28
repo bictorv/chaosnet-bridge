@@ -58,6 +58,11 @@ ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
 static char **datnames = NULL;
 static char **dwdnames = NULL;
 
+static char
+  *ch_opc[] = { "NIL",
+		"RFC", "OPN", "CLS", "FWD", "ANS", "SNS", "STS",
+		"RUT", "LOS", "LSN", "MNT", "EOF", "UNC", "BRD" };
+
 char *
 ch_opcode_name(int op)
   {

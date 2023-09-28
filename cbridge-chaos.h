@@ -13,10 +13,6 @@ enum { CHOP_RFC=1, CHOP_OPN, CHOP_CLS, CHOP_FWD, CHOP_ANS, CHOP_SNS, CHOP_STS,
 #define CHOP_DAT 0200
 #define CHOP_DWD 0300
 
-static char
-  *ch_opc[] = { "NIL",
-		"RFC", "OPN", "CLS", "FWD", "ANS", "SNS", "STS",
-		"RUT", "LOS", "LSN", "MNT", "EOF", "UNC", "BRD" };
 char *ch_opcode_name(int opc);
 
 struct chaos_header {
