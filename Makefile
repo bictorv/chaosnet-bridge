@@ -10,6 +10,7 @@ CFLAGS = -g
 endif
 
 LIBRESOLV=-lresolv
+LIBTHREAD=
 
 # For OpenBSD, do "pkg_add libbind"
 ifeq ($(OS_NAME), OpenBSD)
@@ -19,8 +20,11 @@ LIBRESOLV = -lbind
 endif
 
 # On FreeBSD, the resolver is in libc.
+# Need to link with -lthr to get thread-safe
+# versions.
 ifeq ($(OS_NAME), FreeBSD)
 LIBRESOLV=
+LIBTHREAD=-lthr
 endif
 
 all: cbridge hostat finger
