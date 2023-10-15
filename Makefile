@@ -10,7 +10,6 @@ CFLAGS = -g
 endif
 
 LIBRESOLV=-lresolv
-LIBTHREAD=
 
 # For OpenBSD, do "pkg_add libbind"
 ifeq ($(OS_NAME), OpenBSD)
