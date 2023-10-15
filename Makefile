@@ -24,7 +24,6 @@ endif
 # versions.
 ifeq ($(OS_NAME), FreeBSD)
 LIBRESOLV=
-LIBTHREAD=-lthr
 endif
 
 all: cbridge hostat finger
