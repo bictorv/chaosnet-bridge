@@ -472,6 +472,7 @@ state_name(connstate_t s)
   case CS_Foreign: return "Foreign";
   case CS_BRD_Sent: return "BRD_Sent";
   case CS_Finishing: return "Finishing";
+  default: return "(undefined connection state)";
   }
 }
 
@@ -488,6 +489,7 @@ conn_type_type_name(conntype_t ct)
   case CT_Stream: return "Stream";
   case CT_Simple: return "Simple";
   case CT_Packet: return "Packet";
+  default:        return "(undefined connection type)";
   }
 }
 
@@ -995,6 +997,8 @@ remove_listener_for_conn(struct conn *conn)
   pthread_testcancel();
 }
 
+#if 0
+// Not used
 static void
 remove_listener_for_contact(u_char *contact)
 {
@@ -1021,6 +1025,7 @@ remove_listener_for_contact(u_char *contact)
   pthread_testcancel();
   return;
 }
+#endif // 0
 
 struct listener *
 add_listener(struct conn *c, u_char *contact)
@@ -1133,7 +1138,7 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
       if (c->conn_contact_args != NULL) {
 	u_char rfcwithargs[MAX_CONTACT_NAME_LENGTH];
 	// Copy contact name, space, args
-	int i, clen = strlen((char *)c->conn_contact);
+	int clen = strlen((char *)c->conn_contact);
 	strcpy((char *)rfcwithargs, (char *)c->conn_contact);
 	rfcwithargs[clen] = ' ';
 	// treat this as binary
@@ -1417,8 +1422,8 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
       tn.tv_sec--; 
       tn.tv_usec += 1000000;
     }
-    printf("NCP %s for %p done waiting for EOF ack %#x (%s after %ld.%03d)\n", conn_thread_name(conn), conn, pknum,
-	   timedout != 0 ? "timed out" : "acked", tn.tv_sec, tn.tv_usec/1000);
+    printf("NCP %s for %p done waiting for EOF ack %#x (%s after %ld.%03ld)\n", conn_thread_name(conn), conn, pknum,
+	   timedout != 0 ? "timed out" : "acked", tn.tv_sec, (long)(tn.tv_usec/1000));
   }
 }
 
@@ -1563,7 +1568,7 @@ cancel_conn_threads(struct conn *conn)
   if (pthread_equal(conn->conn_to_net_thread, pthread_self()) ||
       pthread_equal(conn->conn_from_sock_thread, pthread_self())) {
     // conn_to_sock is the main thread, which waits for the others to join - they just exit.
-    if (ncp_debug) printf("%%%% Conn %p thread %p (%s) terminating\n", conn, pthread_self(), conn_thread_name(conn));
+    if (ncp_debug) printf("%%%% Conn %p thread %p (%s) terminating\n", conn, (void *)pthread_self(), conn_thread_name(conn));
     // make sure conn_to_sock also knows
     PTLOCKN(cs->read_mutex,"read_mutex");
     if ((x = pthread_cond_signal(&cs->read_cond) != 0)) 
@@ -1572,8 +1577,8 @@ cancel_conn_threads(struct conn *conn)
     pthread_exit(NULL);
   } else if (pthread_equal(conn->conn_to_sock_thread, pthread_self())) {
     if (ncp_debug) printf("%%%% Conn %p thread %p (%s) waiting for %p and %p to join\n",
-			  conn, pthread_self(), conn_thread_name(conn), 
-			  conn->conn_to_net_thread, conn->conn_from_sock_thread);
+			  conn, (void *)pthread_self(), conn_thread_name(conn), 
+			  (void *)conn->conn_to_net_thread, (void *)conn->conn_from_sock_thread);
     if ((x = pthread_join(conn->conn_to_net_thread,(void *) &jv)) < 0) {
       if (ncp_debug) fprintf(stderr,"pthread_join (c_t_n): %s\n", strerror(x));
     }
@@ -1722,6 +1727,10 @@ user_socket_los(struct conn *conn, char *fmt, ...)
     dp = (char *)data;
   else if (conn->conn_type == CT_Packet)
     dp = (char *)&data[4];
+  else {
+    fprintf(stderr,"%s: Bad conn type: not Stream or Packet\n", __func__);
+    return;
+  }
 
   va_start(args, fmt);
   vsprintf(dp, fmt, args);
@@ -2128,8 +2137,8 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
 static void
 initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)  
 {
-  u_short haddr = 0, netnum, numnets = 0;
-  u_char *cname, *hname, *space, *ibuf = buf;
+  u_short netnum, numnets = 0;
+  u_char *cname, *space, *ibuf = buf;
   u_char mask[32];
   memset(mask, 0, sizeof(mask));
 
@@ -2218,9 +2227,8 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
 void *
 ncp_user_server(void *v)
 {
-  int simplesock, streamsock;
   fd_set rfd;
-  int i, len, sval, maxfd, fd;
+  int i, sval, maxfd, fd;
   int *fds;
   struct slist { int socktype; char *sockname; conntype_t sockconn; }
   socklist[] = {
@@ -2237,7 +2245,7 @@ ncp_user_server(void *v)
   srandom(time(NULL));
 #endif
 
-  if (ncp_debug) printf("NCP user server thread is %p\n", pthread_self());
+  if (ncp_debug) printf("NCP user server thread is %p\n", (void *)pthread_self());
 
   maxfd = 0;
 
@@ -2311,10 +2319,9 @@ clear_send_pkts(struct conn *c)
 {
   struct chaos_header *p;
   struct conn_state *cs = c->conn_state;
-  int npkts = 0, owin;
+  int npkts = 0;
 
   PTLOCKN(cs->window_mutex,"window_mutex");
-  owin = cs->window_available;
   PTLOCKN(cs->send_mutex,"send_mutex");
   while ((p = pkqueue_get_first(cs->send_pkts)) != NULL) {
     npkts++;
@@ -2589,7 +2596,7 @@ retransmit_controlled_packets(struct conn *conn)
   }
   if (ncp_debug && (nsent != npkts)) {
     printf("Retransmitted %d controlled packets, expected %d (qlen), thread %p\n", 
-	   nsent, npkts, pthread_self());
+	   nsent, npkts, (void *)pthread_self());
     print_pkqueue(cs->send_pkts);
   }
   PTUNLOCKN(cs->send_mutex,"send_mutex");
@@ -2805,8 +2812,6 @@ conn_to_packet_stream_handler(void *v)
 static void 
 receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 {
-  u_char *data = (u_char *)pkt;
-  u_short *dataw = (u_short *)pkt;
   struct conn_state *cs = conn->conn_state;
 
   if (packet_uncontrolled(pkt)) {
@@ -3258,8 +3263,8 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
 	sval = 0;
       } else {
 	if (ncp_debug) 
-	  fprintf(stderr,"NCP select(receive_or_die): %s (sval %d, sock %d, timeout %ld.%d)", 
-		  strerror(errno), sval, sock, timeout.tv_sec, timeout.tv_usec);
+	  fprintf(stderr,"NCP select(receive_or_die): %s (sval %d, sock %d, timeout %ld.%ld)", 
+		  strerror(errno), sval, sock, timeout.tv_sec, (long)timeout.tv_usec);
 	socket_closed_for_conn(conn);
 	return -1;
       }
@@ -3338,8 +3343,7 @@ socket_to_conn_stream_handler(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   int cnt;
-  u_char *cname, buf[CH_PK_MAXLEN], pkt[CH_PK_MAXLEN];
-  struct chaos_header *ch = (struct chaos_header *)pkt;
+  u_char *cname, buf[CH_PK_MAXLEN];
 
   memset(buf, 0, CH_PK_MAXLEN);
 
@@ -3483,9 +3487,8 @@ socket_to_conn_packet_handler(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   int cnt;
-  u_char *cname, *buf, sbuf[CH_PK_MAXLEN], pkt[CH_PK_MAXLEN];
+  u_char *cname, *buf, sbuf[CH_PK_MAXLEN];
   int buflen = sizeof(sbuf);
-  struct chaos_header *ch = (struct chaos_header *)pkt;
 
   memset(sbuf, 0, CH_PK_MAXLEN);
   buf = sbuf;
@@ -3603,7 +3606,6 @@ static void *
 socket_to_conn_handler(void *arg)
 {
   struct conn *conn = (struct conn *)arg;
-  struct conn_state *cs = conn->conn_state;
 
   switch (conn->conn_type) {
   case CT_Simple:
@@ -3633,6 +3635,7 @@ socket_to_conn_handler(void *arg)
     }
     break;
   }
+  return NULL;
 }
 
 //////////////// conn-to-socket
@@ -3707,7 +3710,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
   u_char *pk = (u_char *)pkt;
   u_char *data = &pk[CHAOS_HEADERSIZE];
   char buf[CH_PK_MAXLEN+256];
-  int i, opc, len = 0;
+  int opc, len = 0;
 
   opc = ch_opcode(pkt);
   PTLOCKN(cs->conn_state_lock,"conn_state_lock");

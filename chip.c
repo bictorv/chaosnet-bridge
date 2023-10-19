@@ -409,8 +409,6 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
   u_short srcaddr;		/* chaos source */
   struct sockaddr_in *sin = (struct sockaddr_in *)sa;
   struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
-  struct in_addr ip_src;	/* ip source */
-  struct in6_addr ip6_src;	/* ipv6 source */
   struct chaos_header *ch = (struct chaos_header *)chdata;
   char ipaddr[INET6_ADDRSTRLEN];
   int intrailer = 0;
@@ -445,9 +443,12 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
     }
     if (chlen != (xlen-CHAOS_HW_TRAILERSIZE)) {
       if (chip_debug || debug) fprintf(stderr,"CHIP: Dropping packet\n");
+#if 0
+      // @@@@ uninitialized srcaddr: find this by using source route/link
       PTLOCKN(linktab_lock,"linktab_lock");
       linktab[srcaddr>>8].pkt_badlen++;
       PTUNLOCKN(linktab_lock,"linktab_lock");
+#endif
       return;
     } else {
       if (chip_debug || debug) fprintf(stderr,"CHIP: letting it pass, just trailer missing\n");
@@ -777,8 +778,6 @@ try_forward_subnet_dest(struct chroute *rt, u_short dchad, u_char *data, int dle
 void
 forward_on_ip(struct chroute *rt, u_short schad, u_short dchad, struct chaos_header *ch, u_char *data, int dlen)
 {
-  int i, found = 0;
-
   if ((ip_sock <= 0) || (ip6_sock <= 0)) {
     if (chip_debug || debug)
       fprintf(stderr,"CHIP: can't forward on IP - sockets not open yet\n");

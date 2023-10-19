@@ -32,7 +32,6 @@ extern int tls_debug;
 static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
-static void tls_inform_tcp_is_open(struct tls_dest *td);
 static void tls_wait_for_reconnect_signal(struct tls_dest *td);
 
 int
@@ -113,7 +112,6 @@ send_empty_sns(struct tls_dest *td, u_short onbehalfof)
   // use correct source for this link
   u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
   u_short dst = td->tls_addr;
-  int i;
 
   struct chroute *rt = find_in_routing_table(dst, 1, 0);
   if (rt == NULL) {
@@ -156,20 +154,22 @@ void init_openssl()
   OpenSSL_add_ssl_algorithms();
 }
 
+#if 0
 // not used
 static void cleanup_openssl()
 {
     EVP_cleanup();
 }
+#endif
 
 static u_char *
 tls_get_cert_cn(X509 *cert)
 {
   // see https://github.com/iSECPartners/ssl-conservatory/blob/master/openssl/openssl_hostname_validation.c
-  int common_name_loc = -1, subj_alt_name_loc = -1;
-  X509_NAME_ENTRY *common_name_entry = NULL, *subj_alt_name_entry = NULL;
-  ASN1_STRING *common_name_asn1 = NULL, *subj_alt_name_asn1 = NULL;
-  char *common_name_str = NULL, *subj_alt_name_str = NULL;
+  int common_name_loc = -1;
+  X509_NAME_ENTRY *common_name_entry = NULL;
+  ASN1_STRING *common_name_asn1 = NULL;
+  char *common_name_str = NULL;
 
   // Find the position of the CN field in the Subject field of the certificate
   common_name_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) cert), NID_commonName, -1);
@@ -432,10 +432,6 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
   td->tls_ssl = ssl;
 
   // initiate these
-  if (pthread_mutex_init(&td->tcp_is_open_mutex, NULL) != 0)
-    perror("pthread_mutex_init(update_client_tlsdest)");
-  if (pthread_cond_init(&td->tcp_is_open_cond, NULL) != 0)
-    perror("pthread_cond_init(update_client_tlsdest)");
   if (pthread_mutex_init(&td->tcp_reconnect_mutex, NULL) != 0)
     perror("pthread_mutex_init(update_client_tlsdest)");
   if (pthread_cond_init(&td->tcp_reconnect_cond, NULL) != 0)
@@ -677,7 +673,6 @@ void *tls_connector(void *arg)
     int v = 0;
     if ((v = SSL_connect(ssl)) <= 0) {
       fprintf(stderr,"%%%% Error: TLS connect (%s) failed (probably cert problem?)\n", td->tls_name);
-      int err = SSL_get_error(ssl, v);
       ERR_print_errors_fp(stderr);
       close(tsock);
       SSL_free(ssl);
@@ -753,9 +748,6 @@ void *tls_connector(void *arg)
 #endif
 	// create tlsdest, fill in stuff
 	update_client_tlsdest(td, server_cn, tsock, ssl);
-
-	// tell others about it
-	tls_inform_tcp_is_open(td);
 
 	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
 	// SNS is supposed to be only for existing connections, but we
@@ -882,46 +874,6 @@ static void tls_wait_for_reconnect_signal(struct tls_dest *td)
   if (tls_debug)
     fprintf(stderr,"wait_for_reconnect_signal done\n");
 }
-
-static void tls_inform_tcp_is_open(struct tls_dest *td)
-{
-  if (tls_debug)
-    fprintf(stderr,"tls_inform_tcp_is_open (%s)\n", td->tls_name);
-  if (pthread_mutex_lock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_lock(tcp_is_open)");
-  /* wake everyone waiting on this */
-  if (pthread_cond_broadcast(&td->tcp_is_open_cond) < 0) {
-    perror("tls_inform_tcp_is_open(cond)");
-    exit(1);
-  }
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_unlock(tcp_is_open)");
-}
-static void tls_wait_for_tcp_open(struct tls_dest *td)
-{
-  /* wait for tcp_is_open, and get a mutex lock */
-
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open (%s)...\n", td->tls_name);
-
-  pthread_mutex_lock(&td->tcp_is_open_mutex);
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got lock, waiting...\n");
-  if (pthread_cond_wait(&td->tcp_is_open_cond, &td->tcp_is_open_mutex) < 0) {
-    perror("wait_for_tcp_open(wait)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got signal\n");
-
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)  {
-    perror("wait_for_tcp_open(unlock)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open done\n");
-}
-
 
 // write a record length (two bytes MSB first) and that many bytes
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
@@ -1436,7 +1388,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 	 (rt->rt_braddr == 0 && (tlsdest[i].tls_addr == rt->rt_dest))
 	 ||
 	 // multiplexed
-	 is_in_mux_list(dchad, &tlsdest[i].tls_muxed)
+	 is_in_mux_list(dchad, tlsdest[i].tls_muxed)
 	 )) {
       if (verbose || debug) fprintf(stderr,"Forward TLS to dest %#o over %#o (%s)\n", dchad, tlsdest[i].tls_addr, tlsdest[i].tls_name);
       td = &tlsdest[i];

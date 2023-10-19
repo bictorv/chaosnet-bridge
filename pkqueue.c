@@ -55,8 +55,6 @@ print_pkqueue_holding_lock(struct pkqueue *q)
 void
 print_pkqueue(struct pkqueue *q)
 {
-  struct pkt_elem *e;
-
   PTLOCKN(q->pkq_mutex,"pkq_mutex");
   print_pkqueue_holding_lock(q);
   PTUNLOCKN(q->pkq_mutex,"pkq_mutex");
@@ -97,8 +95,7 @@ free_pkqueue(struct pkqueue *q)
 int // returns new length
 pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
 {
-  struct pkt_elem *l, *ql = NULL, *nl;
-  int e;
+  struct pkt_elem *ql = NULL, *nl;
   
   PTLOCKN(q->pkq_mutex,"pkq_mutex");
 
