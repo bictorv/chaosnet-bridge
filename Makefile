@@ -18,6 +18,13 @@ LDFLAGS = -L/usr/local/lib/libbind
 LIBRESOLV = -lbind
 endif
 
+# On FreeBSD, the resolver is in libc.
+# Need to link with -lthr to get thread-safe
+# versions.
+ifeq ($(OS_NAME), FreeBSD)
+LIBRESOLV=
+endif
+
 CFLAGS+=-Wall
 
 all: cbridge hostat finger
@@ -28,7 +35,7 @@ OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o c
 # -lssl and -lcrypto are needed only for TLS.
 # -lresolv needed only for dns.o (use -lbind for OpenBSD)
 cbridge: $(OBJS) chaosd.h cbridge-chaos.h chudp.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -lpthread -lssl -lcrypto $(LIBRESOLV)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cbridge $(OBJS) -pthread -lssl -lcrypto $(LIBRESOLV)
 
 cbridge.o: cbridge.c cbridge.h cbridge-chaos.h 
 	$(CC) -c $(CFLAGS) -o $@ $<
