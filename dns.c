@@ -51,8 +51,11 @@ static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 
 // consumer/producer lock and semaphores
 static pthread_mutex_t dns_lock = PTHREAD_MUTEX_INITIALIZER;
-static sem_t dns_thread_writer, *dns_thread_writerp;
-static sem_t dns_thread_reader, *dns_thread_readerp;
+// Really: if anonymous semaphores are not supported (see init_chaos_dns)
+#if __APPLE__ == 0
+static sem_t dns_thread_writer, dns_thread_reader;
+#endif
+static sem_t *dns_thread_writerp, *dns_thread_readerp;
 
 // structure for a DNS request coming in over Chaos
 #define CHREQ_MAX 10		/* max concurrent requests @@@@ runtime config? */

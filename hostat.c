@@ -276,7 +276,6 @@ void print_status(u_char *bp, int len, u_short src)
 {
   u_char hname[32+1];
   u_short *dp;
-  int i;
 
   // First 32 bytes contain the name of the node, padded on the right with zero bytes.
   memset(hname, 0, sizeof(hname));
@@ -289,7 +288,7 @@ void print_status(u_char *bp, int len, u_short src)
 
   printf("%s \t%-8s %-8s %-8s %-8s %-8s %-8s %-8s %-8s\n",
 	 "Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected");
-  for (i = 0; dp < ep; i++) {
+  while (dp < ep) {
     u_short subnet = (*dp++);
     if ((subnet - 0400) < 0) { printf("Unexpected format of subnet: %#o (%#x)\n", subnet, subnet); exit(1); }
     subnet -= 0400;

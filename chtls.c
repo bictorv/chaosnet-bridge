@@ -32,7 +32,6 @@ extern int tls_debug;
 static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
-static void tls_inform_tcp_is_open(struct tls_dest *td);
 static void tls_wait_for_reconnect_signal(struct tls_dest *td);
 
 int
@@ -155,11 +154,13 @@ void init_openssl()
   OpenSSL_add_ssl_algorithms();
 }
 
+#if 0
 // not used
 static void cleanup_openssl()
 {
     EVP_cleanup();
 }
+#endif
 
 static u_char *
 tls_get_cert_cn(X509 *cert)
@@ -431,10 +432,6 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
   td->tls_ssl = ssl;
 
   // initiate these
-  if (pthread_mutex_init(&td->tcp_is_open_mutex, NULL) != 0)
-    perror("pthread_mutex_init(update_client_tlsdest)");
-  if (pthread_cond_init(&td->tcp_is_open_cond, NULL) != 0)
-    perror("pthread_cond_init(update_client_tlsdest)");
   if (pthread_mutex_init(&td->tcp_reconnect_mutex, NULL) != 0)
     perror("pthread_mutex_init(update_client_tlsdest)");
   if (pthread_cond_init(&td->tcp_reconnect_cond, NULL) != 0)
@@ -752,9 +749,6 @@ void *tls_connector(void *arg)
 	// create tlsdest, fill in stuff
 	update_client_tlsdest(td, server_cn, tsock, ssl);
 
-	// tell others about it
-	tls_inform_tcp_is_open(td);
-
 	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
 	// SNS is supposed to be only for existing connections, but we
 	// can abuse it since the recipient is a cbridge - we handle it.
@@ -880,46 +874,6 @@ static void tls_wait_for_reconnect_signal(struct tls_dest *td)
   if (tls_debug)
     fprintf(stderr,"wait_for_reconnect_signal done\n");
 }
-
-static void tls_inform_tcp_is_open(struct tls_dest *td)
-{
-  if (tls_debug)
-    fprintf(stderr,"tls_inform_tcp_is_open (%s)\n", td->tls_name);
-  if (pthread_mutex_lock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_lock(tcp_is_open)");
-  /* wake everyone waiting on this */
-  if (pthread_cond_broadcast(&td->tcp_is_open_cond) < 0) {
-    perror("tls_inform_tcp_is_open(cond)");
-    exit(1);
-  }
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)
-    perror("pthread_mutex_unlock(tcp_is_open)");
-}
-static void tls_wait_for_tcp_open(struct tls_dest *td)
-{
-  /* wait for tcp_is_open, and get a mutex lock */
-
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open (%s)...\n", td->tls_name);
-
-  pthread_mutex_lock(&td->tcp_is_open_mutex);
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got lock, waiting...\n");
-  if (pthread_cond_wait(&td->tcp_is_open_cond, &td->tcp_is_open_mutex) < 0) {
-    perror("wait_for_tcp_open(wait)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open got signal\n");
-
-  if (pthread_mutex_unlock(&td->tcp_is_open_mutex) < 0)  {
-    perror("wait_for_tcp_open(unlock)");
-    exit(1);
-  }
-  if (tls_debug)
-    fprintf(stderr,"wait_for_tcp_open done\n");
-}
-
 
 // write a record length (two bytes MSB first) and that many bytes
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len)

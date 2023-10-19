@@ -443,9 +443,12 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
     }
     if (chlen != (xlen-CHAOS_HW_TRAILERSIZE)) {
       if (chip_debug || debug) fprintf(stderr,"CHIP: Dropping packet\n");
+#if 0
+      // @@@@ uninitialized srcaddr: find this by using source route/link
       PTLOCKN(linktab_lock,"linktab_lock");
       linktab[srcaddr>>8].pkt_badlen++;
       PTUNLOCKN(linktab_lock,"linktab_lock");
+#endif
       return;
     } else {
       if (chip_debug || debug) fprintf(stderr,"CHIP: letting it pass, just trailer missing\n");

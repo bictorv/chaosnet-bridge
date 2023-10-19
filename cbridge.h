@@ -218,8 +218,6 @@ struct tls_dest {
     struct sockaddr_in tls_sin;	/* IP addr */
     struct sockaddr_in6 tls_sin6;  /* IPv6 addr */
   } tls_sa;
-  pthread_mutex_t tcp_is_open_mutex;  /* is TCP open? */
-  pthread_cond_t tcp_is_open_cond;
   pthread_mutex_t tcp_reconnect_mutex;  /* would you please reconnect me? */
   pthread_cond_t tcp_reconnect_cond;
   int tls_sock;			/* TCP socket */

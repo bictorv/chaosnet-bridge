@@ -997,6 +997,8 @@ remove_listener_for_conn(struct conn *conn)
   pthread_testcancel();
 }
 
+#if 0
+// Not used
 static void
 remove_listener_for_contact(u_char *contact)
 {
@@ -1023,6 +1025,7 @@ remove_listener_for_contact(u_char *contact)
   pthread_testcancel();
   return;
 }
+#endif // 0
 
 struct listener *
 add_listener(struct conn *c, u_char *contact)
@@ -1724,6 +1727,10 @@ user_socket_los(struct conn *conn, char *fmt, ...)
     dp = (char *)data;
   else if (conn->conn_type == CT_Packet)
     dp = (char *)&data[4];
+  else {
+    fprintf(stderr,"%s: Bad conn type: not Stream or Packet\n", __func__);
+    return;
+  }
 
   va_start(args, fmt);
   vsprintf(dp, fmt, args);

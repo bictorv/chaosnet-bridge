@@ -236,9 +236,9 @@ ch_dumpkt(unsigned char *ucp, int cnt)
     mlen = ch_ackno(ch);
     fprintf(stderr," Broadcast to %d*8 subnets ", ch_ackno(ch));
     for (i = 0; i < mlen; i++) {
-      int x;
       fprintf(stderr, "%#x ", ucp[i]);
 #if 0
+      int x;
       for (x = 0; x < 8; x++) {
 	if (ucp[i] & (1<<x))
 	  fprintf(stderr, "%#o, ", i*8+x);

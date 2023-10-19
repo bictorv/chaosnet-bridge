@@ -1793,10 +1793,12 @@ parse_config_line(char *line)
     tok = strtok(NULL," \t\r\n");
     if (tok != NULL) {
       u_short sval;
-      if (nchaddr >= NCHADDR)
+      if (nchaddr >= NCHADDR) {
 	fprintf(stderr,"out of local chaos addresses, please increas NCHADDR from %d\n",
 		NCHADDR);
-      else if (sscanf(tok,"%ho",&sval) != 1) {
+	return -1;
+      }
+      if (sscanf(tok,"%ho",&sval) != 1) {
 	fprintf(stderr,"chaddr: bad octal argument %s\n",tok);
 	return -1;
       } else if (!valid_chaos_host_address(sval)) {
