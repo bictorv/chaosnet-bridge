@@ -51,7 +51,7 @@ void print_chudp_config()
 int
 parse_chudp_config_line()
 {
-  extern int do_udp6, do_udp;
+  extern int do_udp6;
 
   char *tok = NULL;
   tok = strtok(NULL, " \t\r\n");
@@ -180,7 +180,6 @@ static void
 chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
 {
   struct chaos_header *ch = (struct chaos_header *)&buf[CHUDP_HEADERSIZE];
-  unsigned short cks;
   int i;
   char ip[INET6_ADDRSTRLEN];
 

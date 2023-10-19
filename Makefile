@@ -18,6 +18,8 @@ LDFLAGS = -L/usr/local/lib/libbind
 LIBRESOLV = -lbind
 endif
 
+CFLAGS+=-Wall
+
 all: cbridge hostat finger
 
 OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o

@@ -58,6 +58,11 @@ ip46_ntoa(struct sockaddr *sa, char *buf, int buflen)
 static char **datnames = NULL;
 static char **dwdnames = NULL;
 
+static char
+  *ch_opc[] = { "NIL",
+		"RFC", "OPN", "CLS", "FWD", "ANS", "SNS", "STS",
+		"RUT", "LOS", "LSN", "MNT", "EOF", "UNC", "BRD" };
+
 char *
 ch_opcode_name(int op)
   {
@@ -231,9 +236,9 @@ ch_dumpkt(unsigned char *ucp, int cnt)
     mlen = ch_ackno(ch);
     fprintf(stderr," Broadcast to %d*8 subnets ", ch_ackno(ch));
     for (i = 0; i < mlen; i++) {
-      int x;
       fprintf(stderr, "%#x ", ucp[i]);
 #if 0
+      int x;
       for (x = 0; x < 8; x++) {
 	if (ucp[i] & (1<<x))
 	  fprintf(stderr, "%#o, ", i*8+x);
