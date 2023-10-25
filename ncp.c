@@ -97,6 +97,7 @@ static void update_window_available(struct conn_state *cs, u_short winz);
 static void print_conn(char *leader, struct conn *conn, int alsostate);
 static void start_conn(struct conn *conn);
 static void add_output_pkt(struct conn *c, struct chaos_header *pkt);
+static void socket_closed_for_conn(struct conn *conn);
 static void socket_closed_for_simple_conn(struct conn *conn);
 static void retransmit_controlled_packets(struct conn *conn);
 static void user_socket_los(struct conn *conn, char *fmt, ...);
@@ -520,12 +521,14 @@ print_conn(char *leader, struct conn *conn, int alsostate)
 	 conn->conn_sock, conn->conn_sockaddr.sun_path);
   if (alsostate) {
     struct conn_state *cs = conn->conn_state;
-    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x ack %#x last rec %ld probe %ld\r\n",
+    printf("%s made %#x fwin %d avail %d, read %d contr %d ooo %d, ack %#x rec %#x, send %d high %#x inair %d ack %#x last rec %ld probe %ld\r\n",
 	   leader, cs->pktnum_made_highest,
 	   cs->foreign_winsize, cs->window_available, pkqueue_length(cs->read_pkts), cs->read_pkts_controlled,
 	   pkqueue_length(cs->received_pkts_ooo), 
 	   cs->pktnum_read_highest, cs->pktnum_received_highest, 
-	   pkqueue_length(cs->send_pkts), cs->pktnum_sent_highest, cs->pktnum_sent_acked,
+	   pkqueue_length(cs->send_pkts), cs->pktnum_sent_highest, 
+	   pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_receipt),
+	   cs->pktnum_sent_acked,
 	   cs->time_last_received > 0 ? now - cs->time_last_received : -1,
 	   cs->time_last_probed > 0 ? now - cs->time_last_probed : -1);
   }
@@ -1180,13 +1183,14 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
 {
   u_char pkt[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)pkt;
+  struct conn_state *cs = c->conn_state;
   u_char *datao = &pkt[CHAOS_HEADERSIZE];
   int pklen;
 
-  PTLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
+  PTLOCKN(cs->conn_state_lock,"conn_state_lock");
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
-  PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
+  PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
   if ((data != NULL) && (len > 0)) {
     switch (opcode) {
     case CHOP_BRD:
@@ -1463,67 +1467,32 @@ packet_conn_header_from_pkt(struct conn *conn, struct chaos_header *pkt, u_char 
 }
 
 static int
-packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int cnt) 
+packet_conn_parse_and_send_bytes(struct conn *conn, u_char *buf, int opc, int len) 
 {
-  u_char *bp = buf;
-  int opc, zero, len = 0;
-  while (cnt > 0) {
-    if (cnt < 4) {
-      if (ncp_debug) printf("%%%% NCP packet_conn_parse_and_send_bytes: got only %d bytes, bailing out\n", cnt);
-      user_socket_los(conn,"Bad packet length %d", cnt);
-      return -1;
+  if ((opc == CHOP_CLS) || (opc == CHOP_EOF) || (opc == CHOP_LOS) || (opc == CHOP_UNC) || (opc >= CHOP_DAT)) {
+    int pknum, dowait = 0;
+    if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
+    if (opc == CHOP_EOF) {
+      if ((len > 0) && (strncasecmp((char *)(buf+4), "wait", 4) == 0)) 
+	dowait = 1;
+      // EOF pkts always have zero length
+      pknum = send_basic_pkt_with_data(conn, opc, buf+4, 0);
+    } else
+      pknum = send_basic_pkt_with_data(conn, opc, buf+4, len);
+    if (dowait) {
+      if (ncp_debug) printf("NCP Packet waiting for ACK of EOF %#x\n", pknum);
+      wait_for_ack_of_pkt(conn, pknum);
+      // invent an ACK pkt to send to the socket
+      u_char ackpkt[CHAOS_HEADERSIZE];
+      struct chaos_header *pkt = (struct chaos_header *)ackpkt;
+      set_ch_opcode(pkt, CHOP_ACK);
+      set_ch_nbytes(pkt, 0);
+      send_to_user_socket(conn, pkt, ackpkt, 0);
     }
-    opc = bp[0];
-    zero = bp[1];
-    len = bp[2];
-    len |= bp[3]<<8;
-    if ((opc == 0) || ((opc > CHOP_BRD) && (opc < CHOP_DAT)) || (zero != 0) || (len > CH_PK_MAX_DATALEN)) {
-      if (ncp_debug) printf("%%%% NCP socket_to_conn_packet_handler: bad opc %#o, zero nonzero (%d), or len too big (%d)\n", opc, zero, len);
-      user_socket_los(conn,"Bad packet format (%#o %d %d)", opc, zero, len);
-      return -1;
-    }
-    if (cnt-4 < len) {
-      if (ncp_debug) printf("NCP Packet: read from socket didn't get a full packet (opcode %s len %d have %d)\n", 
-			    ch_opcode_name(opc), len, cnt);
-      // move what we have, so there is space
-      if (ncp_debug) printf("NCP Packet: moving %d bytes from %p to %p (diff %ld)\n", 
-			    cnt, bp, buf, bp-buf);
-      memmove(buf, bp, cnt);
-      bp = buf;
-      // read just what we need
-      if (ncp_debug) printf("NCP Packet: reading %d more bytes to get a full 4+%d chunk at %p (diff %ld)\n", 
-			    (len+4)-cnt, len, &buf[cnt], &buf[cnt]-buf);
-      cnt += receive_or_die(conn, &buf[cnt], (len+4)-cnt);
-      // go back and try parsing it again
-      continue;
-    } else {
-      if ((opc == CHOP_CLS) || (opc == CHOP_EOF) || (opc == CHOP_LOS) || (opc == CHOP_UNC)
-	  || (opc >= CHOP_DAT)) {
-	int pknum, dowait = 0;
-	if (ncp_debug) printf("NCP Packet: parsed opcode %#o (%s) len %d\n", opc, ch_opcode_name(opc), len);
-	if (opc == CHOP_EOF) {
-	  if ((len > 0) && (strncasecmp((char *)(bp+4), "wait", 4) == 0)) 
-	    dowait = 1;
-	// EOF pkts always have zero length
-	  pknum = send_basic_pkt_with_data(conn, opc, bp+4, 0);
-	} else
-	  pknum = send_basic_pkt_with_data(conn, opc, bp+4, len);
-	if (dowait) {
-	  if (ncp_debug) printf("NCP Packet waiting for ACK of EOF %#x\n", pknum);
-	  wait_for_ack_of_pkt(conn, pknum);
-	  // invent an ACK pkt to send to the socket
-	  u_char ackpkt[CHAOS_HEADERSIZE];
-	  struct chaos_header *pkt = (struct chaos_header *)ackpkt;
-	  set_ch_opcode(pkt, CHOP_ACK);
-	  set_ch_nbytes(pkt, 0);
-	  send_to_user_socket(conn, pkt, ackpkt, 0);
-	}
-      } else
-	user_socket_los(conn,"Bad opcode %s in state %s, only CLS LOS UNC DAT..DWD are OK", 
-			ch_opcode_name(opc), conn_state_name(conn));
-    }
-    cnt -= (4+len);
-    bp += (4+len);
+  } else {
+    user_socket_los(conn,"Bad opcode %s in state %s, only CLS LOS UNC DAT..DWD are OK", 
+		    ch_opcode_name(opc), conn_state_name(conn));
+    return -1;
   }
   return 1;
 }
@@ -2327,12 +2296,13 @@ clear_send_pkts(struct conn *c)
     npkts++;
     free(p);
   }
+  PTUNLOCKN(cs->send_mutex,"send_mutex");
   update_window_available(cs, cs->foreign_winsize);
   if (ncp_debug) printf("NCP cleared %d pkts from send_pkts\n", npkts);
-  PTUNLOCKN(cs->send_mutex,"send_mutex");
   PTUNLOCKN(cs->window_mutex,"window_mutex");
 }
 
+// Packets we got a receipt for do not need to be retransmitted anymore.
 static void
 discard_received_pkts_from_send_list(struct conn *conn, u_short receipt)
 {
@@ -2363,13 +2333,11 @@ discard_received_pkts_from_send_list(struct conn *conn, u_short receipt)
     ndisc++;
     p = pkqueue_peek_first(cs->send_pkts);
   }
-  update_window_available(cs, cs->foreign_winsize);
   PTUNLOCKN(cs->send_mutex,"send_mutex");
+  update_window_available(cs, cs->foreign_winsize);
   if (ncp_debug && (wsize != cs->window_available)) {
     printf("Discarded %d pkts: window changed from %d to %d\n", ndisc, wsize, cs->window_available);
   }
-  // Notify everyone (might be more than one!)
-  if (pthread_cond_broadcast(&cs->window_cond) != 0) perror("?? pthread_cond_broadcast(window_cond)");
   PTUNLOCKN(cs->window_mutex,"window_mutex");
 }
 
@@ -2517,9 +2485,6 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
   // already checked above that it's higher
   cs->send_pkts_pktnum_highest = ch_packetno(pkt);
 
-  // Keep track - one more slot in window used
-  cs->window_available--;
-
   // let consumer know there is stuff to send to network
   if (pthread_cond_signal(&c->conn_state->send_cond) != 0) perror("?? pthread_cond_signal(send_cond)");
   PTUNLOCKN(cs->send_mutex,"send_mutex");
@@ -2540,11 +2505,26 @@ retransmit_controlled_packets(struct conn *conn)
   int pklen;
   u_char tempkt[CH_PK_MAXLEN];
 
-  // make sure.
-  discard_received_pkts_from_send_list(conn, cs->pktnum_sent_acked);
+#if 0
+  // Packets which have been receipt don't need to be retransmitted.
+  discard_received_pkts_from_send_list(conn, cs->pktnum_sent_receipt); // receipt?
+#endif
+  u_short tosend = cs->foreign_winsize;
+  u_short unacked = pktnum_diff(cs->pktnum_sent_receipt, cs->pktnum_sent_acked);
+  // We have discarded (from send queue) up to receipt, but window is based on acks
+#if 1
+  tosend = tosend-unacked;
+#endif
+  // u_short tosend = pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_receipt);
+  u_short initial_tosend = tosend;
 
   PTLOCKN(cs->send_mutex,"send_mutex");
   if ((npkts = pkqueue_length(cs->send_pkts)) > 0) {
+    if (ncp_debug) {
+      printf("Retransmit: winsz %d, unacked %d - to send %d (%d)\n",
+	     cs->foreign_winsize, unacked, cs->foreign_winsize-unacked, tosend);
+      print_conn("Retransmit:", conn, 1);
+    }
     for (q = pkqueue_first_elem(cs->send_pkts); q != NULL; q = pkqueue_next_elem(q)) {
       pkt = pkqueue_elem_pkt(q); 
       pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
@@ -2552,9 +2532,9 @@ retransmit_controlled_packets(struct conn *conn)
       if (pkt != NULL) {
 	    // don't retransmit OPN when we're already open
 	if ((ch_opcode(pkt) == CHOP_OPN) && ((cs->state == CS_Open) || (cs->state == CS_Finishing))) {
-	  if (ncp_debug) printf("%%%% Retrans %s %#x with acked %#x in state %s\n",
+	  if (ncp_debug) printf("%%%% Retrans %s %#x with acked %#x rcpt %#x in state %s\n",
 				ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), 
-				cs->pktnum_sent_acked, state_name(cs->state));
+				cs->pktnum_sent_acked, cs->pktnum_sent_receipt, state_name(cs->state));
 	}
 	if (((ch_opcode(pkt) == CHOP_RFC) || (ch_opcode(pkt) == CHOP_BRD))
 	    && (conn->rfc_timeout > 0)
@@ -2575,15 +2555,24 @@ retransmit_controlled_packets(struct conn *conn)
 	    // don't retransmit OPN when we're already open
 	    //&& !((ch_opcode(pkt) == CHOP_OPN) || (cs->state == CS_Open) || (cs->state == CS_Finishing))
 	    // don't retransmit DAT until CS_Open
-	    && ((ch_opcode(pkt) < CHOP_DAT) || (cs->state == CS_Open) || (cs->state == CS_Finishing))) {
+	    && ((ch_opcode(pkt) < CHOP_DAT) || (cs->state == CS_Open) || (cs->state == CS_Finishing))
+	    // Don't retransmit more that fits the window
+	    && (tosend > 0)
+	    ) {
 	  // @@@@ unless sent within 1/30 s
 	  nsent++;
+	  tosend--;
 	  // protect against swapping - send a copy
 	  if (pklen <= sizeof(tempkt)) {
 	    // update ack field
+	    PTLOCKN(cs->conn_state_lock,"conn_state_lock");
 	    if (ch_opcode(pkt) != CHOP_BRD)
 	      set_ch_ackno(pkt, cs->pktnum_read_highest);
 	    cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
+	    // Update highest sent pktnum
+	    if (pktnum_less(cs->pktnum_sent_highest,ch_packetno(pkt)))
+	      cs->pktnum_sent_highest = ch_packetno(pkt);
+	    PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 	    memcpy(tempkt, (u_char *)pkt, pklen);
 	    if (ncp_debug) printf("NCP >>> local %#x retransmitting controlled pkt %#x (%s), ack %#x\n",
 				  conn->conn_lidx,
@@ -2594,9 +2583,9 @@ retransmit_controlled_packets(struct conn *conn)
       }
     }
   }
-  if (ncp_debug && (nsent != npkts)) {
-    printf("Retransmitted %d controlled packets, expected %d (qlen), thread %p\n", 
-	   nsent, npkts, (void *)pthread_self());
+  if (ncp_debug && (nsent < initial_tosend) && (nsent != npkts)) {
+    printf("Retransmitted %d controlled packets, expected %d (qlen %d), thread %p\n", 
+	   nsent, initial_tosend, npkts, (void *)pthread_self());
     print_pkqueue(cs->send_pkts);
   }
   PTUNLOCKN(cs->send_mutex,"send_mutex");
@@ -2619,14 +2608,25 @@ send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt, in
     if (ncp_debug > 1) printf("Want to send controlled pkt %#x, window now %d, q len %d\n", ch_packetno(pkt),
 			  cs->window_available, pkqueue_length(cs->send_pkts));
 
+#if 0 // Window is checked when adding to the send queue
+    if (cs->window_available == 0) { // Window full, don't send it
+      if (ncp_debug) printf("%%%%%s: window full, not sending!\n", __func__);
+      return 0;
+    }
+#endif
     PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-    cs->pktnum_sent_highest = ch_packetno(pkt);
+    if (pktnum_less(cs->pktnum_sent_highest, ch_packetno(pkt)))
+      cs->pktnum_sent_highest = ch_packetno(pkt);
     // Get these before unlocking conn_state_lock
     u_short ackno = cs->pktnum_read_highest;
     if (pktnum_less(cs->pktnum_acked, ackno) || pktnum_equal(cs->pktnum_acked, ackno))
       cs->pktnum_acked = ackno; // record the sent ack
     else if (ncp_debug) printf("%%%% NCP s_p_w_w_o: acked not less than read_highest: %#x >= %#x\n",
 			       cs->pktnum_acked, cs->pktnum_read_highest);
+#if 0 // This is done by update_window_available, using window_cond
+    // Keep track - one more slot in window used
+    cs->window_available--;
+#endif
     PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 
     if (ncp_debug) printf("NCP: Sending controlled pkt %#x, window now %d, q len %d, ack %#x\n", ch_packetno(pkt),
@@ -2875,6 +2875,16 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
       if (ncp_debug) printf(" pkt %#x is OOO (highest is %#x)\n", ch_packetno(pkt), cs->pktnum_received_highest);
       add_ooo_pkt(conn, pkt);
     }
+    // AIM 628 sec 3.8: if the number of packets which should have been
+    // acknowledged but have not been is more than 1/3 the window
+    // size, an STS is generated to acknowledge them.
+    // [And only for each 1/3rd, not every pkt after that.]
+    // pktnum_read_highest: highest pktnum received
+    int unacked = pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked);
+    if ((unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
+      if (ncp_debug) printf(" 1/3 window un-acked (%d), sending STS\n", unacked);
+      send_sts_pkt(conn);
+    }
   } else {
     // window full, send STS to inform the other end about the window and acks and receipts etc
     if (ncp_debug) printf("Window is full for pkt %#x, sending STS\n", ch_packetno(pkt));
@@ -2882,25 +2892,36 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
   }
 }
 
+// Packets "in the network" are those which have been emitted by the
+// sending user process, but have not been acknowledged. (Note: not "been receipted")
+// !!!! Call with window_mutex locked - broadcasts on window_cond if changing window
 static void
 update_window_available(struct conn_state *cs, u_short winz) {
+  PTLOCKN(cs->conn_state_lock,"conn_state_lock");
   u_short receipt = cs->pktnum_sent_receipt;
-  u_short in_air = pktnum_diff(cs->send_pkts_pktnum_highest, receipt);
+  u_short acked = cs->pktnum_sent_acked;
+  u_short in_air = pktnum_diff(cs->pktnum_sent_highest, acked);
   if (winz < in_air) {
+    // This could happen, since we discarded from send queue up to receipt,
+    // but send (in retransmit_controlled_packets) a full window. 
+    // But can be avoided by using (winsize - diff(receipt,acked)) in retransmit_controlled_packets?
     if (ncp_debug)
-      fprintf(stderr,"%%%% NCP: window would become negative! winz %d, shigh %#x, rec %#x, in_air %d\n", 
-	      winz, cs->send_pkts_pktnum_highest, receipt, in_air);
+      fprintf(stderr,"%%%% NCP: window would become negative! winz %d, shigh %#x, rec %#x, ack %#x, in_air %d\n", 
+	      winz, cs->pktnum_sent_highest, receipt, acked, in_air);
     in_air = winz;		/* Be safe */
   }
   u_short new_avail = winz - in_air;
-  // cs->send_pkts_pktnum_highest - receipt = pkts need to be reset
+  // cs->pktnum_sent_highest - receipt = pkts need to be resent, "in the network"
   // winsize - that = available
   if (new_avail != cs->window_available) {
-    if (ncp_debug) printf("NCP: adjusting available window from %d to %d based on receipt %#x, in air %d\n", 
-			  cs->window_available, new_avail, receipt, in_air);
+    if (ncp_debug) printf("NCP: adjusting available window from %d to %d based on ack %#x, rcpt %#x, in air %d\n", 
+			  cs->window_available, new_avail, acked, receipt, in_air);
     cs->window_available = new_avail;
+    // Notify everyone (might be more than one!)
+    if (pthread_cond_broadcast(&cs->window_cond) != 0) perror("?? pthread_cond_broadcast(window_cond)");
   }
   cs->foreign_winsize = winz;
+  PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 }
 
 // @@@@ This could do with some structuring/modularization etc
@@ -2923,13 +2944,14 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
 
   if ((ch_ackno(ch) != 0) && (ch_opcode(ch) != CHOP_FWD) && (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))) {
     // we got an ack update
-    if (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch)))
+    if (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch))) {
       cs->pktnum_sent_acked = ch_ackno(ch);
-    // Ack implies receipt
-    if (pktnum_less(cs->pktnum_sent_receipt, cs->pktnum_sent_acked))
-      cs->pktnum_sent_receipt = cs->pktnum_sent_acked;
-    // clear out acked pkts from send_pkts
-    discard_received_pkts_from_send_list(conn, ch_ackno(ch));
+      // Ack implies receipt
+      if (pktnum_less(cs->pktnum_sent_receipt, cs->pktnum_sent_acked))
+	cs->pktnum_sent_receipt = cs->pktnum_sent_acked;
+      // clear out receipted pkts from send_pkts
+      discard_received_pkts_from_send_list(conn, cs->pktnum_sent_receipt); // receipt?
+    }
   }
   if ((cs->time_last_received == 0) && (ch_opcode(ch) != CHOP_FWD)) {
     // if this is the first, make sure we realize we haven't already received it
@@ -2950,12 +2972,12 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       cs->pktnum_sent_receipt = receipt;
     // validate reasonable value
     if (winz <= MAX_WINSIZE) {
-      // adjust window_available
-      PTLOCKN(cs->send_mutex,"send_mutex");
+      // adjust window_available - also may broadcast on window_cond
+      PTLOCKN(cs->window_mutex, "window_mutex");
       update_window_available(cs, winz);
-      PTUNLOCKN(cs->send_mutex,"send_mutex");
+      PTUNLOCKN(cs->window_mutex, "window_mutex");
     }
-    // clear out send_pkts based on receipt - also updates window_available and window_cond
+    // clear out send_pkts based on receipt
     discard_received_pkts_from_send_list(conn, receipt);
     if (cs->state == CS_Open_Sent) {
       // We have got an RFC and sent an OPN, so we were waiting for this STS.
@@ -3220,8 +3242,11 @@ packet_to_conn_handler(u_char *pkt, int len)
     send_los_pkt(conn,"Data too long");
     return;
   }
-  if ((ch_opcode(ch) > CHOP_BRD) && (ch_opcode(ch) < CHOP_DAT)) {
-    if (ncp_debug) print_conn("Illegal opcode for", conn, 1);
+  if (!valid_opcode(ch_opcode(ch))) {
+    if (ncp_debug) {
+      printf("%s: illegal opcode %#o\n", __func__, ch_opcode(ch));
+      print_conn("Illegal opcode for", conn, 1);
+    }
     send_los_pkt(conn,"Illegal opcode");
     return;
   }
@@ -3486,116 +3511,124 @@ static int
 socket_to_conn_packet_handler(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
-  int cnt;
+  int cnt, opc, len;
   u_char *cname, *buf, sbuf[CH_PK_MAXLEN];
   int buflen = sizeof(sbuf);
 
   memset(sbuf, 0, CH_PK_MAXLEN);
   buf = sbuf;
 
-  cnt = receive_or_die(conn, buf, buflen);
-  if (ncp_debug) printf("socket_to_conn_packet_handler: read %d bytes from %s\n", cnt, conn_sockaddr_path(conn));
+  cnt = receive_or_die(conn, buf, 4); /* read header */
+  if ((cnt < 0) || (cnt != 4)) {
+    if (ncp_debug) printf("%s: Failed to read packet header (%d)\n", __func__, cnt);
+    return -1;
+  }
+  opc = buf[0];
+  len = buf[2] | (buf[3] << 8);
+  if (!valid_opcode(opc) || (buf[1] != 0)) {
+    printf("%s: bad header bytes %#o %d\n", __func__, buf[0], buf[1]);
+    user_socket_los(conn,"Bad packet format %#o %d", buf[0], buf[1]);
+    return -1;
+  }
+  if (len > CH_PK_MAX_DATALEN) {
+    if (ncp_debug) printf("%s: packet length too big (%d)\n", __func__, len);
+    user_socket_los(conn,"Bad packet format: len %d too big", len);
+    return -1;
+  }
+  if (ncp_debug) printf("%s: got header - opc %s, len %d\n", __func__,
+			ch_opcode_name(buf[0]), len);
+  // Read rest of packet
+  if (len > 0) {
+    int rlen = len < buflen ? len : buflen;
+    int ccnt = receive_or_die(conn, buf+4, rlen);
+    if ((ccnt < 0) || (ccnt != rlen)) {
+      if (ncp_debug) printf("%s: failed to read packet: %d\n", __func__, ccnt);
+      user_socket_los(conn,"Failed to read packet (%d)", ccnt);
+      return -1;
+    }
+    cnt += ccnt;
+  }
+  if (ncp_debug) printf("%s: read %d bytes from %s\n", __func__, cnt, conn_sockaddr_path(conn));
 
-  while (cnt > 0) {
-    int opc = buf[0], zero = buf[1];
-    int len = buf[2] | (buf[3]<<8);
-    if ((opc == 0) || ((opc > CHOP_BRD) && (opc < CHOP_DAT)) || (zero != 0) || (len > CH_PK_MAX_DATALEN)) {
-      if (ncp_debug) printf("NCP socket_to_conn_packet_handler: bad opc %#o, zero nonzero (%d), or len too big (%d)\n", opc, zero, len);
-      user_socket_los(conn,"Bad packet format (%#o %d %d)", opc, zero, len);
-      return -1;
-    }
-    if (len+4 > cnt) {
-      if (ncp_debug) printf("NCP Packet: read from socket didn't get a full packet (opcode %s len %d have %d)\n", 
-			    ch_opcode_name(opc), len, cnt);
-      // get some more input, but only what we need
-      memmove(sbuf, buf, cnt);
-      if (ncp_debug) printf("NCP Packet: reading %d more bytes to get a full 4+%d chunk at %p (diff %ld)\n", 
-			    (len+4)-cnt, len, &buf[cnt], &buf[cnt]-buf);
-      cnt += receive_or_die(conn, buf+cnt, (len+4)-cnt);
-    }
-    if (cs->state == CS_Inactive) {
-      // In inactive state, the first thing from the user socket is RFC, BRD or LSN
-      if (opc == CHOP_LSN) {
-	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
-	memcpy(argbuf, &buf[4], len);
-	argbuf[len] = '\0';
-	cname = parse_contact_name(argbuf);
-	if ((cname != NULL) && (strlen((char *)cname) > 0)) {
-	  if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
-	  add_listener(conn, cname);	// also changes state
-	} else {
-	  if (ncp_debug) printf("Packet \"LSN %s\", contact name missing?\n", cname);
-	  user_socket_los(conn, "Contact name missing");
-	  return -1;
-	}
-      } else if (opc == CHOP_RFC) {
-	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
-	memcpy(argbuf, &buf[4], len);
-	argbuf[len] = '\0';
-	if (ncp_debug) printf("Packet \"RFC %s\"\n", argbuf);
-	initiate_conn_from_rfc_line(conn,argbuf,len);
-      } else if (opc == CHOP_BRD) {
-	// @@@@ 255 subnets => 32 bytes in dest
-	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
-	memcpy(argbuf, &buf[4], len);
-	argbuf[len] = '\0';
-	if (ncp_debug) printf("Packet \"BRD %s\"\n", argbuf);
-	initiate_conn_from_brd_line(conn,argbuf,len);
+  if (cs->state == CS_Inactive) {
+    // In inactive state, the first thing from the user socket is RFC, BRD or LSN
+    if (opc == CHOP_LSN) {
+      u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+      memcpy(argbuf, &buf[4], len);
+      argbuf[len] = '\0';
+      cname = parse_contact_name(argbuf);
+      if ((cname != NULL) && (strlen((char *)cname) > 0)) {
+	if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
+	add_listener(conn, cname);	// also changes state
+      } else {
+	if (ncp_debug) printf("Packet \"LSN %s\", contact name missing?\n", cname);
+	user_socket_los(conn, "Contact name missing");
+	return -1;
       }
+    } else if (opc == CHOP_RFC) {
+      u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+      memcpy(argbuf, &buf[4], len);
+      argbuf[len] = '\0';
+      if (ncp_debug) printf("Packet \"RFC %s\"\n", argbuf);
+      initiate_conn_from_rfc_line(conn,argbuf,len);
+    } else if (opc == CHOP_BRD) {
+      // @@@@ 255 subnets => 32 bytes in dest
+      u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+      memcpy(argbuf, &buf[4], len);
+      argbuf[len] = '\0';
+      if (ncp_debug) printf("Packet \"BRD %s\"\n", argbuf);
+      initiate_conn_from_brd_line(conn,argbuf,len);
     }
-    else if (cs->state == CS_RFC_Received) {
-      // After receiving RFC, the first thing from the user socket is in "string command" form
-      if (opc == CHOP_OPN) {
-	if (ncp_debug) printf("Packet OPN len %d\n", len);
-	send_opn_pkt(conn);
-      }
-      else if (opc == CHOP_CLS) {
-	u_char argbuf[MAX_CONTACT_NAME_LENGTH];
-	memcpy(argbuf, &buf[4], len);
-	argbuf[len] = '\0';
-	if (ncp_debug) printf("Packet cmd \"CLS %s\"\n", argbuf);
-	send_cls_pkt(conn, (char *)argbuf);
-	// done here
+  }
+  else if (cs->state == CS_RFC_Received) {
+    // After receiving RFC, the first thing from the user socket is in "string command" form
+    if (opc == CHOP_OPN) {
+      if (ncp_debug) printf("Packet OPN len %d\n", len);
+      send_opn_pkt(conn);
+    }
+    else if (opc == CHOP_CLS) {
+      u_char argbuf[MAX_CONTACT_NAME_LENGTH];
+      memcpy(argbuf, &buf[4], len);
+      argbuf[len] = '\0';
+      if (ncp_debug) printf("Packet cmd \"CLS %s\"\n", argbuf);
+      send_cls_pkt(conn, (char *)argbuf);
+      // done here
+      return 0;
+    }
+    else if (opc == CHOP_FWD) {
+      if (len == 2) {
+	u_short haddr = buf[4] | (buf[5]<<8);
+	send_fwd_pkt(conn, haddr);
+	// done
 	return 0;
-      }
-      else if (opc == CHOP_FWD) {
-	if (len == 2) {
-	  u_short haddr = buf[4] | (buf[5]<<8);
-	  send_fwd_pkt(conn, haddr);
-	  // done
-	  return 0;
-	} else {
-	  user_socket_los(conn, "Bad FWD length %d, expected 2", len);
-	  return -1;
-	}
-      }
-      else if (opc == CHOP_ANS) {
-	if (ncp_debug) printf("Packet cmd \"ANS\"\n");
-	if (get_ans_bytes_and_send(conn, len, &buf[4], sizeof(buf)-4, cnt-4) < 0)
-	  return -1;
-	else
-	  // finished by sending ANS
-	  return 0;
+      } else {
+	user_socket_los(conn, "Bad FWD length %d, expected 2", len);
+	return -1;
       }
     }
-    else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
-      // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD EOF)
-      return packet_conn_parse_and_send_bytes(conn, buf, cnt);
+    else if (opc == CHOP_ANS) {
+      if (ncp_debug) printf("Packet cmd \"ANS\"\n");
+      if (get_ans_bytes_and_send(conn, len, &buf[4], sizeof(buf)-4, cnt-4) < 0)
+	return -1;
+      else
+	// finished by sending ANS
+	return 0;
     }
-    else if (cs->state != CS_Inactive) {
-      char errbuf[512];
-      sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state: %s", 
-	      cnt, conn_state_name(conn), ch_opcode_name(buf[0]));
-      fprintf(stderr,"%s\n", errbuf);
-      send_los_pkt(conn,"Local error. We apologize for the incovenience.");
-      // return a LOS to the user: bad request - not RFC or LSN
-      user_socket_los(conn, "%s", errbuf);
-      set_conn_state(conn, cs->state, CS_Inactive, 0);
-      return -1;
-    }
-    // consumed some buffer
-    cnt -= len+4;
-    buf += len+4;
+  }
+  else if ((cs->state == CS_Open) || (cs->state == CS_Open_Sent)) {
+    // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD EOF)
+    return packet_conn_parse_and_send_bytes(conn, buf, opc, len);
+  }
+  else if (cs->state != CS_Inactive) {
+    char errbuf[512];
+    sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state: %s", 
+	    cnt, conn_state_name(conn), ch_opcode_name(buf[0]));
+    fprintf(stderr,"%s\n", errbuf);
+    send_los_pkt(conn,"Local error. We apologize for the incovenience.");
+    // return a LOS to the user: bad request - not RFC or LSN
+    user_socket_los(conn, "%s", errbuf);
+    set_conn_state(conn, cs->state, CS_Inactive, 0);
+    return -1;
   }
   // success
   return 1;
@@ -3847,13 +3880,6 @@ conn_to_socket_handler(void *arg)
     case CT_Stream:
     case CT_Packet:
       conn_to_socket_pkt_handler(conn, pkt);
-      if (!packet_uncontrolled(pkt) &&
-	  ((cs->state == CS_Open) || (cs->state == CS_Finishing)) &&
-	  // more than a third of the window is un-acked
-	  (pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked) > cs->local_winsize/3)) {
-	// Then send explict STS
-	send_sts_pkt(conn);
-      }
       if ((cs->state == CS_Answered) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
 	// Allow more ANS to come in
 	if (ncp_debug) printf("NCP c_t_s BRD conn <%#o,%#x> in Answered state: not finishing (t/o %d, age %ld)\n",
