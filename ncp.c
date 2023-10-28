@@ -2510,13 +2510,10 @@ retransmit_controlled_packets(struct conn *conn)
   discard_received_pkts_from_send_list(conn, cs->pktnum_sent_receipt); // receipt?
 #endif
   u_short tosend = cs->foreign_winsize;
-  // These are "in the network" still
-  u_short unacked = pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_acked);
+  u_short unacked = pktnum_diff(cs->pktnum_sent_receipt, cs->pktnum_sent_acked);
   // We have discarded (from send queue) up to receipt, but window is based on acks
-#if 0
+#if 1
   tosend = tosend-unacked;
-#else
-  tosend = cs->window_available;
 #endif
   // u_short tosend = pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_receipt);
   u_short initial_tosend = tosend;
@@ -2524,8 +2521,8 @@ retransmit_controlled_packets(struct conn *conn)
   PTLOCKN(cs->send_mutex,"send_mutex");
   if ((npkts = pkqueue_length(cs->send_pkts)) > 0) {
     if (ncp_debug) {
-      printf("Retransmit: winsz %d, unacked %d - to send %d (%d) avail win %d\n",
-	     cs->foreign_winsize, unacked, cs->foreign_winsize-unacked, tosend, cs->window_available);
+      printf("Retransmit: winsz %d, unacked %d - to send %d (%d)\n",
+	     cs->foreign_winsize, unacked, cs->foreign_winsize-unacked, tosend);
       print_conn("Retransmit:", conn, 1);
     }
     for (q = pkqueue_first_elem(cs->send_pkts); q != NULL; q = pkqueue_next_elem(q)) {
@@ -2585,8 +2582,6 @@ retransmit_controlled_packets(struct conn *conn)
 	}
       }
     }
-    if (ncp_debug && (nsent > 0))
-      printf("Retransmitted %d pkts\n", nsent);
   }
   if (ncp_debug && (nsent < initial_tosend) && (nsent != npkts)) {
     printf("Retransmitted %d controlled packets, expected %d (qlen %d), thread %p\n", 
@@ -2613,7 +2608,7 @@ send_packet_when_window_open(struct conn_state *cs, struct chaos_header *pkt, in
     if (ncp_debug > 1) printf("Want to send controlled pkt %#x, window now %d, q len %d\n", ch_packetno(pkt),
 			  cs->window_available, pkqueue_length(cs->send_pkts));
 
-#if 1 // Window is checked when adding to the send queue
+#if 0 // Window is checked when adding to the send queue
     if (cs->window_available == 0) { // Window full, don't send it
       if (ncp_debug) printf("%%%%%s: window full, not sending!\n", __func__);
       return 0;
@@ -2909,7 +2904,7 @@ update_window_available(struct conn_state *cs, u_short winz) {
   if (winz < in_air) {
     // This could happen, since we discarded from send queue up to receipt,
     // but send (in retransmit_controlled_packets) a full window. 
-    // But can be avoided by using (winsize - diff(highest,acked)) in retransmit_controlled_packets.
+    // But can be avoided by using (winsize - diff(receipt,acked)) in retransmit_controlled_packets?
     if (ncp_debug)
       fprintf(stderr,"%%%% NCP: window would become negative! winz %d, shigh %#x, rec %#x, ack %#x, in_air %d\n", 
 	      winz, cs->pktnum_sent_highest, receipt, acked, in_air);
@@ -2951,14 +2946,11 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     // we got an ack update
     if (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch))) {
       cs->pktnum_sent_acked = ch_ackno(ch);
-      update_window_available(cs, cs->foreign_winsize);
-#if 0
       // Ack implies receipt
       if (pktnum_less(cs->pktnum_sent_receipt, cs->pktnum_sent_acked))
 	cs->pktnum_sent_receipt = cs->pktnum_sent_acked;
       // clear out receipted pkts from send_pkts
       discard_received_pkts_from_send_list(conn, cs->pktnum_sent_receipt); // receipt?
-#endif
     }
   }
   if ((cs->time_last_received == 0) && (ch_opcode(ch) != CHOP_FWD)) {
@@ -2979,7 +2971,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     if (pktnum_less(cs->pktnum_sent_receipt, receipt))
       cs->pktnum_sent_receipt = receipt;
     // validate reasonable value
-    if ((winz <= MAX_WINSIZE) && (winz != cs->foreign_winsize)) {
+    if (winz <= MAX_WINSIZE) {
       // adjust window_available - also may broadcast on window_cond
       PTLOCKN(cs->window_mutex, "window_mutex");
       update_window_available(cs, winz);
