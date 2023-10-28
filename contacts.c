@@ -427,12 +427,13 @@ handle_rfc(struct chaos_header *ch, u_char *data, int dlen)
   int i;
   char cname[CH_PK_MAX_DATALEN];
   int datalen = ch_nbytes(ch);
-  if (datalen > 488) {
+  if (datalen > CH_PK_MAX_DATALEN) {
     fprintf(stderr,"NCP (handle_rfc): Data too long (%d, dlen %d) in %s pkt from <%#o,%#x> to <%#o,%#x>\n",
 	    datalen, dlen, ch_opcode_name(ch_opcode(ch)), 
 	    ch_srcaddr(ch), ch_srcindex(ch), ch_destaddr(ch), ch_destindex(ch));
     return 0;
   }
+  get_packet_string(ch, (u_char *)cname, sizeof(cname));
   char *space = index(cname, ' ');
   if (space) *space = '\0'; // look only for contact name, not args
   if (debug) fprintf(stderr,"Looking for handler of \"%s\"\n", cname);
