@@ -27,11 +27,24 @@ int pktnum_equal(u_short a, u_short b);
 #include "cbridge.h"
 #include "pkqueue.h"
 
+// cf https://gist.github.com/diabloneo/9619917?permalink_comment_id=3364033#gistcomment-3364033
+static inline void timespec_diff(struct timespec *a, struct timespec *b,
+    struct timespec *result) {
+    result->tv_sec  = a->tv_sec  - b->tv_sec;
+    result->tv_nsec = a->tv_nsec - b->tv_nsec;
+    if (result->tv_nsec < 0) {
+        --result->tv_sec;
+        result->tv_nsec += 1000000000L;
+    }
+}
+
 static void
 print_pkqueue_holding_lock(struct pkqueue *q)
 {
   struct pkt_elem *e;
   int nelem = 0;
+  struct timespec now, diff;
+  timespec_get(&now, TIME_UTC);
 
   if (q == NULL) { printf("#<pkq NULL>\n"); return; }
   printf("#<pkq %p len %d first %p last %p", q, q->pkq_len, q->first, q->last);
@@ -39,8 +52,11 @@ print_pkqueue_holding_lock(struct pkqueue *q)
   for (e = q->first; e != NULL; e = e->next) {
     nelem++;
     printf("\n elem %p ", e);
-    if (e->pkt != NULL)
-      printf("%s pkt %#x nbytes %d", ch_opcode_name(ch_opcode(e->pkt)), ch_packetno(e->pkt), ch_nbytes(e->pkt));
+    if (e->pkt != NULL) {
+      timespec_diff(&now,&e->transmitted, &diff);
+      printf("%s pkt %#x nbytes %d trans %f ago", ch_opcode_name(ch_opcode(e->pkt)), ch_packetno(e->pkt),
+	     ch_nbytes(e->pkt), diff.tv_sec + (float)(diff.tv_nsec)/(float)1000000000);
+    }
     else
       printf("NULL");
   }
@@ -113,7 +129,8 @@ pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
     perror("malloc(pkt_elem)"); exit(1);
   }
   nl->pkt = pkt;
-  nl->transmitted = 0;
+  nl->transmitted.tv_sec = 0;
+  nl->transmitted.tv_nsec = 0;
   nl->next = NULL;
 
   if (ql != NULL)
@@ -146,7 +163,8 @@ pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)
     perror("malloc(pkt_elem)"); exit(1);
   }
   nl->pkt = pkt;
-  nl->transmitted = 0;
+  nl->transmitted.tv_sec = 0;
+  nl->transmitted.tv_nsec = 0;
   nl->next = NULL;
   if (q->first == NULL) {
     // optimization: see if q was empty
@@ -222,21 +240,13 @@ pkqueue_peek_first(struct pkqueue *q)
   else
     return q->first->pkt;
 }
-int
-pkqueue_peek_first_transmitted_p(struct pkqueue *q)
+struct pkt_elem *
+pkqueue_peek_first_elem(struct pkqueue *q)
 {
   if ((q == NULL) || (q->first == NULL))
-    return 0;
+    return NULL;
   else
-    return q->first->transmitted;
-}
-int 
-pkqueue_set_first_transmitted_p(struct pkqueue *q, int val)
-{
-  if ((q == NULL) || (q->first == NULL))
-    return 0;
-  else
-    return q->first->transmitted = val;
+    return q->first;
 }
 struct chaos_header *
 pkqueue_peek_last(struct pkqueue *q)
@@ -278,8 +288,22 @@ pkqueue_elem_pkt(struct pkt_elem *e)
   else
     return NULL;
 }
+struct timespec *
+pkqueue_elem_transmitted(struct pkt_elem *e)
+{
+  if (e != NULL)
+    return &e->transmitted;
+  else
+    return NULL;
+}
 int
 pkqueue_length(struct pkqueue *q)
 {
   return q->pkq_len;
+}
+void
+set_pkqueue_elem_transmitted(struct pkt_elem *e, struct timespec *ts)
+{
+  e->transmitted.tv_sec = ts->tv_sec;
+  e->transmitted.tv_nsec = ts->tv_nsec;
 }

@@ -17,10 +17,11 @@
 // Packet queue implementation
 
 #include <pthread.h>
+#include <time.h>
 
 struct pkt_elem {
   struct chaos_header *pkt;
-  u_char transmitted;		// whether it has been transmitted at least once
+  struct timespec transmitted;		// when it was last transmitted
   struct pkt_elem *next;
 };
 
@@ -38,10 +39,11 @@ int pkqueue_add(struct chaos_header *pkt, struct pkqueue *q);
 int pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q);
 struct chaos_header *pkqueue_get_first(struct pkqueue *q);
 struct chaos_header *pkqueue_peek_first(struct pkqueue *q);
-int pkqueue_peek_first_transmitted_p(struct pkqueue *q);
-int pkqueue_set_first_transmitted_p(struct pkqueue *q, int val);
+struct pkt_elem *pkqueue_peek_first_elem(struct pkqueue *q);
 struct chaos_header *pkqueue_peek_last(struct pkqueue *q);
 struct pkt_elem *pkqueue_first_elem(struct pkqueue *q);
 struct pkt_elem *pkqueue_next_elem(struct pkt_elem *e);
 struct chaos_header *pkqueue_elem_pkt(struct pkt_elem *e);
+struct timespec *pkqueue_elem_transmitted(struct pkt_elem *e);
+void set_pkqueue_elem_transmitted(struct pkt_elem *e, struct timespec *ts);
 int pkqueue_length(struct pkqueue *q);
