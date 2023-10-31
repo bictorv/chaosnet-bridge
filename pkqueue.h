@@ -20,6 +20,7 @@
 
 struct pkt_elem {
   struct chaos_header *pkt;
+  u_char transmitted;		// whether it has been transmitted at least once
   struct pkt_elem *next;
 };
 
@@ -37,6 +38,8 @@ int pkqueue_add(struct chaos_header *pkt, struct pkqueue *q);
 int pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q);
 struct chaos_header *pkqueue_get_first(struct pkqueue *q);
 struct chaos_header *pkqueue_peek_first(struct pkqueue *q);
+int pkqueue_peek_first_transmitted_p(struct pkqueue *q);
+int pkqueue_set_first_transmitted_p(struct pkqueue *q, int val);
 struct chaos_header *pkqueue_peek_last(struct pkqueue *q);
 struct pkt_elem *pkqueue_first_elem(struct pkqueue *q);
 struct pkt_elem *pkqueue_next_elem(struct pkt_elem *e);

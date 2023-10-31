@@ -79,7 +79,8 @@ struct conn_state {
   u_short send_pkts_pktnum_highest; // highest controlled pkt nr on send list
   pthread_mutex_t send_mutex; // to tell network there are things to send
   pthread_cond_t send_cond;
-  u_short pktnum_sent_highest;	// last we actually transmitted
+  //u_short pktnum_sent_highest;	// last we actually transmitted
+#define pktnum_sent_highest send_pkts_pktnum_highest
   u_short pktnum_sent_acked;	// last we got ack for
   u_short pktnum_sent_receipt;	// last we got receipt for
   time_t time_last_received;	// for probing

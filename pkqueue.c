@@ -113,6 +113,7 @@ pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
     perror("malloc(pkt_elem)"); exit(1);
   }
   nl->pkt = pkt;
+  nl->transmitted = 0;
   nl->next = NULL;
 
   if (ql != NULL)
@@ -145,6 +146,7 @@ pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)
     perror("malloc(pkt_elem)"); exit(1);
   }
   nl->pkt = pkt;
+  nl->transmitted = 0;
   nl->next = NULL;
   if (q->first == NULL) {
     // optimization: see if q was empty
@@ -219,6 +221,22 @@ pkqueue_peek_first(struct pkqueue *q)
     return NULL;
   else
     return q->first->pkt;
+}
+int
+pkqueue_peek_first_transmitted_p(struct pkqueue *q)
+{
+  if ((q == NULL) || (q->first == NULL))
+    return 0;
+  else
+    return q->first->transmitted;
+}
+int 
+pkqueue_set_first_transmitted_p(struct pkqueue *q, int val)
+{
+  if ((q == NULL) || (q->first == NULL))
+    return 0;
+  else
+    return q->first->transmitted = val;
 }
 struct chaos_header *
 pkqueue_peek_last(struct pkqueue *q)
