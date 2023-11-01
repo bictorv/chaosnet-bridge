@@ -845,6 +845,8 @@ find_existing_conn(struct chaos_header *ch)
     // @@@@ when sending an RFC to self, this seems to find the wrong end (i.e. the RFC-sending end)
     // @@@@ break this up into more easily understandable cases!
     struct conn *c = cl->conn_conn;
+    PTLOCKN(c->conn_lock,"conn_lock");
+    PTLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
     if ( // already existing conn
 	((c->conn_rhost == src) &&
 	 (c->conn_ridx == sidx) &&
@@ -870,6 +872,8 @@ find_existing_conn(struct chaos_header *ch)
 	  ((opc == CHOP_ANS) || (opc == CHOP_OPN) || (opc == CHOP_FWD) || (opc == CHOP_CLS)))
 	 )) {
       val = c;
+      PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
+      PTUNLOCKN(c->conn_lock,"conn_lock");
       break;
     } else if (
 	       // another ANS or FWD for a broadcast receiver
@@ -882,7 +886,12 @@ find_existing_conn(struct chaos_header *ch)
 	       (c->conn_lhost == dest) && (c->conn_lidx == didx)) {
       // the BRD_Sent conn has zero rhost, but allow different hosts to ANS the same BRD conn
       val = c;
+      PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
+      PTUNLOCKN(c->conn_lock,"conn_lock");
       break;
+    } else {
+      PTUNLOCKN(c->conn_state->conn_state_lock,"conn_state_lock");
+      PTUNLOCKN(c->conn_lock,"conn_lock");
     }
   }
   if (ncp_debug && (val == NULL) && 
@@ -2575,7 +2584,7 @@ retransmit_controlled_packets(struct conn *conn)
       if (pklen % 2) pklen++;
       if (pkt != NULL) {
 	// unless sent within 1/30 s
-	if (!timespec_diff_above(&now, pkqueue_elem_transmitted(q), THIRTIETH_SEC_IN_MS)) {
+	if (!timespec_diff_above(&now, pkqueue_elem_transmitted(q), RETRANSMIT_LOW_THRESHOLD)) {
 	  ntoonew++;
 	  continue;
 	}
@@ -2814,7 +2823,7 @@ conn_to_packet_stream_handler(void *v)
       // get a packet - the first one in the queue
       elem = pkqueue_peek_first_elem(cs->send_pkts);
       pkt = pkqueue_elem_pkt(elem);
-      if ((pkt != NULL) && timespec_diff_above(&now, pkqueue_elem_transmitted(elem), THIRTIETH_SEC_IN_MS)) {
+      if ((pkt != NULL) && timespec_diff_above(&now, pkqueue_elem_transmitted(elem), RETRANSMIT_LOW_THRESHOLD)) {
 	// make a copy, to protect against (1) swapping when sending, and (2) pkt being freed after lock is released
 	pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
 	if (pklen % 2) pklen++;
@@ -3283,7 +3292,7 @@ packet_to_conn_handler(u_char *pkt, int len)
     conn = packet_to_unknown_conn_handler(pkt, len, ch, data);
     if (conn == NULL)
       return;
- }
+  }
   // else conn is known
   else if ((conn->conn_state->state == CS_Inactive) &&  // but not active, not about to start or just lost
 	   (ch_opcode(ch) != CHOP_RFC) && (ch_opcode(ch) != CHOP_LOS)) {
