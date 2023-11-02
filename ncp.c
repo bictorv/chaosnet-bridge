@@ -377,8 +377,28 @@ static int pktnum_1minus(u_short a)
 
 //////// named sockets
 
+static void
+set_socket_buf(int sock, int which, u_int size) 
+{
+  u_int oldbuf, oldlen = sizeof(oldbuf), setbuf = size, newbuf, newlen = sizeof(newbuf);
+  // get old value
+  if (getsockopt(sock, SOL_SOCKET, which, (void *)&oldbuf, &oldlen) < 0)
+    perror("getsockopt");
+  // set new
+  if (setsockopt(sock, SOL_SOCKET, which, (void *)&setbuf, sizeof(setbuf)) < 0)
+    perror("setsockopt");
+  // doublecheck?
+  if (getsockopt(sock, SOL_SOCKET, which, (void *)&newbuf, &newlen) < 0)
+    perror("getsockopt");
+  else if (ncp_debug && (newbuf != setbuf)) 
+    fprintf(stderr,"NCP socket %sBUF: set %d, result is %d\n", (which == SO_SNDBUF ? "SND" : "RCV"),
+	    setbuf, newbuf);
+  if (ncp_debug) printf("NCP changed %sBUF from %d to %d\n", (which == SO_SNDBUF ? "SND" : "RCV"),
+			oldbuf, newbuf);
+}
+
 static int
-make_named_socket(int socktype, char *path)
+make_named_socket(int socktype, char *path, conntype_t conntype)
 {
   int sock, slen;
   struct sockaddr_un local;
@@ -436,13 +456,17 @@ make_named_socket(int socktype, char *path)
       exit(1);
     }
   }
-  // @@@@ consider setting low socket buffer sizes to make windows matter more.
-  // Use SO_SNDBUF for sending, but note that linux apparently doesn't
-  // care about SO_RCVBUF for unix sockets
-  // (which would be more useful for NCP, to force the client to not overflow us).
-  // So also need do this for client code.
+  // Set low socket buffer sizes to make windows matter more.
+  // Apparently linux only cares about SO_SNDBUF (not SO_RCVBUF),
+  // so also need do this for client code.
   // On macOS, default sizes seem to be 8k, and on linux 208k, so this might really matter.
-  // For linux, the minimum (doubled) value is 256 (SO_RCVBUF) and 2048 (SO_SNDBUF) minus 32 for overhead.
+  // Soemwhere it says that for linux, the minimum (doubled) value is
+  // 256 (SO_RCVBUF) and 2048 (SO_SNDBUF) minus 32 for overhead, 
+  // but it seems SNDBUF min is 4608 and RCVBUF is 2304.
+  if (conntype == CT_Packet) {
+    set_socket_buf(sock, SO_SNDBUF, (CH_PK_MAX_DATALEN + 4)+32);
+    set_socket_buf(sock, SO_RCVBUF, (CH_PK_MAX_DATALEN + 4)+32);
+  }
 
   // no signal, just error, please!
 #ifdef F_SETNOSIGPIPE
@@ -2242,7 +2266,7 @@ ncp_user_server(void *v)
   if (fds == NULL) { perror("malloc(fds)"); exit(1); }
 
   for (i = 0; socklist[i].sockname != NULL; i++) {
-    fds[i] = make_named_socket(socklist[i].socktype, socklist[i].sockname);
+    fds[i] = make_named_socket(socklist[i].socktype, socklist[i].sockname, socklist[i].sockconn);
     if (fds[i] > maxfd) maxfd = fds[i];
   }
 
@@ -2544,13 +2568,8 @@ timespec_diff_above(struct timespec *a, struct timespec *b, int ms)
 {
   struct timespec diff;
   timespec_diff(a, b, &diff);
-  if (diff.tv_sec > 0) 		/* assume ms < 1000 */
-    return 1;
-  else if (diff.tv_nsec/1000000 > ms)
-    return 1;
-  else
-    return 0;
-  // return ((a->tv_sec*1000 + a->tv_nsec/1000000)-(b->tv_sec*1000 + b->tv_nsec/1000000)) > ms;
+  // this is just approximate, for large values of ms, which "it will never be used for anyway".
+  return (diff.tv_sec > ms/1000) || (diff.tv_nsec/1000000 > ms);
 }
 
 static void
