@@ -35,7 +35,7 @@ struct pkqueue {
 void print_pkqueue(struct pkqueue *q);
 struct pkqueue *make_pkqueue(void);
 void free_pkqueue(struct pkqueue *q);
-int pkqueue_add(struct chaos_header *pkt, struct pkqueue *q);
+struct pkt_elem *pkqueue_add(struct chaos_header *pkt, struct pkqueue *q);
 int pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q);
 struct chaos_header *pkqueue_get_first(struct pkqueue *q);
 struct chaos_header *pkqueue_peek_first(struct pkqueue *q);

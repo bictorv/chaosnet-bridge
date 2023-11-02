@@ -108,7 +108,7 @@ free_pkqueue(struct pkqueue *q)
   free(q);
 }
 
-int // returns new length
+struct pkt_elem * // returns new elem
 pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
 {
   struct pkt_elem *ql = NULL, *nl;
@@ -149,7 +149,7 @@ pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
   int len = q->pkq_len;
   PTUNLOCKN(q->pkq_mutex,"pkq_mutex");
 
-  return len;
+  return nl;
 }
 int // returns some interesting number
 pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)

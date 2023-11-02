@@ -103,6 +103,8 @@ static void retransmit_controlled_packets(struct conn *conn);
 static void user_socket_los(struct conn *conn, char *fmt, ...);
 static int receive_or_die(struct conn *conn, u_char *buf, int buflen);
 static void send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, int len);
+static int send_controlled_ncp_packet(struct conn_state *cs, struct chaos_header *pkt, int pklen);
+
 
 // parse a configuration file line:
 // ncp socketdir /var/run debug on domain ams.chaosnet.net trace on
@@ -2481,22 +2483,26 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
 
   struct conn_state *cs = c->conn_state;
 
-  if (!packet_uncontrolled(pkt)) {
-    if ((pkqueue_length(cs->send_pkts) > 0) &&
-	!pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt))) {
-      if (ncp_debug) printf("NCP: already added pkt %#x for output (highest on q %#x)\n", ch_packetno(pkt),
-			    cs->send_pkts_pktnum_highest);
-      return;
-    }
-  } 
+  if (packet_uncontrolled(pkt)) {
+    if (ncp_debug) printf("NCP: tried to add uncontrolled packet - BUG!\n");
+    return;
+  }
+
+  if ((pkqueue_length(cs->send_pkts) > 0) &&
+      !pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt))) {
+    if (ncp_debug) printf("NCP: already added pkt %#x for output (highest on q %#x)\n", ch_packetno(pkt),
+			  cs->send_pkts_pktnum_highest);
+    return;
+  }
+
   if (ncp_debug) {
     printf("NCP: Adding %s pkt %#x nbytes %d for output, avail win %d\n",
 	   ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), ch_nbytes(pkt), cs->window_available);
     print_conn("Adding pkt:",c,1);
   }
 
-  struct chaos_header *saved = (struct chaos_header *)malloc(pklen);
   // save a copy
+  struct chaos_header *saved = (struct chaos_header *)malloc(pklen);
   if (saved == NULL) {
     perror("?? malloc(saved, add_output_pkt)");
     exit(1);
@@ -2506,18 +2512,28 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
   // make sure there is room in the window first
   // window lock around send_pkts lock
   PTLOCKN(cs->window_mutex,"window_mutex");
-  if (!packet_uncontrolled(pkt)) {
-    while (cs->window_available == 0)
-      if (pthread_cond_wait(&cs->window_cond, &cs->window_mutex) != 0) perror("?? pthread_cond_wait(window_cond)");
-  }
-  // @@@@ consider also actually sending it here (cf send_packet_with_open_window, conn_to_packet_stream_handler)
-  // lock it
-  PTLOCKN(cs->send_mutex,"send_mutex");
-  // add pkt
+  while (cs->window_available == 0)
+    if (pthread_cond_wait(&cs->window_cond, &cs->window_mutex) != 0) perror("?? pthread_cond_wait(window_cond)");
+
   // already checked above that it's higher, but check again since we waited
   if (pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt)) &&
       pktnum_equal(pktnum_1plus(cs->send_pkts_pktnum_highest), ch_packetno(pkt))) {
-    pkqueue_add(saved, cs->send_pkts); // Only add it if it's the next expected
+
+    // lock send queue
+    PTLOCKN(cs->send_mutex,"send_mutex");
+    // Send the (original) packet an initial time.
+    int sent = send_controlled_ncp_packet(cs, pkt, pklen);
+
+    // add the pkt copy
+    struct pkt_elem *elem = pkqueue_add(saved, cs->send_pkts);
+    if (sent > 0) {
+      struct timespec now;
+      timespec_get(&now, TIME_UTC);
+      // remember when it was sent
+      set_pkqueue_elem_transmitted(elem, &now);
+    }
+    // Sending the pkt makes it potentially swapped, so use the copy.
+    pkt = saved;
     if (ncp_debug) printf("Added pkt %#x to send_pkts len %d, avail win %d\n", 
 			  ch_packetno(pkt), pkqueue_length(cs->send_pkts), cs->window_available);
     cs->send_pkts_pktnum_highest = ch_packetno(pkt);
@@ -2535,7 +2551,7 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
   } else if (ncp_debug) printf("%s: Added pkt %#x unexpected: NOT HIGHER than %#x (diff %d) ??\n", __func__,
 			       ch_packetno(pkt), cs->send_pkts_pktnum_highest,
 			       pktnum_diff(ch_packetno(pkt), cs->send_pkts_pktnum_highest));
-  // let consumer know there is stuff to send to network
+  // let main conn thread know we sent things
   if (pthread_cond_signal(&c->conn_state->send_cond) != 0) perror("?? pthread_cond_signal(send_cond)");
   PTUNLOCKN(cs->send_mutex,"send_mutex");
 
@@ -2659,7 +2675,7 @@ retransmit_controlled_packets(struct conn *conn)
 
 // call with a fresh copy of a pkt (no swapping protection here)
 static int
-send_packet_with_open_window(struct conn_state *cs, struct chaos_header *pkt, int pklen) 
+send_controlled_ncp_packet(struct conn_state *cs, struct chaos_header *pkt, int pklen) 
 {
   if (packet_uncontrolled(pkt)) {
     // just send it
@@ -2767,29 +2783,23 @@ probe_connection(struct conn *conn)
   }
 }
 
-// Gets packets from the send queue and transmits them on the net.
-// Also manages probing, and thus retransmissions.
+// Handler thread for a conn
+// Manages probing, and thus retransmissions.
 // (This handles both "stream" and "packet" connections, just the same.)
 static void *
 conn_to_packet_stream_handler(void *v)
 {
   struct conn *conn = (struct conn *)v;
   struct conn_state *cs = conn->conn_state;
-  struct chaos_header *pkt;
-  struct pkt_elem *elem;
-  struct timespec retrans, lastsent, now;
+  struct timespec retrans;
   struct timeval tv;
   int timedout = 0;
-  int qlen = 0;
-  int npkts = 0;
-  u_char tempkt[CH_PK_MAXLEN];
-  int pklen;
 
   if ((conn->conn_type != CT_Stream) && (conn->conn_type != CT_Packet)) {
     fprintf(stderr,"%%%% Bug: conn_to_packet_stream_handler running with non-stream conn\n");
     exit(1);
   }
-  timespec_get(&lastsent, TIME_UTC);
+
   while (1) {
     if (conn->conn_sock == -1) {
       // should have exited already
@@ -2809,12 +2819,8 @@ conn_to_packet_stream_handler(void *v)
     retrans.tv_nsec = tv.tv_usec * 1000;
 
     timedout = 0;
-    npkts = 0;
 
-    while ((timedout == 0) && 
-	   (((qlen = pkqueue_length(cs->send_pkts)) == 0) || /* No packets */
-	    // Or already transmitted
-	    (pkqueue_elem_transmitted(pkqueue_peek_first_elem(cs->send_pkts))->tv_sec != 0)))
+    while (timedout == 0)
       // Wait a while or until changes
       timedout = pthread_cond_timedwait(&cs->send_cond, &cs->send_mutex, &retrans);
     
@@ -2825,54 +2831,18 @@ conn_to_packet_stream_handler(void *v)
     }
 
     if (timedout == 0) {
-      timespec_get(&now, TIME_UTC);
-      // get a packet - the first one in the queue
-      elem = pkqueue_peek_first_elem(cs->send_pkts);
-      pkt = pkqueue_elem_pkt(elem);
-      if ((pkt != NULL) && timespec_diff_above(&now, pkqueue_elem_transmitted(elem), RETRANSMIT_LOW_THRESHOLD)) {
-	// make a copy, to protect against (1) swapping when sending, and (2) pkt being freed after lock is released
-	pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
-	if (pklen % 2) pklen++;
-	memcpy(tempkt, (u_char *)pkt, pklen);
-	pkt = (struct chaos_header *)tempkt;
-	PTUNLOCKN(cs->send_mutex,"send_mutex");
-
-	int sent = send_packet_with_open_window(cs, pkt, pklen);
-	if (sent > 0) {
-	  // precise enough?
-	  set_pkqueue_elem_transmitted(elem, &now);
-	}
-	npkts += sent;
-      } else {
-	PTUNLOCKN(cs->send_mutex,"send_mutex");
-	if (ncp_debug) printf("%%%% NCP: c_t_p triggered w/o timeout (qlen %d) but no pkt? transmitted %ld\n", 
-			      qlen, pkqueue_elem_transmitted(elem)->tv_sec);
-      }
-      if (npkts == 0) {
-	// we didn't send anything, and retransmission interval passed since last time
-	if ((now.tv_sec*1000 + now.tv_nsec/1000000) - (lastsent.tv_sec*1000 + lastsent.tv_nsec/1000000) > conn->retransmission_interval) {
-	  if (ncp_debug > 1) printf("NCP nothing sent for %ld msec, probing\n",
-				(now.tv_sec*1000 + now.tv_nsec/1000000) - (lastsent.tv_sec*1000 + lastsent.tv_nsec/1000000));
-	  // probe connection, but don't do it again until time passes again
-	  probe_connection(conn);
-	  lastsent.tv_sec = now.tv_sec;
-	  lastsent.tv_nsec = now.tv_nsec;
-	}
-      } else {
-	// we sent something
-	lastsent.tv_sec = now.tv_sec;
-	lastsent.tv_nsec = now.tv_nsec;
-      }
-    } else if (timedout == ETIMEDOUT) {
+      // Another thread sent something, so just loop back and wait again
       PTUNLOCKN(cs->send_mutex,"send_mutex");
+    } else if (timedout == ETIMEDOUT) {
+      // Retransmission timeout, probe the connection
+      PTUNLOCKN(cs->send_mutex,"send_mutex");
+      if (ncp_debug && pkqueue_length(cs->send_pkts) > 0) printf("NCP: retransmission timeout\n");
       probe_connection(conn);
     } else {
       perror("?? pthread_cond_timedwait(conn_to_packet_stream_handler)");
       PTUNLOCKN(cs->send_mutex,"send_mutex");
     }
     // go back wait for another pkt to send
-    if ((ncp_debug > 1) && (npkts == 0) && (qlen > 0))
-      printf("NCP: tried to send no packets although queue len is %d\n", qlen);
   }
 }
 
@@ -3452,6 +3422,7 @@ socket_to_conn_stream_handler(struct conn *conn)
   if (cs->state == CS_Inactive) {
     // In inactive state, the first thing from the user socket is a "string command" (RFC or LSN)
     if (strncasecmp((char *)buf,"LSN ", 4) == 0) {
+      // @@@@ allow [options] also for LSN
       cname = parse_contact_name(&buf[4]);
       if ((cname != NULL) && (strlen((char *)cname) > 0)) {
 	if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
