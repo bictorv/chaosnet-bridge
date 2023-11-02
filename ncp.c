@@ -2361,9 +2361,6 @@ discard_received_pkts_from_send_list(struct conn *conn, u_short receipt)
   // window lock around send_pkts lock
   PTLOCKN(cs->window_mutex,"window_mutex");
   PTLOCKN(cs->send_mutex,"send_mutex");
-#if 0
-  int wsize = cs->window_available;
-#endif
   p = pkqueue_peek_first(cs->send_pkts);
   while ((p != NULL) && !packet_uncontrolled(p) && 
 	 (pktnum_less(ch_packetno(p), receipt) || pktnum_equal(ch_packetno(p), receipt))) {
@@ -2380,12 +2377,6 @@ discard_received_pkts_from_send_list(struct conn *conn, u_short receipt)
   }
   PTUNLOCKN(cs->send_mutex,"send_mutex");
   PTUNLOCKN(cs->window_mutex,"window_mutex");
-#if 0
-  update_window_available(cs, cs->foreign_winsize);
-  if (ncp_debug && (wsize != cs->window_available)) {
-    printf("Discarded %d pkts: window changed from %d to %d\n", ndisc, wsize, cs->window_available);
-  }
-#endif
   return ndisc;
 }
 
@@ -2643,11 +2634,6 @@ retransmit_controlled_packets(struct conn *conn)
 	    if (ch_opcode(pkt) != CHOP_BRD)
 	      set_ch_ackno(pkt, cs->pktnum_read_highest);
 	    cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
-#if 0 // This is managed by add_output_pkt
-	    // Update highest sent pktnum
-	    if (pktnum_less(cs->send_pkts_pktnum_highest,ch_packetno(pkt)))
-	      cs->send_pkts_pktnum_highest = ch_packetno(pkt);
-#endif
 	    PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 	    memcpy(tempkt, (u_char *)pkt, pklen);
 	    if (ncp_debug) printf("NCP >>> local %#x retransmitting controlled pkt %#x (%s), ack %#x\n",
@@ -2687,11 +2673,6 @@ send_packet_with_open_window(struct conn_state *cs, struct chaos_header *pkt, in
 			  cs->window_available, pkqueue_length(cs->send_pkts));
 
     PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-#if 0 // This is managed by add_output_pkt
-    if (pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt))) {
-      cs->send_pkts_pktnum_highest = ch_packetno(pkt);
-    }
-#endif
     // Get these before unlocking conn_state_lock
     u_short ackno = cs->pktnum_read_highest;
     if (pktnum_less(cs->pktnum_acked, ackno))
