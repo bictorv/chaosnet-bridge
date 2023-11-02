@@ -558,8 +558,8 @@ print_conn(char *leader, struct conn *conn, int alsostate)
 	   cs->foreign_winsize, cs->window_available, pkqueue_length(cs->read_pkts), cs->read_pkts_controlled,
 	   pkqueue_length(cs->received_pkts_ooo), 
 	   cs->pktnum_read_highest, cs->pktnum_received_highest, 
-	   pkqueue_length(cs->send_pkts), cs->pktnum_sent_highest, 
-	   pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_receipt),
+	   pkqueue_length(cs->send_pkts), cs->send_pkts_pktnum_highest, 
+	   pktnum_diff(cs->send_pkts_pktnum_highest, cs->pktnum_sent_receipt),
 	   cs->pktnum_sent_acked,
 	   cs->time_last_received > 0 ? now - cs->time_last_received : -1,
 	   cs->time_last_probed > 0 ? now - cs->time_last_probed : -1);
@@ -640,17 +640,17 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
     exit(1);
   }
 
+  cs->pktnum_made_highest = make_fresh_index(); // initialize
   cs->read_pkts = read_pkts;
   cs->read_pkts_controlled = 0;
   cs->received_pkts_ooo = received_pkts_ooo;
   cs->received_pkts_ooo_width = 0;
   cs->send_pkts = send_pkts;
+  cs->send_pkts_pktnum_highest = cs->pktnum_made_highest;
   cs->state = CS_Inactive;
   cs->local_winsize = DEFAULT_WINSIZE;
   cs->foreign_winsize = DEFAULT_WINSIZE;
   cs->window_available = DEFAULT_WINSIZE;
-  cs->pktnum_sent_highest = make_fresh_index(); // initialize
-  cs->pktnum_made_highest = cs->pktnum_sent_highest;
   cs->time_last_received = 0;
   cs->time_last_probed = 0;
 
@@ -1323,7 +1323,7 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   cs->pktnum_made_highest = make_u_short_random();
   cs->pktnum_sent_acked = c->conn_state->pktnum_made_highest;
   cs->pktnum_sent_receipt = c->conn_state->pktnum_made_highest;
-  cs->pktnum_sent_highest = c->conn_state->pktnum_made_highest;
+  cs->send_pkts_pktnum_highest = c->conn_state->pktnum_made_highest;
 
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
@@ -2523,25 +2523,27 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
   // lock it
   PTLOCKN(cs->send_mutex,"send_mutex");
   // add pkt
-  pkqueue_add(saved, cs->send_pkts);
-  if (ncp_debug) printf("Added pkt %#x to send_pkts len %d, avail win %d\n", 
-			ch_packetno(pkt), pkqueue_length(cs->send_pkts), cs->window_available);
   // already checked above that it's higher, but check again since we waited
-  if (pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt))) {
+  if (pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt)) &&
+      pktnum_equal(pktnum_1plus(cs->send_pkts_pktnum_highest), ch_packetno(pkt))) {
+    pkqueue_add(saved, cs->send_pkts); // Only add it if it's the next expected
+    if (ncp_debug) printf("Added pkt %#x to send_pkts len %d, avail win %d\n", 
+			  ch_packetno(pkt), pkqueue_length(cs->send_pkts), cs->window_available);
     cs->send_pkts_pktnum_highest = ch_packetno(pkt);
     // Decrease window, if necessary
-    if (cs->window_available > (cs->foreign_winsize - (cs->pktnum_sent_highest-cs->pktnum_sent_acked))) {
+    if (cs->window_available > (cs->foreign_winsize - (cs->send_pkts_pktnum_highest-cs->pktnum_sent_acked))) {
       if (ncp_debug) printf("%s: adjusting avail window from %d to %d (high %#x acked %#x)\n", 
 			    __func__, cs->window_available, 
-			    cs->foreign_winsize-(cs->pktnum_sent_highest-cs->pktnum_sent_acked),
-			    cs->pktnum_sent_highest, cs->pktnum_sent_acked);
-      cs->window_available = cs->foreign_winsize - (cs->pktnum_sent_highest-cs->pktnum_sent_acked);
+			    cs->foreign_winsize-(cs->send_pkts_pktnum_highest-cs->pktnum_sent_acked),
+			    cs->send_pkts_pktnum_highest, cs->pktnum_sent_acked);
+      cs->window_available = cs->foreign_winsize - (cs->send_pkts_pktnum_highest-cs->pktnum_sent_acked);
       // Notify everyone (might be more than one!)
       if (pthread_cond_broadcast(&cs->window_cond) != 0) perror("?? pthread_cond_broadcast(window_cond)");
     } else if (ncp_debug) printf("%s: not adjusting window %d (high %#x acked %#x)\n", __func__,
-				 cs->window_available, cs->pktnum_sent_highest, cs->pktnum_sent_acked);
-  } else if (ncp_debug) printf("%s: Added pkt %#x NOT HIGHER than %#x ??\n", __func__,
-			       ch_packetno(pkt), cs->send_pkts_pktnum_highest);
+				 cs->window_available, cs->send_pkts_pktnum_highest, cs->pktnum_sent_acked);
+  } else if (ncp_debug) printf("%s: Added pkt %#x unexpected: NOT HIGHER than %#x (diff %d) ??\n", __func__,
+			       ch_packetno(pkt), cs->send_pkts_pktnum_highest,
+			       pktnum_diff(ch_packetno(pkt), cs->send_pkts_pktnum_highest));
   // let consumer know there is stuff to send to network
   if (pthread_cond_signal(&c->conn_state->send_cond) != 0) perror("?? pthread_cond_signal(send_cond)");
   PTUNLOCKN(cs->send_mutex,"send_mutex");
@@ -2641,9 +2643,11 @@ retransmit_controlled_packets(struct conn *conn)
 	    if (ch_opcode(pkt) != CHOP_BRD)
 	      set_ch_ackno(pkt, cs->pktnum_read_highest);
 	    cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
+#if 0 // This is managed by add_output_pkt
 	    // Update highest sent pktnum
-	    if (pktnum_less(cs->pktnum_sent_highest,ch_packetno(pkt)))
-	      cs->pktnum_sent_highest = ch_packetno(pkt);
+	    if (pktnum_less(cs->send_pkts_pktnum_highest,ch_packetno(pkt)))
+	      cs->send_pkts_pktnum_highest = ch_packetno(pkt);
+#endif
 	    PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 	    memcpy(tempkt, (u_char *)pkt, pklen);
 	    if (ncp_debug) printf("NCP >>> local %#x retransmitting controlled pkt %#x (%s), ack %#x\n",
@@ -2683,9 +2687,11 @@ send_packet_with_open_window(struct conn_state *cs, struct chaos_header *pkt, in
 			  cs->window_available, pkqueue_length(cs->send_pkts));
 
     PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-    if (pktnum_less(cs->pktnum_sent_highest, ch_packetno(pkt))) {
-      cs->pktnum_sent_highest = ch_packetno(pkt);
+#if 0 // This is managed by add_output_pkt
+    if (pktnum_less(cs->send_pkts_pktnum_highest, ch_packetno(pkt))) {
+      cs->send_pkts_pktnum_highest = ch_packetno(pkt);
     }
+#endif
     // Get these before unlocking conn_state_lock
     u_short ackno = cs->pktnum_read_highest;
     if (pktnum_less(cs->pktnum_acked, ackno))
@@ -2706,7 +2712,7 @@ send_packet_with_open_window(struct conn_state *cs, struct chaos_header *pkt, in
   } else {
     // already acked, so ignore it
     if (ncp_debug) printf("%s: NOT SENDING %s %#x (high %#x ack %#x) in state %s\n", __func__,
-			  ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), cs->pktnum_sent_highest,
+			  ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), cs->send_pkts_pktnum_highest,
 			  cs->pktnum_sent_acked, state_name(cs->state));
   }
   return 0;
@@ -2765,16 +2771,16 @@ probe_connection(struct conn *conn)
       send_sns_pkt(conn);
     }
   } else if ((cs->time_last_probed != 0) && (now.tv_sec - cs->time_last_probed > PROBE_INTERVAL) &&
-	     (pktnum_less(cs->pktnum_sent_acked, cs->pktnum_sent_highest))) {
+	     (pktnum_less(cs->pktnum_sent_acked, cs->send_pkts_pktnum_highest))) {
     // still have outstanding acks, ask for ack confirmation (cf 3.8 in Amber)
     // but only every five seconds or so (Lambda: 10s, AIM 628: 5s)
     if ((cs->state == CS_Open) || (cs->state == CS_Finishing)) {
       cs->time_last_probed = now.tv_sec;
       if (ncp_debug) printf("conn %p (%s) has %d outstanding acks after %lus (acked %#x highest %#x), sending SNS\n",
 			    conn, conn_state_name(conn),
-			    pktnum_diff(cs->pktnum_sent_highest, cs->pktnum_sent_acked),
+			    pktnum_diff(cs->send_pkts_pktnum_highest, cs->pktnum_sent_acked),
 			    now.tv_sec - cs->time_last_probed,
-			    cs->pktnum_sent_acked, cs->pktnum_sent_highest);
+			    cs->pktnum_sent_acked, cs->send_pkts_pktnum_highest);
       send_sns_pkt(conn);
     }
   }
@@ -2983,18 +2989,18 @@ update_window_available(struct conn_state *cs, u_short winz) {
   PTLOCKN(cs->conn_state_lock,"conn_state_lock");
   u_short receipt = cs->pktnum_sent_receipt;
   u_short acked = cs->pktnum_sent_acked;
-  u_short in_air = pktnum_diff(cs->pktnum_sent_highest, acked);
+  u_short in_air = pktnum_diff(cs->send_pkts_pktnum_highest, acked);
   if (winz < in_air) {
     // This should not happen.
     if (ncp_debug)
       fprintf(stderr,"%%%% NCP: window would become negative! winz %d, shigh %#x, rec %#x, ack %#x, in_air %d\n", 
-	      winz, cs->pktnum_sent_highest, receipt, acked, in_air);
+	      winz, cs->send_pkts_pktnum_highest, receipt, acked, in_air);
     in_air = winz;		/* Be safe */
   }
   u_short new_avail = winz - in_air;
   if (new_avail != cs->window_available) {
     if (ncp_debug) printf("NCP: adjusting available window from %d to %d based on ack %#x, rcpt %#x, in air %d, highest %#x\n", 
-			  cs->window_available, new_avail, acked, receipt, in_air, cs->pktnum_sent_highest);
+			  cs->window_available, new_avail, acked, receipt, in_air, cs->send_pkts_pktnum_highest);
     cs->window_available = new_avail;
     // Notify everyone (might be more than one!)
     if (pthread_cond_broadcast(&cs->window_cond) != 0) perror("?? pthread_cond_broadcast(window_cond)");
