@@ -466,8 +466,8 @@ make_named_socket(int socktype, char *path, conntype_t conntype)
   // 256 (SO_RCVBUF) and 2048 (SO_SNDBUF) minus 32 for overhead, 
   // but it seems SNDBUF min is 4608 and RCVBUF is 2304.
   if (conntype == CT_Packet) {
-    set_socket_buf(sock, SO_SNDBUF, (CH_PK_MAX_DATALEN + 4)+32);
-    set_socket_buf(sock, SO_RCVBUF, (CH_PK_MAX_DATALEN + 4)+32);
+    set_socket_buf(sock, SO_SNDBUF, PACKET_SOCKET_BUFFER_SIZE);
+    set_socket_buf(sock, SO_RCVBUF, PACKET_SOCKET_BUFFER_SIZE);
   }
 
   // no signal, just error, please!
@@ -2651,6 +2651,7 @@ retransmit_controlled_packets(struct conn *conn)
 	      set_ch_ackno(pkt, cs->pktnum_read_highest);
 	    cs->pktnum_acked = cs->pktnum_read_highest; // record the sent ack
 	    PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
+	    memset(tempkt, 0, sizeof(tempkt));
 	    memcpy(tempkt, (u_char *)pkt, pklen);
 	    if (ncp_debug) printf("NCP >>> local %#x retransmitting controlled pkt %#x (%s), ack %#x\n",
 				  conn->conn_lidx,

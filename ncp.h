@@ -29,6 +29,9 @@
 // 1/30s in millisec
 #define RETRANSMIT_LOW_THRESHOLD 33
 
+// Unix packet socket buffer sizes. Try one packet + NCP header + 32 for overhead.
+#define PACKET_SOCKET_BUFFER_SIZE (CH_PK_MAX_DATALEN + 4 + 32)
+
 // Conn types
 typedef enum conntype {
   CT_Simple,			/* RFC-ANS type */
