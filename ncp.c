@@ -879,8 +879,8 @@ find_existing_conn(struct chaos_header *ch)
 	 (c->conn_lhost == dest) &&
 	 (c->conn_lidx == didx))
 	||
-	// Retransmitted RFC before our OPN was received
-	((c->conn_state->state == CS_Open_Sent) &&
+	// Retransmitted RFC before our OPN was received, or before we even sent it
+	(((c->conn_state->state == CS_Open_Sent) || (c->conn_state->state == CS_RFC_Received)) &&
 	 (opc == CHOP_RFC) &&
 	 (c->conn_rhost == src) &&
 	 (c->conn_ridx == sidx) &&
@@ -3824,6 +3824,10 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     len = strlen(buf);
     if (ncp_debug) printf("To socket %s (%d bytes): [%s] %s\n", conn_sockaddr_path(conn), len, ch_opcode_name(opc), buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
+  } else if ((cs->state == CS_RFC_Received) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
+    if (ncp_debug) printf("Got retransmission of %s pkt %#x for conn %p\n",
+			  ch_opcode_name(opc), ch_packetno(pkt), conn);
+    // ignore it
   } else if ((ch_opcode(pkt) == CHOP_ANS) &&
 	     ((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) ||
 	      // extra ANS for BRD
