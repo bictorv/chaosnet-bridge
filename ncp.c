@@ -2857,7 +2857,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 
   if (packet_uncontrolled(pkt)) {
     // uncontrolled pkts always fit the window
-    // @@@@ well, keep a lid on it
+    // @@@@ well, keep a lid on it?
     if (ncp_debug) printf("Receive uncontrolled pkt (%s)\n", ch_opcode_name(ch_opcode(pkt)));
     add_input_pkt(conn, pkt);
     return;
@@ -2871,7 +2871,9 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
   if (opcode == CHOP_FWD) {
     if (ncp_debug) printf("Receive %s pkt (%#x)\n", ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt));
     add_input_pkt(conn, pkt);
+    return;
   }
+  PTLOCKN(cs->conn_state_lock,"conn_state_lock");
   if ((cs->read_pkts_controlled + cs->received_pkts_ooo_width) < cs->local_winsize) {
     // it fits in the window
     if (ncp_debug) printf("Receive %s pkt %#x ack %#x with %d room in window\n",
@@ -2882,12 +2884,18 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 	pktnum_equal(ch_packetno(pkt), cs->pktnum_received_highest)) {
       // Evidence of unnecessary retransmisson, keep other end informed
       if (ncp_debug) printf("Pkt %#x already received (highest %#x)\n", ch_packetno(pkt), cs->pktnum_received_highest);
-      if ((cs->state == CS_Open) || (cs->state == CS_Finishing))
+      if ((cs->state == CS_Open) || (cs->state == CS_Finishing)) {
+	PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
 	send_sts_pkt(conn);
+      } else {
+	PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
+      }
       return;
     }
     // add it to read_pkts if it's the next one in order, and collect in-order pkts from received_pkts_ooo
     if (pktnum_equal(ch_packetno(pkt), pktnum_1plus(cs->pktnum_received_highest))) {
+      if (ncp_debug) printf(" is is the expected pktnum (%#x), checking OOO queue (len %d)\n",
+			    ch_packetno(pkt), pkqueue_length(cs->received_pkts_ooo));
       // it was the next expected packet, so add it to the read_pkts
       add_input_pkt(conn, pkt);	// this also updates read_pkts_controlled
       cs->pktnum_received_highest = ch_packetno(pkt);
@@ -2924,11 +2932,15 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     int unacked = pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked);
     if ((unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
       if (ncp_debug) printf(" 1/3 window un-acked (%d), acked %#x, sending STS\n", unacked, cs->pktnum_acked);
+      PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
+    } else {
+      PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
     }
   } else {
     // window full, send STS to inform the other end about the window and acks and receipts etc
     if (ncp_debug) printf("Window is full for pkt %#x, sending STS\n", ch_packetno(pkt));
+    PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
     send_sts_pkt(conn);
   }
 }
@@ -3416,7 +3428,7 @@ socket_to_conn_stream_handler(struct conn *conn)
   memset(buf, 0, CH_PK_MAXLEN);
 
   cnt = receive_or_die(conn, (u_char *)buf, sizeof(buf));
-  if (ncp_debug) printf("socket_to_conn_stream_handler: read %d bytes from %s\n", cnt, conn_sockaddr_path(conn));
+  if (ncp_debug) printf("socket_to_conn_stream_handler: read %d bytes from %p\n", cnt, conn);
   if (cnt <= 0)
     return cnt;
 
@@ -3424,6 +3436,7 @@ socket_to_conn_stream_handler(struct conn *conn)
     // In inactive state, the first thing from the user socket is a "string command" (RFC or LSN)
     if (strncasecmp((char *)buf,"LSN ", 4) == 0) {
       // @@@@ allow [options] also for LSN
+      // Add fields to listener struct, and when RFC/BRD arrives, use them to initiate conn
       cname = parse_contact_name(&buf[4]);
       if ((cname != NULL) && (strlen((char *)cname) > 0)) {
 	if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
@@ -3592,7 +3605,7 @@ socket_to_conn_packet_handler(struct conn *conn)
     }
     cnt += ccnt;
   }
-  if (ncp_debug > 1) printf("%s: read %d bytes from %s\n", __func__, cnt, conn_sockaddr_path(conn));
+  if (ncp_debug > 1) printf("%s: read %d bytes from %p\n", __func__, cnt, conn);
 
   if (cs->state == CS_Inactive) {
     // In inactive state, the first thing from the user socket is RFC, BRD or LSN
@@ -3823,7 +3836,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     else
       sprintf(buf, "%s", fhost);
     len = strlen(buf);
-    if (ncp_debug) printf("To socket %s (%d bytes): [%s] %s\n", conn_sockaddr_path(conn), len, ch_opcode_name(opc), buf);
+    if (ncp_debug) printf("To socket %p (%d bytes): [%s] %s\n", conn, len, ch_opcode_name(opc), buf);
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
   } else if ((cs->state == CS_RFC_Received) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
     if (ncp_debug) printf("Got retransmission of %s pkt %#x for conn %p\n",
@@ -3837,7 +3850,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     len = ch_nbytes(pkt);
     // might be non-string data
     ntohs_buf((u_short *)data, (u_short *)buf, len);
-    if (ncp_debug) printf("To socket %s (%d bytes): [ANS]\n", conn_sockaddr_path(conn), len);
+    if (ncp_debug) printf("To socket %p (%d bytes): [ANS]\n", conn, len);
     set_conn_state(conn, cs->state, CS_Answered, 1);
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent)) && (ch_opcode(pkt) == CHOP_FWD)) {
     trace_conn("Forwarded", conn);
@@ -3849,13 +3862,13 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     // Remote address in octal
     sprintf((char *)buf, "%#o", ch_srcaddr(pkt));
     len = strlen(buf);
-    if (ncp_debug) printf("To socket %s (%d bytes): [OPN] %s", conn_sockaddr_path(conn), len, buf);
+    if (ncp_debug) printf("To socket %p (%d bytes): [OPN] %s", conn, len, buf);
   } else if ((opc == CHOP_LOS) || (opc == CHOP_CLS)) {
     if (ncp_debug > 1) printf("NCP conn_to_socket_pkt_handler state %s: CLS/LOS data length %d\n", 
 			      conn_state_name(conn), ch_nbytes(pkt));
     get_packet_string(pkt, (u_char *)buf, sizeof(buf)-4-3);
     len = ch_nbytes(pkt);
-    if (ncp_debug) printf("To socket %s (len %d): [%s] \"%s\"\n", conn_sockaddr_path(conn), len, 
+    if (ncp_debug) printf("To socket %p (len %d): [%s] \"%s\"\n", conn, len, 
 			  ch_opcode_name(opc), buf);
     if (ch_opcode(pkt) == CHOP_LOS)
       set_conn_state(conn, cs->state, CS_LOS_Received, 1);
