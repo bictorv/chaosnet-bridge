@@ -534,11 +534,13 @@ conn_type_name(struct conn *conn)
   return conn_type_type_name(conn->conn_type);
 }
 
+#if 0 // unused
 static char *
 conn_sockaddr_path(struct conn *c)
 {
   return c->conn_sockaddr.sun_path;
 }
+#endif
 
 static void
 print_conn(char *leader, struct conn *conn, int alsostate)
@@ -2016,17 +2018,21 @@ initiate_conn_from_rfc_pkt(struct conn *conn, struct chaos_header *ch, u_char *c
 
 
 static void
-handle_option(struct conn *c, char *optname, char *val)
+handle_option(struct conn *c, char *optname, char *val, u_char opc)
 {
-  if (ncp_debug) printf("NCP parsing RFC/BRD option \"%s\" value \"%s\"\n", optname, val);
+  if (ncp_debug) printf("NCP parsing %s option \"%s\" value \"%s\"\n", ch_opcode_name(opc), optname, val);
   if (strcasecmp(optname, "timeout") == 0) {
+    if (opc == CHOP_LSN) {
+      user_socket_los(c, "Bad LSN option \"%s\" - only valid for RFC/BRD", optname);
+      return;
+    }
     int to = 0;
     if ((sscanf(val, "%d", &to) == 1) && (to > 0)) {
       if (ncp_debug) printf(" setting rfc_timeout to %d\n", to);
       c->rfc_timeout = to;
     } else {
       if (ncp_debug) printf(" bad value, not a positive int");
-      user_socket_los(c, "Bad timeout value \"%s\" in RFC options", val);
+      user_socket_los(c, "Bad timeout value \"%s\" in %s options", val, ch_opcode_name(opc));
       return;
     }
   } else if (strcasecmp(optname, "retrans") == 0) {
@@ -2036,7 +2042,7 @@ handle_option(struct conn *c, char *optname, char *val)
       c->retransmission_interval = to;
     } else {
       if (ncp_debug) printf(" bad value, not a positive int");
-      user_socket_los(c, "Bad retrans value \"%s\" in RFC options", val);
+      user_socket_los(c, "Bad retrans value \"%s\" in %s options", val, ch_opcode_name(opc));
       return;
     }
   } else if (strcasecmp(optname, "winsize") == 0) {
@@ -2046,11 +2052,14 @@ handle_option(struct conn *c, char *optname, char *val)
       c->initial_winsize = to;
     } else {
       if (ncp_debug) printf(" bad value, not a positive int which fits in 16 bits");
-      user_socket_los(c, "Bad winsize value \"%s\" in RFC options", val);
+      user_socket_los(c, "Bad winsize value \"%s\" in %s options", val, ch_opcode_name(opc));
       return;
     }
-  // @@@@ add more options as needed
   } else if (strcasecmp(optname, "follow_forward") == 0) {
+    if (opc == CHOP_LSN) {
+      user_socket_los(c, "Bad LSN option \"%s\" - only valid for RFC/BRD", optname);
+      return;
+    }
     if ((strlen(val) == 0) || (strcasecmp(val,"yes") == 0) || (strcasecmp(val,"on") == 0)) {
       if (ncp_debug) printf(" setting 1\n");
       c->follow_forward = 1;
@@ -2059,17 +2068,18 @@ handle_option(struct conn *c, char *optname, char *val)
       c->follow_forward = 0;
     } else {
       if (ncp_debug) printf("Bad follow_forward value \"%s\"\n", val);
-      user_socket_los(c, "Bad follow_forward value \"%s\" in RFC options", val);
+      user_socket_los(c, "Bad follow_forward value \"%s\" in %s options", val, ch_opcode_name(opc));
       return;
     }
+  // @@@@ add more options as needed
   } else {
     if (ncp_debug) printf(" unknown option, LOSing\n");
-    user_socket_los(c, "Unknown option \"%s\" in RFC line", optname);
+    user_socket_los(c, "Unknown option \"%s\" in %s line", optname, ch_opcode_name(opc));
   }
 }
 
 static void 
-parse_rfc_line_options(struct conn *conn, char *beg, char *end) 
+parse_rfc_line_options(struct conn *conn, char *beg, char *end, u_char opc) 
 {
   char *eql = NULL, *comma = NULL, *vp = NULL;
   // now parse the options=value
@@ -2079,9 +2089,9 @@ parse_rfc_line_options(struct conn *conn, char *beg, char *end)
     if ((eql = index(beg, '=')) != NULL) {
       *eql = '\0';
       vp = eql+1;
-      handle_option(conn, beg, vp);
+      handle_option(conn, beg, vp, opc);
     } else
-      handle_option(conn, beg, "on");
+      handle_option(conn, beg, "on", opc);
     if (comma != NULL) beg = comma+1; // not the first option
   } while (comma != NULL);
 }
@@ -2114,7 +2124,7 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
       user_socket_los(conn, "No contact name given in RFC line (%s)", hname);
       return;
     }
-    parse_rfc_line_options(conn, beg, end);
+    parse_rfc_line_options(conn, beg, end, CHOP_RFC);
   }
   *space = '\0';
 
@@ -2172,7 +2182,7 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
     if (ncp_debug) printf("NCP about to parse BRD options: \"%s\"\n", beg);
     buf = (u_char *)(end+1);		     // skip options part
     while (isspace(*buf)) buf++; // skip whitespace
-    parse_rfc_line_options(conn, beg, end);
+    parse_rfc_line_options(conn, beg, end, CHOP_BRD);
   }
   if (strncasecmp((char *)buf,"all ", 4) == 0) {
     // set all bits
@@ -2228,6 +2238,39 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
   send_brd_pkt(conn, mask);
 }
 
+static void
+initiate_conn_from_lsn_line(struct conn *conn, u_char *buf, int buflen)
+{
+  u_char *cname;
+
+  if (*buf == '[') {
+    // beginning of options
+    char *beg = (char *)(buf+1), *end = index((char *)buf, ']');
+    if (end == NULL) {
+      user_socket_los(conn, "Syntax error in LSN option parsing (%s)", buf+1);
+      return;
+    }
+    *end = '\0';
+    if (ncp_debug) printf("NCP about to parse LSN options: \"%s\"\n", beg);
+    buf = (u_char *)(end+1);		     // skip options part
+    while (isspace(*buf)) buf++; // skip whitespace
+    parse_rfc_line_options(conn, beg, end, CHOP_LSN);
+  }
+  // skip whitespace
+  while (*buf == ' ') buf++;
+  // contact and args begin here
+  cname = buf;
+  if (ncp_debug) printf("NCP parsing LSN: contact and args are \"%s\"\n", cname);
+
+  cname = parse_contact_name(cname);
+  if ((cname != NULL) && (strlen((char *)cname) > 0)) {
+    if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
+    add_listener(conn, cname);	// also changes state
+  } else {
+    if (ncp_debug) printf("Stream \"LSN %s\", contact name missing?\n", cname);
+    user_socket_los(conn, "Contact name missing");
+  }
+}
 
 ////////////////
 
@@ -3423,7 +3466,7 @@ socket_to_conn_stream_handler(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   int cnt;
-  u_char *cname, buf[CH_PK_MAXLEN];
+  u_char buf[CH_PK_MAXLEN];
 
   memset(buf, 0, CH_PK_MAXLEN);
 
@@ -3435,17 +3478,7 @@ socket_to_conn_stream_handler(struct conn *conn)
   if (cs->state == CS_Inactive) {
     // In inactive state, the first thing from the user socket is a "string command" (RFC or LSN)
     if (strncasecmp((char *)buf,"LSN ", 4) == 0) {
-      // @@@@ allow [options] also for LSN
-      // Add fields to listener struct, and when RFC/BRD arrives, use them to initiate conn
-      cname = parse_contact_name(&buf[4]);
-      if ((cname != NULL) && (strlen((char *)cname) > 0)) {
-	if (ncp_debug) printf("Stream \"LSN %s\", adding listener\n", cname);
-	add_listener(conn, cname);	// also changes state
-      } else {
-	if (ncp_debug) printf("Stream \"LSN %s\", contact name missing?\n", cname);
-	user_socket_los(conn, "Contact name missing");
-	return -1;
-      }
+      initiate_conn_from_lsn_line(conn, &buf[4], cnt-4);
     } else if (strncasecmp((char *)buf,"RFC ", 4) == 0) {
       // create conn and send off an RFC pkt
       if (ncp_debug) printf("Stream \"%s\"\n", buf);
@@ -3569,7 +3602,7 @@ socket_to_conn_packet_handler(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   int cnt, opc, len;
-  u_char *cname, *buf, sbuf[CH_PK_MAXLEN];
+  u_char *buf, sbuf[CH_PK_MAXLEN];
   int buflen = sizeof(sbuf);
 
   memset(sbuf, 0, CH_PK_MAXLEN);
@@ -3613,15 +3646,7 @@ socket_to_conn_packet_handler(struct conn *conn)
       u_char argbuf[MAX_CONTACT_NAME_LENGTH];
       memcpy(argbuf, &buf[4], len);
       argbuf[len] = '\0';
-      cname = parse_contact_name(argbuf);
-      if ((cname != NULL) && (strlen((char *)cname) > 0)) {
-	if (ncp_debug) printf("Packet \"LSN %s\", adding listener\n", cname);
-	add_listener(conn, cname);	// also changes state
-      } else {
-	if (ncp_debug) printf("Packet \"LSN %s\", contact name missing?\n", cname);
-	user_socket_los(conn, "Contact name missing");
-	return -1;
-      }
+      initiate_conn_from_lsn_line(conn,argbuf,len);
     } else if (opc == CHOP_RFC) {
       u_char argbuf[MAX_CONTACT_NAME_LENGTH];
       memcpy(argbuf, &buf[4], len);
