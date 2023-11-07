@@ -304,6 +304,7 @@ u_short find_my_closest_addr(u_short addr);
 void add_mychaddr(u_short addr);
 int valid_chaos_host_address(u_short addr);
 int is_private_subnet(u_short subnet);
+int valid_opcode(int opc);
 
 char *rt_linkname(u_char linktype);
 char *rt_typename(u_char type);

@@ -17,7 +17,7 @@ You can also use it to make your "unix-like" host a Chaosnet node, by using and 
 |`eofwait` | specifies time to wait for ACK of final EOF pkt when closing conn - default 3 `retrans` intervals, i.e. 1500.|
 |`finishwait`| specifies the time to wait for a half-open conn (OPN Sent) to become Open (thus allowing final retransmissions) while finishing it. Default 5000 ms. (You probably don't want to mess with this.)|
 |`follow_forward`| specifies whether FWD responses should be transparently followed, i.e., result in the RFC being resent to the target host. Default `no`, can also be specified as an option to individual RFCs (see below).|
-|`socketdir`| specifies the directory where to put the socket files, `chaos_stream` and `chaos_seqpacket` - default is `/tmp`.|
+|`socketdir`| specifies the directory where to put the socket files, `chaos_stream` and `chaos_packet` - default is `/tmp`.|
 |`trace`| if on, writes a line when a connection is opened or closed.|
 |`debug`| if on, writes a lot.|
 
@@ -74,7 +74,7 @@ If the user program acts as a client, it opens the socket and writes
 - [*options*] (including the square brackets!) is optional, and specifies (a comma-separated list of) options for the connection. 
 - *host* is either the name or the (octal!) address of the host to be contacted,
 - *contactname* is the contact name, such as `NAME`, `UPTIME`, `TIME` or `STATUS`, and
-- *args* are optional arguments, such as a user name for `NAME`. The *args* are separated from *contactname* with a single space. (Note that the *args* are treated as a string and can not contain null or CR or LF. If you need such args, use [the packet interface](#chaos_seqpacket), below.)
+- *args* are optional arguments, such as a user name for `NAME`. The *args* are separated from *contactname* with a single space. (Note that the *args* are treated as a string and can not contain null or CR or LF. If you need such args, use [the packet interface](#chaos_packet), below.)
 
 The NCP sends a corresponding RFC packet to the destination host.
 
@@ -141,8 +141,9 @@ The NCP attempts to remove the user socket file after it is closed, to keep the 
 
 If the user program acts as a server, it opens the socket and writes
 
-`LSN `*contactname*
+`LSN `[*options*] *contactname*
 
+where *options* (including the brackets) are optional, and are limited to `retrans=`*%d* and `winsize=`*%d*.
 The NCP then notes that the user program is listening for connections to *contactname*, and when a matching RFC packet appears, it writes
 
 `RFC `*rhost* *args*
@@ -189,7 +190,7 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | BRD (rcvd) | - | is translated to an RFC (see above) |
 | OPN (sent) | none | |
 | OPN (rcvd) | *rhost* | ascii, an octal address |
-| LSN | *contact* | ascii (only interpreted by NCP, not sent on Chaosnet) |
+| LSN |  [*options*] *contact* | ascii (only interpreted by NCP, not sent on Chaosnet). The "[*options*]" are optional and limited to `retrans` and `winsize`. |
 | ANS (rcvd) | *src* *data* | *src* is the source address (two bytes: LSB, MSB), followed by *data* which is the original binary data (not interpreted by NCP) |
 | ANS (sent) | *data* | binary data (not interpreted by NCP) |
 | LOS, CLS | *reason* | ascii (but not interpreted by NCP) |
@@ -255,7 +256,7 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6 in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_seqpacket`).
+The foreign protocol type (see [Section 6 in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_packet`).
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
@@ -270,7 +271,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a new CONFIG stream command for interacting with the configuration and state. Avoids the 488 byte problem, and would not allow remote access meaning a more limited security issue (only local).
 - [ ] Implement a fabulous web-based Chaosnet display using STATUS, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [x] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection). Done, see [here](domain.py).
-- [x] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This should now be easy, using `chaos_seqpacket`, and perhaps useful for CADR systems (easy to implement client end there). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
-- [ ] Port the old FILE server from MIT to use this (see http://www.unlambda.com/cadr/ or better https://tumbleweed.nu/r/chaos/artifact/ef4e902133c817ee). This should be doable using `chaos_seqpacket`.
-- [ ] Instead, implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server in a modern programming language.  A client for FILE is now done, in Python.
-- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) This also needs `chaos_seqpacket`.
+- [x] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This should now be easy, using `chaos_packet`, and perhaps useful for CADR systems (easy to implement client end there). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
+- [x] Port the old FILE server from MIT to use this (see https://tumbleweed.nu/r/chaos/dir?ci=tip&name=chcbridge).
+- [ ] Implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server (and client) in a modern programming language.  A sketch of a client for FILE is now done, in Python.
+- [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Using `chaos_packet` it should be straight-forward.

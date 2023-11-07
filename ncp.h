@@ -26,6 +26,11 @@
 #define PROBE_INTERVAL 10 // s
 #define LONG_PROBE_INTERVAL 60 // s
 #define HOST_DOWN_INTERVAL 300 // s = 5 min
+// 1/30s in millisec
+#define RETRANSMIT_LOW_THRESHOLD 33
+
+// Unix packet socket buffer sizes. Try one packet + NCP header + 32 for overhead.
+#define PACKET_SOCKET_BUFFER_SIZE (CH_PK_MAX_DATALEN + 4 + 32)
 
 // Conn types
 typedef enum conntype {
@@ -79,7 +84,6 @@ struct conn_state {
   u_short send_pkts_pktnum_highest; // highest controlled pkt nr on send list
   pthread_mutex_t send_mutex; // to tell network there are things to send
   pthread_cond_t send_cond;
-  u_short pktnum_sent_highest;	// last we actually transmitted
   u_short pktnum_sent_acked;	// last we got ack for
   u_short pktnum_sent_receipt;	// last we got receipt for
   time_t time_last_received;	// for probing

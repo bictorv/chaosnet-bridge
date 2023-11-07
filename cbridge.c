@@ -330,6 +330,11 @@ int is_private_subnet(u_short subnet)
   return private_subnet[subnet];
 }
 
+int valid_opcode(int opc)
+{
+  return !((opc == 0) || ((opc > CHOP_BRD) && (opc < CHOP_DAT)));
+}
+
 void print_link_stats() 
 {
   int i;
