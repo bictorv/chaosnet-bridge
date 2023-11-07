@@ -2078,71 +2078,76 @@ handle_option(struct conn *c, char *optname, char *val, u_char opc)
   }
 }
 
-static void 
-parse_rfc_line_options(struct conn *conn, char *beg, char *end, u_char opc) 
+// Parse [options], return bp to next char
+static u_char * 
+parse_rfc_line_options(struct conn *conn, u_char *buf, u_char opc) 
 {
-  char *eql = NULL, *comma = NULL, *vp = NULL;
-  // now parse the options=value
-  do {
-    comma = index(beg, ',');
-    if (comma != NULL) *comma = '\0';
-    if ((eql = index(beg, '=')) != NULL) {
-      *eql = '\0';
-      vp = eql+1;
-      handle_option(conn, beg, vp, opc);
-    } else
-      handle_option(conn, beg, "on", opc);
-    if (comma != NULL) beg = comma+1; // not the first option
-  } while (comma != NULL);
+  if (*buf == '[') {
+    char *beg = (char *)(buf+1), *end = index((char *)buf, ']');
+    if (end == NULL) {
+      user_socket_los(conn, "Syntax error in %s option parsing (%s)", ch_opcode_name(opc), buf+1);
+      return NULL;
+    }
+    *end = '\0';
+    if (ncp_debug) printf("NCP about to parse %s options: \"%s\"\n", ch_opcode_name(opc), beg);
+    buf = (u_char *)(end+1);		     // skip options part
+    while (isspace(*buf)) buf++;	     // skip whitespace at end
+
+    // now parse the options=value part, between the [ ]
+    char *eql = NULL, *comma = NULL, *vp = NULL;
+    do {
+      comma = index(beg, ',');
+      if (comma != NULL) *comma = '\0';
+      if ((eql = index(beg, '=')) != NULL) {
+	*eql = '\0';
+	vp = eql+1;
+	handle_option(conn, beg, vp, opc);
+      } else
+	handle_option(conn, beg, "on", opc);
+      if (comma != NULL) beg = comma+1; // not the first option
+    } while (comma != NULL);
+  } else {
+    // No options, make sure to skip any whitespace
+    while (isspace(*buf)) buf++;
+  }
+  // updated bp after the parsing
+  return buf;
 }
 
 static void
 initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)  
 {
   u_short haddr = 0;
-  u_char *cname, *hname = buf;
+  u_char *cname, *hname;
 
+  // Parse options, return bp to next char
+  hname = parse_rfc_line_options(conn, buf, CHOP_RFC);
+  // Find space separating host from contact
   u_char *space = (u_char *)index((char *)hname,' ');
   if (space == NULL) {
     // return a LOS to the user: no contact given
     user_socket_los(conn, "No contact name given in RFC line");
     return;
   }
-  if (hname[0] == '[') {
-    // beginning of options
-    char *beg = (char *)&hname[1], *end = index((char *)hname, ']');
-    if (end == NULL) {
-      user_socket_los(conn, "Syntax error in option parsing (%s)", &hname[1]);
-      return;
-    }
-    *end = '\0';
-    if (ncp_debug) printf("NCP about to parse options: \"%s\"\n", beg);
-    hname = (u_char *)(end+1);		     // skip options part
-    while (isspace(*hname)) hname++; // skip whitespace
-    space = (u_char *)index((char *)hname, ' ');
-    if (space == NULL) {
-      user_socket_los(conn, "No contact name given in RFC line (%s)", hname);
-      return;
-    }
-    parse_rfc_line_options(conn, beg, end, CHOP_RFC);
-  }
-  *space = '\0';
+  *space = '\0';		// separate hostname from contact
 
   cname = &space[1];
 
+  // Parse address or host name
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
-#if CHAOS_DNS
-    haddr = private_hosts_addrs_of_name(hname);
-    if (haddr == 0)
-      haddr = dns_closest_address_or_los(conn, hname);
-#else
+    // Not a plain address:
+    // Check private host table
     haddr = private_hosts_addrs_of_name(hname);
     if (haddr == 0) {
+#if CHAOS_DNS
+      // Check DNS
+      haddr = dns_closest_address_or_los(conn, hname);
+#else
       // return a LOS to the user: bad host name '%s'
       user_socket_los(conn, "Bad host name \"%s\"", hname);
       return;
-    }
 #endif
+    }
   } 
   PTLOCKN(conn->conn_lock,"conn_lock");
   conn->conn_contact = parse_contact_name(cname);
@@ -2166,23 +2171,13 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
   u_char mask[32];
   memset(mask, 0, sizeof(mask));
 
+  // Parse options, return bp to next char
+  buf = parse_rfc_line_options(conn, buf, CHOP_BRD);
+  // Find space separating subnet list from contact
   space = (u_char *)index((char *)buf, ' ');
   if (space == NULL) {
     user_socket_los(conn, "Bad BRD line - can't find end of subnet list");
     return;
-  }
-  if (*buf == '[') {
-    // beginning of options
-    char *beg = (char *)(buf+1), *end = index((char *)buf, ']');
-    if (end == NULL) {
-      user_socket_los(conn, "Syntax error in option parsing (%s)", buf+1);
-      return;
-    }
-    *end = '\0';
-    if (ncp_debug) printf("NCP about to parse BRD options: \"%s\"\n", beg);
-    buf = (u_char *)(end+1);		     // skip options part
-    while (isspace(*buf)) buf++; // skip whitespace
-    parse_rfc_line_options(conn, beg, end, CHOP_BRD);
   }
   if (strncasecmp((char *)buf,"all ", 4) == 0) {
     // set all bits
@@ -2243,24 +2238,9 @@ initiate_conn_from_lsn_line(struct conn *conn, u_char *buf, int buflen)
 {
   u_char *cname;
 
-  if (*buf == '[') {
-    // beginning of options
-    char *beg = (char *)(buf+1), *end = index((char *)buf, ']');
-    if (end == NULL) {
-      user_socket_los(conn, "Syntax error in LSN option parsing (%s)", buf+1);
-      return;
-    }
-    *end = '\0';
-    if (ncp_debug) printf("NCP about to parse LSN options: \"%s\"\n", beg);
-    buf = (u_char *)(end+1);		     // skip options part
-    while (isspace(*buf)) buf++; // skip whitespace
-    parse_rfc_line_options(conn, beg, end, CHOP_LSN);
-  }
-  // skip whitespace
-  while (*buf == ' ') buf++;
   // contact and args begin here
-  cname = buf;
-  if (ncp_debug) printf("NCP parsing LSN: contact and args are \"%s\"\n", cname);
+  cname = parse_rfc_line_options(conn, buf, CHOP_LSN);
+  if (ncp_debug) printf("NCP parsing LSN: contact is \"%s\"\n", cname);
 
   cname = parse_contact_name(cname);
   if ((cname != NULL) && (strlen((char *)cname) > 0)) {
