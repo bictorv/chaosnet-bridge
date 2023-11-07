@@ -101,7 +101,9 @@ To send a controlled [broadcast packet](https://chaosnet.net/amber.html#Broadcas
 
 `BRD `[*options*] *CSL* *contactname* *args*
 
-where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to.
+where *options*, *contactname* and *args* are as above, and *CSL* is a comma-separated list of (octal) subnet numbers (no spaces around commas) to broadcast to. 
+
+The *CSL* can also be `all` to broadcast on all (reachable) subnets, or `local` to broadcast only on the local subnet (as defined by the `chaddr` [global config](CONFIGURATION.md#global-settings) parameter). In these cases, no other subnet can be listed.
 
 For a simple protocol, you can read multiple `ANS` responses.
 When the timeout expires, a `LOS Connection timed out` response is given to the user program (as described above for `RFC`).
@@ -186,7 +188,7 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | --- | --- | --- |
 | RFC (sent) | [*options*] *rhost* *contact* *args* | text - the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options). (Note that *args* can be any bytes, since the length is given in the header.) |
 | RFC (rcvd) | *rhost* *args* | text - *rhost* is in octal digits, the *args* part is optional. (Note that *args* can be any bytes, since the length is given in the header.)|
-| BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to. As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
+| BRD (sent) | [*options*] *CSL* *contact* *args* | ascii. The *CSL* is a comma-separated list of subnet numbers (in octal, no spaces around commas) for which subnets to broadcast to (or `all` or `local`, cf above). As for RFC, the "[*options*]" and "*args*" parts are optional (but note the explicit brackets around the options) |
 | BRD (rcvd) | - | is translated to an RFC (see above) |
 | OPN (sent) | none | |
 | OPN (rcvd) | *rhost* | ascii, an octal address |

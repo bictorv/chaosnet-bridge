@@ -2180,11 +2180,25 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
     return;
   }
   if (strncasecmp((char *)buf,"all ", 4) == 0) {
+    if (ncp_debug) printf(" NCP parsed BRD \"all\" to all subnets\n");
     // set all bits
     memset(mask, 0xff, sizeof(mask));
     numnets = sizeof(mask)*8;
     // skip over "all "
     buf += 4;
+  } else if (strncasecmp((char *)buf,"local ", 6) == 0) {
+    u_short loc = mychaddr[0] >> 8;
+    if (loc == 0) {
+      if (ncp_debug) printf(" NCP parsed BRD \"local\" for rhost %#x lhost %#x\n", conn->conn_rhost, conn->conn_lhost);
+      user_socket_los(conn, "I don't know what local subnet to use - sorry.");
+      return;
+    }
+    if (ncp_debug) printf(" NCP parsed BRD \"local\" to subnet %d\n", loc);
+    // Set just this bit
+    mask[loc/8] = 1<<(loc % 8);
+    numnets++;
+    // skip over "local "
+    buf += 6;
   } else 
     while (isdigit(*buf)) {
       if (sscanf((char *)buf, "%ho", &netnum) == 1) {
