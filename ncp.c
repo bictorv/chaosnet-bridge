@@ -1037,7 +1037,7 @@ add_listener(struct conn *c, u_char *contact)
 
 // find a listener for the RFC received
 struct conn *
-find_matching_listener(struct chaos_header *ch, u_char *contact)
+find_matching_listener(struct chaos_header *ch, u_char *contact, int removep, int dolock)
 {
   struct listener *ll;
   struct conn *val = NULL;
@@ -1046,18 +1046,19 @@ find_matching_listener(struct chaos_header *ch, u_char *contact)
   if (space) // ignore args
     *space = '\0';
 
-  PTLOCKN(listener_lock,"listener_lock");
+  if (dolock) PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
     if (strcmp((char *)contact, (char *)ll->lsn_contact) == 0) {
       if (space) // undo
 	*space = ' ';
       val = ll->lsn_conn;
+      if (removep) unlink_listener(ll, 0);	// Remove it while we have lock
       break;
     } else if (ncp_debug)
       printf("NCP checking listener \"%s\" against %s \"%s\" - mismatch\n", ll->lsn_contact, 
 	     ch_opcode_name(ch_opcode(ch)), contact);
   }
-  PTUNLOCKN(listener_lock,"listener_lock");
+  if (dolock) PTUNLOCKN(listener_lock,"listener_lock");
 
   if (space) // restore space
     *space = ' ';
@@ -3166,17 +3167,21 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
     if (ncp_debug) printf("NCP p_t_c_h: Got %s %#x from <%#o,%#x> for <%#o,%#x>, contact \"%s\"\n", 
 			  ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 			  ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch), contact);
+    // Need to lock registered_listeners to avoid another LSN packet arriving from the socket
+    // before this conn is initiated properly, so a retransmitted RFC can be discovered as such.
+    // Otherwise the new LSN can create a new listener which the retransmitted RFC gets,
+    // leading to "double opens" (and at least one of them being dead).
+    PTLOCKN(listener_lock,"listener_lock");
     // go look for a matching listener
-    conn = find_matching_listener(ch, contact);
+    conn = find_matching_listener(ch, contact, 1, 0);
     if (conn) {
       // if we got one, initiate it from the conn and data (contact args)
-      // don't accept a new one
-      remove_listener_for_conn(conn);
-      // fill in
       initiate_conn_from_rfc_pkt(conn, ch, contact);
+      PTUNLOCKN(listener_lock,"listener_lock");
       add_input_pkt(conn, ch);
       if (ncp_debug) print_conn("Found listener for", conn, 0);
     } else {
+      PTUNLOCKN(listener_lock,"listener_lock");
       // CLS: No listener for this contact
       if (ncp_debug) printf("No listener found for %s \"%s\"\n", 
 			    ch_opcode_name(ch_opcode(ch)), contact);
