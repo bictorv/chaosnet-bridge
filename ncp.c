@@ -769,15 +769,10 @@ static pthread_mutex_t connlist_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct conn_list *
 add_active_conn(struct conn *c)
 {
-  int x, cstate;
   struct conn_list *new = (struct conn_list *)malloc(sizeof(struct conn_list));
 
   new->conn_conn = c;
   if (ncp_debug) print_conn("Adding active",c,0);
-
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
 
   PTLOCKN(connlist_lock,"connlist_lock");
   new->conn_next = conn_list;
@@ -786,11 +781,6 @@ add_active_conn(struct conn *c)
     conn_list->conn_prev = new;
   conn_list = new;
   PTUNLOCKN(connlist_lock,"connlist_lock");
-
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
 
   if (ncp_debug > 1) print_conn("Added active",c,0);
   return conn_list;
@@ -801,15 +791,10 @@ add_active_conn(struct conn *c)
 static void
 remove_active_conn(struct conn *c, int dolock, int dofree)
 {
-  int x, cstate;
   struct conn_list *cl;
 
   if (ncp_debug) printf("NCP removing conn %p\n", c);
   if (dolock) {
-    // protect against cancellation while holding global lock
-    if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-      fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
-
     PTLOCKN(connlist_lock,"connlist_lock");
   }
   for (cl = conn_list; cl != NULL; cl = cl->conn_next) {
@@ -845,11 +830,6 @@ remove_active_conn(struct conn *c, int dolock, int dofree)
   }
   if (dolock) {
     PTUNLOCKN(connlist_lock,"connlist_lock");
-
-    if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-      fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-    // see if we were cancelled?
-    pthread_testcancel();
   }
 }
 
@@ -857,16 +837,11 @@ remove_active_conn(struct conn *c, int dolock, int dofree)
 static struct conn *
 find_existing_conn(struct chaos_header *ch)
 {
-  int x, cstate;
   struct conn_list *cl;
   struct conn *val = NULL;
   int opc = ch_opcode(ch);
   u_short src = ch_srcaddr(ch), sidx = ch_srcindex(ch);
   u_short dest = ch_destaddr(ch), didx = ch_destindex(ch);
-
-    // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
 
   PTLOCKN(connlist_lock,"connlist_lock");
   for (cl = conn_list; (cl != NULL) && (val == NULL); cl = cl->conn_next) {
@@ -940,11 +915,6 @@ find_existing_conn(struct chaos_header *ch)
   }
   PTUNLOCKN(connlist_lock,"connlist_lock");
 
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
-
   return val;
 }
 
@@ -991,13 +961,7 @@ static pthread_mutex_t listener_lock = PTHREAD_MUTEX_INITIALIZER;
 static void
 unlink_listener(struct listener *ll, int dolock)
 {
-  int x, cstate;
-
   if (dolock) {
-    // protect against cancellation while holding global lock
-    if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-      fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
-
     PTLOCKN(listener_lock,"listener_lock");
   }
   if (ll->lsn_prev == NULL) {
@@ -1011,23 +975,13 @@ unlink_listener(struct listener *ll, int dolock)
   }
   if (dolock) {
     PTUNLOCKN(listener_lock,"listener_lock");
-
-    if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-      fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-    // see if we were cancelled?
-    pthread_testcancel();
   }
  }
 
 static void
 remove_listener_for_conn(struct conn *conn)
 {
-  int x, cstate;
   struct listener *ll;
-
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
 
   PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
@@ -1039,11 +993,6 @@ remove_listener_for_conn(struct conn *conn)
     }
   }
   PTUNLOCKN(listener_lock,"listener_lock");
-
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
 }
 
 #if 0
@@ -1054,10 +1003,6 @@ remove_listener_for_contact(u_char *contact)
   int x, cstate;
   struct listener *ll;
 
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
-
   PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
     if (strcmp((char *)ll->lsn_contact, (char *)contact) == 0) {
@@ -1067,11 +1012,6 @@ remove_listener_for_contact(u_char *contact)
     }
   }
   PTUNLOCKN(listener_lock,"listener_lock");
-
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
   return;
 }
 #endif // 0
@@ -1079,15 +1019,9 @@ remove_listener_for_contact(u_char *contact)
 struct listener *
 add_listener(struct conn *c, u_char *contact)
 {
-  int x, cstate;
-
   // make listener, add to registered_listeners 
   struct listener *new = make_listener(c, contact);
   if (ncp_debug || ncp_trace) print_listener("Adding",new);
-
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
 
   PTLOCKN(listener_lock,"listener_lock");
   new->lsn_next = registered_listeners;
@@ -1097,11 +1031,6 @@ add_listener(struct conn *c, u_char *contact)
   registered_listeners = new;
   PTUNLOCKN(listener_lock,"listener_lock");
 
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
-
   set_conn_state(c, CS_Inactive, CS_Listening, 0);
   return registered_listeners;
 }
@@ -1110,17 +1039,12 @@ add_listener(struct conn *c, u_char *contact)
 struct conn *
 find_matching_listener(struct chaos_header *ch, u_char *contact)
 {
-  int x, cstate;
   struct listener *ll;
   struct conn *val = NULL;
 
   char *space = index((char *)contact, ' ');
   if (space) // ignore args
     *space = '\0';
-
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
 
   PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
@@ -1134,11 +1058,6 @@ find_matching_listener(struct chaos_header *ch, u_char *contact)
 	     ch_opcode_name(ch_opcode(ch)), contact);
   }
   PTUNLOCKN(listener_lock,"listener_lock");
-
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
 
   if (space) // restore space
     *space = ' ';
@@ -3999,7 +3918,7 @@ start_conn(struct conn *conn)
 void
 print_ncp_stats()
 {
-  int x, cstate, cslocked, llocked;
+  int cslocked, llocked;
 
   if (!ncp_enabled) {
     printf("NCP disabled\n");
@@ -4023,10 +3942,6 @@ print_ncp_stats()
   } else PTUNLOCKN(listener_lock,"listener_lock");
 
 
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
-
   PTLOCKN(connlist_lock,"connlist_lock");
   printf("NCP: conn list length%s\n", conn_list == NULL ? " empty" : ":");
   struct conn_list *c = conn_list;
@@ -4036,14 +3951,6 @@ print_ncp_stats()
   }
   PTUNLOCKN(connlist_lock,"connlist_lock");
 
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
-
-  // protect against cancellation while holding global lock
-  if ((x = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cstate)) != 0)
-    fprintf(stderr,"pthread_setcancelstate(PTHREAD_CANCEL_DISABLE): %s\n", strerror(x));
   PTLOCKN(listener_lock,"listener_lock");
   printf("NCP: listener list%s\n", registered_listeners == NULL ? " empty" : ":");
   struct listener *ll = registered_listeners;
@@ -4052,9 +3959,4 @@ print_ncp_stats()
     ll = ll->lsn_next;
   }
   PTUNLOCKN(listener_lock,"listener_lock");
-  if ((x = pthread_setcancelstate(cstate, NULL)) != 0) 
-    fprintf(stderr,"pthread_setcancelstate(%d): %s\n", cstate, strerror(x));
-  // see if we were cancelled?
-  pthread_testcancel();
-
 }
