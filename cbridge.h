@@ -287,6 +287,7 @@ extern int tlsdest_len;	/* cf TLSDEST_MAX */
 
 // array of my chaosnet addresses, first element is the default
 // @@@@ replace by function
+extern int nchaddr; // number of addresses in mychaddr
 extern u_short mychaddr[];
 
 #if CHAOS_IP
