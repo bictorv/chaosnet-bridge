@@ -193,8 +193,14 @@ def host_name(addr, timeout=2):
     #     return addr
     if addr in host_names:
         return host_names[addr]
-    s = Simple(addr, "STATUS", options=dict(timeout=timeout))
-    src, data = s.result()
+    try:
+        s = Simple(addr, "STATUS", options=dict(timeout=timeout))
+        src, data = s.result()
+    except:
+        if debug:
+            print("Error while getting STATUS of {}".format(addr), file=sys.stderr)
+        host_names[addr] = "????"
+        return "????"
     if src:
         name = str(data[:32].rstrip(b'\x00'), "ascii")
         host_names[addr] = name
@@ -216,6 +222,10 @@ class Broadcast:
     def __init__(self, subnets, contact, args=[], options=None):
         self.conn = Conn()
         # print("Simple({} {}) t/o {}".format(host,contact, timeout))
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        elif len(subnets) == 1 and subnets[0] == 0:
+            subnets = ["local"]
         h = bytes("{} {}".format(",".join(map(str,subnets)),contact),"ascii")
         for a in args:
             if isinstance(a,str):
@@ -280,8 +290,6 @@ class Status:
     def get_status(self, subnets, options):
         hlist = []
         print(("{:<25s}{:>6s} "+"{:>8} "*8).format("Name","Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected"))
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         for data in Broadcast(subnets,"STATUS", options=options):
             src = data[0] + data[1]*256
             data = data[2:]
@@ -322,8 +330,6 @@ class ChaosTime:
         self.get_time(subnets, options=options)
     def get_time(self, subnets, options):
         hlist = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         for data in Broadcast(subnets,"TIME",options=options):
             src = data[0] + data[1]*256
             if src in hlist:
@@ -340,8 +346,6 @@ class ChaosUptime:
         self.get_uptime(subnets, options=options)
     def get_uptime(self, subnets, options):
         hlist = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         for data in Broadcast(subnets,"UPTIME",options=options):
             src = data[0] + data[1]*256
             if src in hlist:
@@ -359,9 +363,7 @@ class ChaosFinger:
     def get_finger(self, subnets, options):
         hlist = []
         free = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
-        print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format("User","","Name","Host","Idle","Location"))
+        hdr_printed = False
         for data in Broadcast(subnets,"FINGER",options=options):
             src = data[0] + data[1]*256
             if src in hlist:
@@ -376,6 +378,9 @@ class ChaosFinger:
             if fields[0] == "":
                 free.append([hname,fields])
             else:
+                if not hdr_printed:
+                    print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format("User","","Name","Host","Idle","Location"))
+                    hdr_printed = True
                 # uname affiliation pname hname idle loc
                 print("{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format(fields[0],fields[4],fields[3],hname,fields[2],fields[1]))
         if len(free) > 0:
@@ -390,8 +395,6 @@ class ChaosLoad:
     def get_load(self, subnets, options):
         hlist = []
         free = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         for data in Broadcast(subnets,"LOAD",options=options):
             src = data[0] + data[1]*256
             if src in hlist:
@@ -408,8 +411,6 @@ class ChaosDumpRoutingTable:
         self.get_routing(subnets, options=options)
     def get_routing(self, subnets, options):
         hlist = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         print("{:<20} {:>6} {:>6} {}".format("Host","Net","Meth","Cost"))
         # @@@@ consider presenting the info based on subnets, and how far hosts are from them
         for data in Broadcast(subnets,"DUMP-ROUTING-TABLE",options=options):
@@ -435,8 +436,6 @@ class ChaosLastSeen:
         self.get_lastcn(subnets, options=options, show_names=show_names)
     def get_lastcn(self, subnets, options, show_names=False):
         hlist = []
-        if len(subnets) == 1 and subnets[0] == -1:
-            subnets = ["all"]
         if show_names:
             print("{:<20} {:20} {:>8} {:10}  {}".format("Host","Seen","#in","Via","FC","Age"))
         else:
@@ -493,8 +492,6 @@ class ChaosDNS:
     def get_values(self):
         hlist = []
         values = []
-        if len(self.subnets) == 1 and self.subnets[0] == -1:
-            self.subnets = ["all"]
         msg = dns.message.make_query(self.name, self.qtype, rdclass=dns.rdataclass.CH)
         w = msg.to_wire()
         if debug:
@@ -545,7 +542,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet STATUS broadcast')
     parser.add_argument("subnets", metavar="SUBNET", type=int, nargs='+',
-                            help="Subnets to broadcast on (must include the local one), or -1 for all subnets")
+                            help="Subnets to broadcast on, -1 for all subnets, or 0 for the local subnet")
     parser.add_argument("-t","--timeout", type=int, default=5,
                             help="Timeout in seconds")
     parser.add_argument("-r","--retrans", type=int, default=500,
@@ -571,6 +568,9 @@ if __name__ == '__main__':
     if -1 in args.subnets and len(args.subnets) != 1:
         # "all" supersedes all other
         args.subnets = [-1]
+    elif 0 in args.subnets and len(args.subnets) != 1:
+        # "local" supersedes all other
+        args.subnets = [0]
     if args.service.upper() == 'STATUS':
         c = Status
     elif args.service.upper() == 'TIME':
