@@ -1019,11 +1019,21 @@ remove_listener_for_contact(u_char *contact)
 struct listener *
 add_listener(struct conn *c, u_char *contact)
 {
+  struct listener *ll;
+  PTLOCKN(listener_lock,"listener_lock");
+  // @@@@ Maybe let this be configurable? But it seems very reasonable?
+  for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
+    if (strcmp((char *)contact, (char *)ll->lsn_contact) == 0) {
+      PTUNLOCKN(listener_lock,"listener_lock");
+      if (ncp_debug) printf("%s: found existing listener for %s, rejecting addition\n", __func__, contact);
+      user_socket_los(c, "Already have a listener for that contact name");
+      return registered_listeners;
+    }
+  }
   // make listener, add to registered_listeners 
   struct listener *new = make_listener(c, contact);
   if (ncp_debug || ncp_trace) print_listener("Adding",new);
 
-  PTLOCKN(listener_lock,"listener_lock");
   new->lsn_next = registered_listeners;
   // assert(registered_listeners->lsn_prev == NULL) always
   if (registered_listeners != NULL)
@@ -2932,6 +2942,7 @@ update_window_available(struct conn_state *cs, u_short winz) {
 }
 
 // @@@@ This could do with some structuring/modularization etc
+// This handles both Stream and Packet sockets
 static void
 packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
 {
@@ -3017,8 +3028,11 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   case CS_Listening: {
     if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
       receive_data_for_conn(ch_opcode(ch), conn, ch);
+#if 1 // Change state early
+      set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
+#else
       // conn_to_socket changes state
-      // set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
+#endif
     } else
       // ignore all other pkts
       return;
@@ -3115,18 +3129,19 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       send_los_pkt(conn, "No such index exists");
       return;
     }
-    // fall through
-  case CS_CLS_Received:
-  case CS_LOS_Received:
-  case CS_Host_Down:
-  case CS_Open_Sent:	       // Should only happen for the STS above
-  case CS_RFC_Received:	       // Should only get retransmitted RFCs
+    break;
   case CS_Answered: // should not get pkts (other than retransmitted ANS?)
     if ((ch_opcode(ch) == CHOP_ANS) && (conn->conn_rhost == 0) && (conn->conn_ridx == 0)) {
       // Allow more ANS for broadcast conns
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
     }
+    // fall through - these are ignored (except for some warnings)
+  case CS_CLS_Received:
+  case CS_LOS_Received:
+  case CS_Host_Down:
+  case CS_Open_Sent:	       // Should only happen for the STS above
+  case CS_RFC_Received:	       // Should only get retransmitted RFCs
     if (!((cs->state == CS_RFC_Received) && (ch_opcode(ch) != CHOP_RFC)) &&
 	!((cs->state == CS_Answered) && (ch_opcode(ch) != CHOP_ANS))) {
       if (ncp_debug) printf("%%%% p_t_c_stream_h %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
@@ -3620,9 +3635,14 @@ socket_to_conn_packet_handler(struct conn *conn)
     // parse 4byte headers and send corresponding packets (LOS UNC DAT DWD EOF)
     return packet_conn_parse_and_send_bytes(conn, buf, opc, len);
   }
+  else if ((cs->state == CS_CLS_Received) && (opc == CHOP_CLS)) {
+    // OK OK, we're done already!
+    set_conn_state(conn, cs->state, CS_Inactive, 0);
+    return 0;
+  }
   else if (cs->state != CS_Inactive) {
     char errbuf[512];
-    sprintf(errbuf, "Bad request len %d from stream user in state %s: not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state: %s", 
+    sprintf(errbuf, "Bad request len %d from stream user in state %s: %s not RFC, BRD, LSN, OPN, CLS, ANS, or wrong state", 
 	    cnt, conn_state_name(conn), ch_opcode_name(buf[0]));
     fprintf(stderr,"%s\n", errbuf);
     send_los_pkt(conn,"Local error. We apologize for the incovenience.");
@@ -3765,7 +3785,13 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     }
   }
 
-  if ((cs->state == CS_Listening) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
+  if (
+#if 1 // State already changed in packet_to_conn, which filters later retransmissions
+      (cs->state == CS_RFC_Received) && 
+#else
+      (cs->state == CS_Listening) && 
+#endif
+      ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
     char fhost[32];
     char argsbuf[MAX_CONTACT_NAME_LENGTH], *space;
     char *args = argsbuf;
@@ -3781,7 +3807,11 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       sprintf(buf, "%s", fhost);
     len = strlen(buf);
     if (ncp_debug) printf("To socket %p (%d bytes): [%s] %s\n", conn, len, ch_opcode_name(opc), buf);
+#if 1
+    // State already changed in packet_to_conn
+#else
     set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
+#endif
   } else if ((cs->state == CS_RFC_Received) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
     if (ncp_debug) printf("Got retransmission of %s pkt %#x for conn %p\n",
 			  ch_opcode_name(opc), ch_packetno(pkt), conn);
