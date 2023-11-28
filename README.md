@@ -130,15 +130,13 @@ There are different reasons to want to use TLS:
   stable IP addresses and thus are not reachable by UDP. TCP would
   suffice, but since clients don't have stable IPs, it would be hard to
   firewall - instead you need an open server which is not so
-  nice/secure. TLS helps with authentication. 
+  nice/secure. TLS helps with the authentication. 
 
 When configured to use Chaos-over-TLS, it needs some certificate
 infrastructure. There is one for the Global Chaosnet, see [TLS](TLS.md) 
 
 TLS is asymmetric, in the sense that one end is the server which the
-clients connect to. The implementation is not yet tested for cbridges
-which have both roles, but might work. :-) 
-(My preliminary impression is that it is faster than CHUDP!)
+clients connect to.
 
 Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`.
 
