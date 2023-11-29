@@ -3027,12 +3027,12 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   switch (cs->state) {
   case CS_Listening: {
     if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
-      receive_data_for_conn(ch_opcode(ch), conn, ch);
 #if 1 // Change state early
       set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
 #else
       // conn_to_socket changes state
 #endif
+      receive_data_for_conn(ch_opcode(ch), conn, ch);
     } else
       // ignore all other pkts
       return;
