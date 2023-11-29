@@ -766,6 +766,19 @@ free_conn(struct conn *conn)
 }
 
 static pthread_mutex_t connlist_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int
+conn_list_length(void)
+{
+  int len = 0;
+  PTLOCKN(connlist_lock,"connlist_lock");
+  struct conn_list *l;
+  for (l = conn_list; l != NULL; l = l->conn_next)
+    len++;
+  PTUNLOCKN(connlist_lock,"connlist_lock");
+  return len;
+}
+
 static struct conn_list *
 add_active_conn(struct conn *c)
 {
@@ -921,9 +934,16 @@ find_existing_conn(struct chaos_header *ch)
 //////// listeners
 
 static void
-print_listener(char *leader, struct listener *l)
+print_listener(char *leader, struct listener *l, int tstamp)
 {
-  printf("%s listener %p for \"%s\" conn %p next %p prev %p\n",
+  char buf[128];
+  if (tstamp) {
+    // Include timestamp
+    time_t now = time(NULL);
+    strftime(buf, sizeof(buf), "%T ", localtime(&now));
+  } else
+    buf[0] = '\0';
+  printf("%s%s listener %p for \"%s\" conn %p next %p prev %p\n", buf,
 	 leader, l, l->lsn_contact, l->lsn_conn, l->lsn_next, l->lsn_prev);
 }
 
@@ -986,7 +1006,7 @@ remove_listener_for_conn(struct conn *conn)
   PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
     if (ll->lsn_conn == conn) {
-      if (ncp_debug || ncp_trace) print_listener("Removing",ll);
+      if (ncp_debug || ncp_trace) print_listener("Removing",ll, 1);
       unlink_listener(ll, 0);
       free_listener(ll);
       break;
@@ -1032,7 +1052,7 @@ add_listener(struct conn *c, u_char *contact)
   }
   // make listener, add to registered_listeners 
   struct listener *new = make_listener(c, contact);
-  if (ncp_debug || ncp_trace) print_listener("Adding",new);
+  if (ncp_debug || ncp_trace) print_listener("Adding",new, 1);
 
   new->lsn_next = registered_listeners;
   // assert(registered_listeners->lsn_prev == NULL) always
@@ -1161,11 +1181,12 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   struct chaos_header *ch = (struct chaos_header *)pkt;
   struct conn_state *cs = c->conn_state;
   u_char *datao = &pkt[CHAOS_HEADERSIZE];
-  int pklen;
+  int pklen, pknum;
 
   PTLOCKN(cs->conn_state_lock,"conn_state_lock");
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
+  pknum = ch_packetno(ch);	// get this before sending (which might swap pkt)
   PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
   if ((data != NULL) && (len > 0)) {
     switch (opcode) {
@@ -1200,7 +1221,7 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
   } else 
     add_output_pkt(c, ch);
 
-  return ch_packetno(ch);
+  return pknum;
 }
 
 static int
@@ -1371,12 +1392,15 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
 {
   struct conn_state *cs = conn->conn_state;
   int timedout;
+  int oldwin, newwin;
   struct timespec to;
   struct timeval tv, tn, ts;
 
-  // Use window updates from discard_received_pkts_from_send_list to check for acked pkts - this is a hack
-  // which doesn't quite work for two sockets on the same cbridge?
+  // Use window updates from update_window_available to check for acked pkts - this is a hack
+  // (which doesn't quite work for two sockets on the same cbridge?)
   PTLOCKN(cs->window_mutex,"window_mutex");
+
+  oldwin = cs->window_available; // To check if the window increased (good) or shrunk (bad, no ack)
 
   gettimeofday(&tv, NULL);
   memcpy(&ts, &tv, sizeof(ts));
@@ -1389,10 +1413,11 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
 
   timedout = 0;
 
-  while ((timedout == 0) && pktnum_less(cs->pktnum_sent_acked, pknum))
+  while ((timedout == 0) && !(oldwin > cs->window_available) && pktnum_less(cs->pktnum_sent_acked, pknum))
     timedout = pthread_cond_timedwait(&cs->window_cond, &cs->window_mutex, &to);
   if ((timedout < 0) && (timedout != ETIMEDOUT))
     perror("?? pthread_cond_timedwait");
+  newwin = cs->window_available;
   PTUNLOCKN(cs->window_mutex,"window_mutex");
 
   if (ncp_debug) {
@@ -1403,7 +1428,8 @@ wait_for_ack_of_pkt(struct conn *conn, int pknum)
       tn.tv_sec--; 
       tn.tv_usec += 1000000;
     }
-    printf("NCP %s for %p done waiting for EOF ack %#x (%s after %ld.%03ld)\n", conn_thread_name(conn), conn, pknum,
+    printf("NCP %s for %p done waiting for EOF ack %#x (sent_acked %#x, win %d -> %d) (%s after %ld.%03ld)\n", conn_thread_name(conn), conn, 
+	   pknum, cs->pktnum_sent_acked, oldwin, newwin,
 	   timedout != 0 ? "timed out" : "acked", tn.tv_sec, (long)(tn.tv_usec/1000));
   }
 }
@@ -1495,6 +1521,10 @@ stream_conn_send_data_chunks(struct conn *conn, u_char *bp, int cnt)
 
 //////////////// shutting things down
 
+// Doesn't actually use thread cancelling, but
+// makes sure the socket is closed (in the cbridge thread),
+// while conn_to_net, conn_from_sock threads wake up conn_to_sock to let it notice that,
+// and conn_to_sock waits for them to exit, and then removes the conn and exits.
 static void
 cancel_conn_threads(struct conn *conn)
 {
@@ -1581,7 +1611,7 @@ finish_stream_conn(struct conn *conn, int send_eof)
     // finish conn: send eof, wait for it to be acked.
     if (ncp_debug) printf("NCP %s finishing in state %s, retransmitting\n", 
 			  conn_thread_name(conn), conn_state_name(conn));
-    set_conn_state(conn, CS_Open, CS_Finishing, 1);
+    set_conn_state(conn, CS_Open, CS_Finishing, 0);
     // try retransmission first, if anything remains
     retransmit_controlled_packets(conn);
     // Also when eof has been sent already
@@ -2124,7 +2154,7 @@ initiate_conn_from_brd_line(struct conn *conn, u_char *buf, int buflen)
     for (int n = 0; n < nchaddr; n++) {
       u_short loc = mychaddr[n] >> 8;
       if (ncp_debug) printf(" NCP parsed BRD \"local\" to subnet %d\n", loc);
-      // Set just this bit
+      // Set this bit
       mask[loc/8] |= 1<<(loc % 8);
       numnets++;
     }
@@ -2580,7 +2610,9 @@ retransmit_controlled_packets(struct conn *conn)
       if (pklen % 2) pklen++;
       if (pkt != NULL) {
 	// unless sent within 1/30 s
-	if (!timespec_diff_above(&now, pkqueue_elem_transmitted(q), RETRANSMIT_LOW_THRESHOLD)) {
+	if (!timespec_diff_above(&now, pkqueue_elem_transmitted(q), RETRANSMIT_LOW_THRESHOLD)
+	    // except for finishing, which should force retransmission - last chance!
+	    && (cs->state != CS_Finishing)) {
 	  ntoonew++;
 	  continue;
 	}
@@ -2822,6 +2854,7 @@ static void
 receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 {
   struct conn_state *cs = conn->conn_state;
+  int n_from_ooo = 0;
 
   if (packet_uncontrolled(pkt)) {
     // uncontrolled pkts always fit the window
@@ -2883,6 +2916,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 	cs->pktnum_received_highest = ch_packetno(p);
 	// add_input_pkt made a copy, so free this one
 	free(p);
+	n_from_ooo++;
 	// peek the next one
 	p = pkqueue_peek_first(cs->received_pkts_ooo);
       }
@@ -2900,6 +2934,13 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     int unacked = pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked);
     if ((unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
       if (ncp_debug) printf(" 1/3 window un-acked (%d), acked %#x, sending STS\n", unacked, cs->pktnum_acked);
+      PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
+      send_sts_pkt(conn);
+    } else if (n_from_ooo > (cs->local_winsize/3)) { // @@@@ perhaps not every ooo, just when they are "many"?
+      // Experimental: send an STS if we picked packets from the ooo list.
+      // This could help minimize unnecessary retransmissions, e.g. if one pkt was missing out of a windowful in ooo.
+      if (ncp_debug) printf(" picked %d pkts from ooo list (un-acked %d, acked %#x), sending STS\n", 
+			    n_from_ooo, unacked, cs->pktnum_acked);
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
     } else {
@@ -2964,7 +3005,9 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     if (pktnum_less(cs->pktnum_sent_acked, ch_ackno(ch))) {
       // we got an ack update, update window
       cs->pktnum_sent_acked = ch_ackno(ch);
+      PTLOCKN(cs->window_mutex, "window_mutex");
       update_window_available(cs, cs->foreign_winsize);
+      PTUNLOCKN(cs->window_mutex, "window_mutex");
 #if 1
       // Ack implies receipt, so acked pkts don't need to be retransmitted
       if (pktnum_less(cs->pktnum_sent_receipt, cs->pktnum_sent_acked)) {
@@ -3027,11 +3070,8 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   switch (cs->state) {
   case CS_Listening: {
     if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
-#if 1 // Change state early
+      // Change state early
       set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
-#else
-      // conn_to_socket changes state
-#endif
       receive_data_for_conn(ch_opcode(ch), conn, ch);
     } else
       // ignore all other pkts
@@ -3089,7 +3129,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     }
       break;
     }
-    // All other than CLS, ANS, OPN fall through here
+    // All other than CLS, FWD, ANS, OPN fall through here (ignored)
     break;
   case CS_Open:
     // In the Open state, only EOF, LOS, CLS and the DAT pkts are OK
@@ -3149,9 +3189,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     if (ncp_debug && (ch_opcode(ch) == CHOP_LOS)) {
       u_char buf[CH_PK_MAX_DATALEN];
       get_packet_string(ch, buf, sizeof(buf));
-      printf("%%%% LOS: %s\n", buf);
-      
-      break;
+      printf("%%%% conn %p in state %s LOS: %s\n", conn, conn_state_name(conn), buf);
     }
     break;
   }
@@ -3194,7 +3232,6 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
       // if we got one, initiate it from the conn and data (contact args)
       initiate_conn_from_rfc_pkt(conn, ch, contact);
       PTUNLOCKN(listener_lock,"listener_lock");
-      add_input_pkt(conn, ch);
       if (ncp_debug) print_conn("Found listener for", conn, 0);
     } else {
       PTUNLOCKN(listener_lock,"listener_lock");
@@ -3228,7 +3265,7 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
     if (ncp_debug) {
       printf("Got unexpected %s from <%#o,%#x> for <%#o,%#x> with no conn\n", ch_opcode_name(ch_opcode(ch)),
 	     ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch));
-      printf("NCP: conn list length%s\n", conn_list == NULL ? " empty" : ":");
+      printf("NCP: conn list length %d\n", conn_list_length());
       PTLOCKN(connlist_lock,"connlist_lock");
       struct conn_list *c = conn_list;
       while (c) {
@@ -3807,15 +3844,7 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
       sprintf(buf, "%s", fhost);
     len = strlen(buf);
     if (ncp_debug) printf("To socket %p (%d bytes): [%s] %s\n", conn, len, ch_opcode_name(opc), buf);
-#if 1
-    // State already changed in packet_to_conn
-#else
-    set_conn_state(conn, CS_Listening, CS_RFC_Received, 1);
-#endif
-  } else if ((cs->state == CS_RFC_Received) && ((opc == CHOP_RFC) || (opc == CHOP_BRD))) {
-    if (ncp_debug) printf("Got retransmission of %s pkt %#x for conn %p\n",
-			  ch_opcode_name(opc), ch_packetno(pkt), conn);
-    // ignore it
+    // (State already changed in packet_to_conn)
   } else if ((ch_opcode(pkt) == CHOP_ANS) &&
 	     ((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) ||
 	      // extra ANS for BRD
@@ -3978,8 +4007,8 @@ print_ncp_stats()
   } else PTUNLOCKN(listener_lock,"listener_lock");
 
 
+  printf("NCP: conn list length %d\n", conn_list_length());
   PTLOCKN(connlist_lock,"connlist_lock");
-  printf("NCP: conn list length%s\n", conn_list == NULL ? " empty" : ":");
   struct conn_list *c = conn_list;
   while (c) {
     print_conn(">", c->conn_conn, 1);
@@ -3991,7 +4020,7 @@ print_ncp_stats()
   printf("NCP: listener list%s\n", registered_listeners == NULL ? " empty" : ":");
   struct listener *ll = registered_listeners;
   while (ll) {
-    print_listener(">", ll);
+    print_listener(">", ll, 0);
     ll = ll->lsn_next;
   }
   PTUNLOCKN(listener_lock,"listener_lock");
