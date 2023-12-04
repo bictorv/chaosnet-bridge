@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017-2021 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2023 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,8 +35,8 @@
 
 #include "cbridge.h"
 
+// Default DNS server for Chaosnet class records - this server needs to handle the CH class!
 #ifndef CHAOS_DNS_SERVER
-// #define CHAOS_DNS_SERVER "130.238.19.25"
 #define CHAOS_DNS_SERVER "dns.chaosnet.net"
 #endif
 #ifndef CHAOS_ADDR_DOMAIN
@@ -47,7 +47,7 @@
 static int trace_dns = 0;
 int do_dns_forwarding = 0;
 static int n_dns_servers = 0;
-#define MAX_DNS_SERVERS MAXNS
+#define MAX_DNS_SERVERS MAXNS	// MAXNS from resolv.h
 static char *chaos_dns_servers[MAX_DNS_SERVERS];
 static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 
@@ -353,6 +353,10 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   if ((anslen = res_nquery(statp, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
     if (trace_dns) fprintf(stderr,"DNS: PTR of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     *namestr = '\0';
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
     return -1;
   }
 
@@ -422,6 +426,10 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
     if (trace_dns) {
       fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     }
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
     return -1;
   }
 
@@ -493,6 +501,10 @@ dns_list_root_nameservers(void)
     if (trace_dns) {
       fprintf(stderr,"DNS: NS of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     }
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
     return -1;
   }
 

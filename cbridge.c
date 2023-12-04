@@ -1933,8 +1933,11 @@ validate_mychaddrs_dns(u_char *mylongname)
   int i, j;
   u_short myaddrs[16];
   int naddrs = dns_addrs_of_name(mylongname, (u_short *)&myaddrs, 16);
-  if (naddrs == 0) {
-    fprintf(stderr,"DNS config problem: can't get Chaos addresses of your Chaos host name %s\n",
+  if (naddrs < -1)
+    fprintf(stderr,"%%%% DNS config problem: failure when finding Chaos addresses of your host name %s\n"
+	    "%%%% - please check your DNS server settings?\n", mylongname);
+  if (naddrs <= 0) {
+    fprintf(stderr,"%%%% DNS config problem: can't get Chaos addresses of your Chaos host name %s\n",
 	    mylongname);
   } else if (debug)
     fprintf(stderr,"DNS found %d addresses of %s (configured to use %d)\n", naddrs, mylongname, nchaddr);
@@ -2101,9 +2104,10 @@ main(int argc, char *argv[])
   // check if myname should/can be initialized
   if (myname[0] == '\0') {
     u_char mylongname[256];
+    int nlen;
     // look up my address
     if (debug) fprintf(stderr,"Validating address %#o\n", mychaddr[0]);
-    if (dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname)) > 0) {
+    if ((nlen = dns_name_of_addr(mychaddr[0], mylongname, sizeof(mylongname))) > 0) {
       if (debug) fprintf(stderr," found name %s\n", mylongname);
       validate_mychaddrs_dns(mylongname);
 
@@ -2113,7 +2117,10 @@ main(int argc, char *argv[])
       // prettify in case lower
       mylongname[0] = toupper(mylongname[0]);
       strncpy(myname, (char *)mylongname, sizeof(myname));
-    } else if (verbose) {
+    } else if (nlen < -1) {
+      fprintf(stderr,"%%%% DNS config problem: failure when looking up main address %#o in DNS\n"
+	      "%%%% - please check your DNS server settings.\n", mychaddr[0]);
+    } else {
       fprintf(stderr,"%%%% DNS config problem: can't find main address %#o in DNS\n", mychaddr[0]);
     }
   }
@@ -2160,13 +2167,14 @@ main(int argc, char *argv[])
   // Just a little user-friendly config validation
   if (do_tls || do_tls_server) {
     char *files[] = {tls_ca_file, tls_key_file, tls_cert_file };
-    char err[PATH_MAX + sizeof("cannot access ")+3];
+    char err[PATH_MAX + sizeof("%%%% cannot access ")+3];
     int i;
     for (i = 0; i < 3; i++) {
       if (access(files[i], R_OK) != 0) {
-	sprintf(err,"cannot access \"%s\"",files[i]);
+	sprintf(err,"%%%% cannot access \"%s\"",files[i]);
 	perror(err);
-	printf(" configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
+	fprintf(stderr,"%%%%  configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", 
+		tls_key_file, tls_cert_file, tls_ca_file);
 #if 0
 	exit(1);
 #endif
