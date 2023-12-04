@@ -146,7 +146,6 @@ pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
   q->last = nl;
   // we added one
   q->pkq_len++;
-  int len = q->pkq_len;
   PTUNLOCKN(q->pkq_mutex,"pkq_mutex");
 
   return nl;

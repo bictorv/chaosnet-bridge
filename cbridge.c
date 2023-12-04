@@ -1916,7 +1916,7 @@ validate_mychaddrs_links(void)
 	break;
       }
     }
-    if (rttbl_net[mychaddr[i] >> 8].rt_link != RT_NOPATH)
+    if (rttbl_net[mychaddr[i] >> 8].rt_link != LINK_NOLINK)
       found = 1;
     if (!found)
       fprintf(stderr,"%%%% WARNING: myaddr %#o does not seem to have a link defined?\n", mychaddr[i]);
