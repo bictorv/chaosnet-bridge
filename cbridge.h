@@ -37,7 +37,7 @@
 #if CHAOS_ETHERP
 #ifndef ETHER_BPF
 // use BPF rather than sockaddr_ll, e.g. for MacOS
-#if __APPLE__ || __OpenBSD__
+#if __APPLE__ || __OpenBSD__ || __NetBSD__
 #define ETHER_BPF 1
 #else
 #define ETHER_BPF 0
@@ -71,7 +71,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <net/if_arp.h>
-#if __OpenBSD__
+#if __OpenBSD__ || __NetBSD__
 #include <netinet/if_ether.h>
 #else
 #include <net/ethernet.h>
