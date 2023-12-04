@@ -339,7 +339,11 @@ dns_resolver_address = None
 
 def set_dns_resolver_address(adorname):
     global dns_resolver_address
-    dns_resolver_address = socket.gethostbyname(adorname)
+    try:
+        dns_resolver_address = socket.gethostbyname(adorname)
+    except OSError as msg:
+        print("Error resolving {!r}: {}".format(adorname, msg), file=sys.stderr)
+        return None
     return dns_resolver_address
 
 def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):

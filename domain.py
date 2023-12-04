@@ -195,7 +195,11 @@ if __name__ == '__main__':
                 dns_forwarder_addr = args.forwarder
         except:
             # and then as a name. OK, this misses ipv6, but...
-            dns_forwarder_addr = socket.gethostbyname(args.forwarder)
+            try:
+                dns_forwarder_addr = socket.gethostbyname(args.forwarder)
+            except OSError as msg:
+                print("Error resolving {!r}: {}".format(args.forwarder, msg), file=sys.stderr)
+                exit(1)
     if args.debug:
         print(args, file=sys.stderr)
         print("DNS forwarder address: {}".format(dns_forwarder_addr), file=sys.stderr)
