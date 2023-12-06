@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017-2021 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2023 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -722,6 +722,8 @@ void *tls_connector(void *arg)
 	  }
 	  if (!found) {
 	    if (tls_debug || verbose || debug) {
+	      if (naddrs < -1) 
+		fprintf(stderr,"%%%% TLS: DNS error while looking up server CN:\n");
 	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
 	      // one day, do something
 	    }
@@ -1114,6 +1116,22 @@ tls_server(void *v)
 	      }
 	    }
 	  }
+	  if (client_chaddr == 0) {
+	    // @@@@ should limit the frequency of warnings?
+	    char ip[INET6_ADDRSTRLEN];
+	    if (naddrs < -1)
+	      fprintf(stderr,"%%%% TLS: DNS error while looking up client CN %s at %s, rejecting\n",
+		      client_cn, ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
+	    else if (naddrs > 0) 
+	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses on my subnets, rejecting\n",
+		      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
+	    else
+	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses, rejecting\n",
+		      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
+	    SSL_free(ssl);
+	    close(tsock);
+	    continue;
+	  }
 	} else {
 	  if (tls_debug) {
 	    char ip[INET6_ADDRSTRLEN];
@@ -1491,6 +1509,9 @@ validate_cert_file(char *fname)
   // Check the addresses of the CN
   u_short claddrs[4];
   int i, j, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+  if (naddrs < -1) {
+    fprintf(stderr,"%%%% TLS: DNS error when getting addresses of client CN %s\n", client_cn);
+  }
   if (tls_debug) {
     fprintf(stderr, "TLS cert CN %s has %d Chaos address(es): ", client_cn, naddrs);
     for (i = 0; i < naddrs; i++)
@@ -1508,10 +1529,13 @@ validate_cert_file(char *fname)
     }
     if (!found) {
       u_char hname[256];  /* random size limit */
-      if (dns_name_of_addr(tls_myaddr, hname, sizeof(hname)) < 0)
+      int nlen;
+      if ((nlen = dns_name_of_addr(tls_myaddr, hname, sizeof(hname))) < 0) {
+	if (nlen < -1)
+	  fprintf(stderr,"%%%% TLS: DNS error while looking up myaddr:\n");
 	fprintf(stderr,"%%%% TLS: Addresses of cert %s CN %s do not match the configured myaddr %#o\n", 
 		fname, client_cn, tls_myaddr);
-      else
+      } else
 	fprintf(stderr,"%%%% TLS: Configured myaddr %#o does not belong to cert %s CN %s but to %s\n", 
 		tls_myaddr, fname, client_cn, hname);
       // Make sure to do something about it, like terminate
@@ -1530,10 +1554,13 @@ validate_cert_file(char *fname)
       }
       if (!found) {
 	u_char hname[256];  /* random size limit */
-	if (dns_name_of_addr(tlsdest[i].tls_myaddr, hname, sizeof(hname)) < 0)
+	int nlen;
+	if ((nlen = dns_name_of_addr(tlsdest[i].tls_myaddr, hname, sizeof(hname))) < 0) {
+	  if (nlen < -1)
+	    fprintf(stderr,"%%%% TLS: DNS error while looking up myaddr:\n");
 	  fprintf(stderr,"%%%% TLS: myaddr %#o of tls destination %d (%s) not among addresses of cert %s CN %s\n",
 		  tlsdest[i].tls_myaddr, i, tlsdest[i].tls_name, fname, client_cn);
-	else
+	} else
 	  fprintf(stderr,"%%%% TLS: myaddr %#o of tls destination %d (%s) does not belong to cert %s CN %s but to %s\n",
 		  tlsdest[i].tls_myaddr, i, tlsdest[i].tls_name, fname, client_cn, hname);
 	// Make sure to do something about it, like terminate

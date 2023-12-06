@@ -45,9 +45,11 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 - `unix` [ `debug` off/on ]
 
 	With debug on, prints some debug stuff.
-- `dns` [ `server` dns.chaosnet.net ] [ `addrdomain` CH-ADDR.NET ] [ `forwarder` off/on ] [ `trace` off/on ]
+- `dns` [ `servers` dns.chaosnet.net ] [ `addrdomain` CH-ADDR.NET ] [ `forwarder` off/on ] [ `trace` off/on ]
 
-	set the DNS IP server (which should handle CH records, default above), the domain of "local" CH class addresses (default above, no ending dot), enable/disable forwarding of pkts received on the "DNS" contact name (default off), and enable trace printouts (default off). DNS is used internally by the TLS server/client to look up the certificate CN (of server and client) as Chaos hosts, looking for their addresses, and also by the [NCP](NCP.md) to look up addresses.
+	set the DNS IP servers (which should handle CH records, default above; comma-separated list without whitespace around commas), the domain of "local" CH class addresses (default above, no ending dot), enable/disable forwarding of pkts received on the "DNS" contact name (default off), and enable trace printouts (default off). DNS is used internally by the TLS server/client to look up the certificate CN (of server and client) as Chaos hosts, looking for their addresses, and also by the [NCP](NCP.md) to look up addresses.
+	
+	For redundancy, more than one DNS server should be listed. A useful set of servers are the nameservers of the root CH domain, currently `dns.chaosnet.net,ns1.dfupdate.se,ns2.dfupdate.se`, which you can find e.g. by `host -c ch -t ns . dns.chaosnet.net` (note the separate period meaning "root").
 
 - `private` [ `subnet` *list* ] [ `hosts` *hostsfile* ]
 

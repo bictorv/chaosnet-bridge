@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017-2021 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2023 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,8 +35,8 @@
 
 #include "cbridge.h"
 
+// Default DNS server for Chaosnet class records - this server needs to handle the CH class!
 #ifndef CHAOS_DNS_SERVER
-// #define CHAOS_DNS_SERVER "130.238.19.25"
 #define CHAOS_DNS_SERVER "dns.chaosnet.net"
 #endif
 #ifndef CHAOS_ADDR_DOMAIN
@@ -46,7 +46,9 @@
 
 static int trace_dns = 0;
 int do_dns_forwarding = 0;
-static char chaos_dns_server[NS_MAXDNAME] = CHAOS_DNS_SERVER;
+static int n_dns_servers = 0;
+#define MAX_DNS_SERVERS MAXNS	// MAXNS from resolv.h
+static char *chaos_dns_servers[MAX_DNS_SERVERS];
 static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
 
 // consumer/producer lock and semaphores
@@ -351,6 +353,10 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   if ((anslen = res_nquery(statp, qstring, ns_c_chaos, ns_t_ptr, (u_char *)&answer, sizeof(answer))) < 0) {
     if (trace_dns) fprintf(stderr,"DNS: PTR of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     *namestr = '\0';
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
     return -1;
   }
 
@@ -396,7 +402,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
 
 // given a domain name (including ending period!) and addr of a u_short vector,
 // fill in all Chaosnet addresses for it, and return the number of found addresses.
-// Use e.g. for verification when a new TLS conn is created (both server and client end?)
+// Use e.g. for verification when a new TLS conn is created (both server and client end)
 int 
 dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 {
@@ -420,6 +426,10 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
     if (trace_dns) {
       fprintf(stderr,"DNS: addrs of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
     }
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
     return -1;
   }
 
@@ -467,6 +477,74 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   }
   return ix;
 }
+
+// List all NS records of the Chaosnet root domain in the CH class, as suggestions for "dns server" setting.
+// Return the number of NS records found
+static int
+dns_list_root_nameservers(void)
+{
+  // resolver state, local to each thread
+  struct __res_state chres;
+  res_state statp = &chres;
+  char ns_dom[NS_MAXDNAME];
+  char qstring[NS_MAXDNAME] = ".";
+  u_char answer[NS_PACKETSZ];
+  int anslen;
+  ns_msg m;
+  ns_rr rr;
+  int i, offs;
+  int nrec = 0;
+
+  init_chaos_dns_state(statp);
+
+  if ((anslen = res_nquery(statp, qstring, ns_c_chaos, ns_t_ns, (u_char *)&answer, sizeof(answer))) < 0) {
+    if (trace_dns) {
+      fprintf(stderr,"DNS: NS of %s failed, errcode %d: %s\n", qstring, statp->res_h_errno, hstrerror(statp->res_h_errno));
+    }
+    // Try to detect errors while resolving, such as the servers being unreachable.
+    // TRY_AGAIN is e.g. given when there is no response, which is rather bad for us.
+    if ((statp->res_h_errno == TRY_AGAIN) || (statp->res_h_errno == NO_RECOVERY))
+      return -2;
+    return -1;
+  }
+
+  if (trace_dns && verbose) {
+    fprintf(stderr,"DNS (%s): got response for NS of %s\n", __func__, qstring);
+    dns_describe_packet(answer, anslen);
+  }
+
+  if (ns_initparse((u_char *)&answer, anslen, &m) < 0) {
+    fprintf(stderr,"DNS (%s): ns_initparse failure code %d", __func__, statp->res_h_errno);
+    return -1;
+  }
+
+  if (ns_msg_getflag(m, ns_f_rcode) != ns_r_noerror) {
+    if (trace_dns) fprintf(stderr,"DNS (%s): bad response code %d\n", __func__, ns_msg_getflag(m, ns_f_rcode));
+    return -1;
+  }
+  if (ns_msg_count(m, ns_s_an) < 1) {
+    if (trace_dns) fprintf(stderr,"DNS (%s): bad answer count %d\n", __func__, ns_msg_count(m, ns_s_an));
+    return -1;
+  }
+  for (i = 0; i < ns_msg_count(m, ns_s_an); i++) {
+    if (ns_parserr(&m, ns_s_an, i, &rr) < 0) { 
+      if (trace_dns) fprintf(stderr,"DNS (%s): failed to parse answer RR %d\n", __func__, i);
+      return -1;
+    }
+    if (ns_rr_type(rr) == ns_t_ns) {
+      if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&ns_dom, sizeof(ns_dom))) < 0)
+	return -1;
+      printf(i == 0 ? "%s" : ",%s", ns_dom);
+      nrec++;
+    } else if (trace_dns) {
+      fprintf(stderr,"%% DNS (%s): warning - asked for NS for %s but got answer type %s\n", __func__,
+	      qstring, p_type(ns_rr_type(rr)));
+    }
+  }
+  return nrec;
+}
+
+
 static void 
 init_chaos_dns_state(res_state statp) 
 {
@@ -477,21 +555,32 @@ init_chaos_dns_state(res_state statp)
   }
   // make sure to make recursive requests
   statp->options |= RES_RECURSE;
+  statp->nscount = 0;
   // change nameserver
-  if (inet_aton(chaos_dns_server, &statp->nsaddr_list[0].sin_addr) <= 0) {
-    struct hostent *chdns;
-    if (((chdns = gethostbyname2(chaos_dns_server, AF_INET)) != NULL) 
-	&& (chdns->h_addrtype == AF_INET)) {
-      memcpy(&statp->nsaddr_list[0].sin_addr, chdns->h_addr_list[0], chdns->h_length);
-    } else {
-      perror("inet_aton/gethostbyname2 (chaos_dns_server does not parse)");
-      exit(1);
-    }
+  if (n_dns_servers == 0) {
+    fprintf(stderr,"DNS: adding default server %s\n", CHAOS_DNS_SERVER);
+    chaos_dns_servers[n_dns_servers++] = strdup(CHAOS_DNS_SERVER);
   }
-  statp->nsaddr_list[0].sin_family = AF_INET;
-  statp->nsaddr_list[0].sin_port = htons(53);
-  statp->nscount = 1;
-
+  for (int i = 0; i < n_dns_servers; i++) {
+    if (inet_aton(chaos_dns_servers[i], &statp->nsaddr_list[i].sin_addr) <= 0) {
+      struct hostent *chdns;
+      if (((chdns = gethostbyname2(chaos_dns_servers[i], AF_INET)) != NULL) 
+	  && (chdns->h_addrtype == AF_INET)) {
+	memcpy(&statp->nsaddr_list[i].sin_addr, chdns->h_addr_list[0], chdns->h_length);
+	statp->nscount++;
+      } else {
+	fprintf(stderr,"%%%% DNS: can not parse DNS server '%s'\n", chaos_dns_servers[i]);
+      }
+    } else {
+      statp->nscount++;
+    }
+    statp->nsaddr_list[i].sin_family = AF_INET;
+    statp->nsaddr_list[i].sin_port = htons(53);
+  }
+  if (statp->nscount == 0) {
+    fprintf(stderr,"%%%% DNS: could not parse any DNS servers!\n");
+    // @@@@ probably exit?
+  }
   // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
 }
 
@@ -530,19 +619,36 @@ init_chaos_dns(int do_forwarding)
 
 // parse a line beginning with "dns" (after parsing the "dns" keyword)
 // args:
-//   server 1.2.3.4
+//   server 1.2.3.4,dns.chaosnet.net
 //   addrdomain ch-addr.net.
 //   forwarder on/off
 //   trace on/off
 int
 parse_dns_config_line()
 {
-  char *tok = NULL;
+  char *sp, *ep, *tok = NULL;
   while ((tok = strtok(NULL," \t\r\n")) != NULL) {
-    if (strcasecmp(tok, "server") == 0) {
+    if ((strcasecmp(tok, "server") == 0) || (strcasecmp(tok,"servers") == 0)) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"dns: no server specified\n"); return -1; }
-      strncpy(chaos_dns_server, tok, sizeof(chaos_dns_server));
+      for (sp = tok, ep = index(tok, ','); ep != NULL; sp = ep+1, ep = index(ep+1, ',')) {
+	if (n_dns_servers > MAX_DNS_SERVERS) {
+	  fprintf(stderr,"Error in dns \"servers\" setting - too many servers listed, max %d\n", MAX_DNS_SERVERS);
+	  return -1;
+	}
+	*ep = '\0';		// zap comma
+	if (strlen(sp) == 0) {
+	  fprintf(stderr,"Syntax error in dns \"servers\" setting - empty server name/address?\n");
+	  return -1;
+	}
+	chaos_dns_servers[n_dns_servers++] = strdup(sp);
+      }
+      // add the single one, or the last one
+      if (strlen(sp) == 0) {
+	fprintf(stderr,"Syntax error in dns \"servers\" setting - empty server\n");
+	return -1;
+      }
+      chaos_dns_servers[n_dns_servers++] = strdup(sp);
     }
     else if (strcasecmp(tok, "addrdomain") == 0) {
       tok = strtok(NULL, " \t\r\n");
@@ -574,7 +680,11 @@ parse_dns_config_line()
       return -1;
     }
   }
-  return 0;
+  if (n_dns_servers == 0) {
+    fprintf(stderr,"dns: adding default server %s\n", CHAOS_DNS_SERVER);
+    chaos_dns_servers[n_dns_servers++] = strdup(CHAOS_DNS_SERVER);
+  }
+  return n_dns_servers;
 }
 
 void
@@ -585,11 +695,28 @@ print_config_dns()
   res_state statp = &chres;
   init_chaos_dns_state(statp);
 
-  printf("DNS config:\n Chaos DNS forwarder %s\n Chaos address domain %s\n DNS tracing %s\n",
-	 chaos_dns_server, chaos_address_domain, trace_dns ? "on" : "off");
+  printf("DNS config:\n");
+  if (n_dns_servers > 0) {
+    printf(" Chaos DNS server%s: ", n_dns_servers == 1 ? "" : "s");
+    for (int i = 0; i < n_dns_servers; i++)
+      printf(i == 0 ? "%s" : ",%s", chaos_dns_servers[i]);
+    printf("\n");
+  }
+  if (n_dns_servers == 1) {
+    printf(" Suggested DNS servers: ");
+    int nrec = dns_list_root_nameservers();
+    if (nrec > MAX_DNS_SERVERS) 
+      printf(" (pick MAX %d of those)", MAX_DNS_SERVERS);
+    printf("\n");
+  }
+  printf(" Chaos address domain %s\n DNS tracing %s\n",
+	 chaos_address_domain, trace_dns ? "on" : "off");
   if (trace_dns) {
     printf(" DNS options %#lx, nsaddrs %d, family %d, port %d", statp->options, statp->nscount, statp->nsaddr_list[0].sin_family, ntohs(statp->nsaddr_list[0].sin_port));
-    printf(", addr %s\n", inet_ntoa(statp->nsaddr_list[0].sin_addr));
+    printf(", servers ");
+    for (int i = 0; i < n_dns_servers; i++)
+      printf(i == 0 ? "%s" : ",%s", inet_ntoa(statp->nsaddr_list[i].sin_addr));
+    printf("\n");
   }
 
   int i, n;
