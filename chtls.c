@@ -214,6 +214,56 @@ tls_get_cert_cn(X509 *cert)
   return (u_char *)common_name_str;
 }
 
+static char *
+get_dp_url(DIST_POINT *dp)
+{
+  GENERAL_NAMES *gens;
+  GENERAL_NAME *gen;
+  int i, gtype;
+  ASN1_STRING *uri;
+  if (!dp->distpoint || dp->distpoint->type != 0)
+    return NULL;
+  gens = dp->distpoint->name.fullname;
+  for (i = 0; i < sk_GENERAL_NAME_num(gens); i++) {
+    gen = sk_GENERAL_NAME_value(gens, i);
+    uri = (ASN1_STRING *)GENERAL_NAME_get0_value(gen, &gtype);
+    if (gtype == GEN_URI && ASN1_STRING_length(uri) > 6) {
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+      char *uptr = (char *)ASN1_STRING_get0_data(uri);
+#else
+      char *uptr = (char *)ASN1_STRING_data(uri);
+#endif
+      return uptr;
+    }
+  }
+  return NULL;
+}
+
+static char *
+get_cert_crl_dp(X509 *cert)
+{
+  STACK_OF(DIST_POINT) *crldp;
+  char *urlptr;
+
+  crldp = (STACK_OF(DIST_POINT) *)X509_get_ext_d2i(cert, NID_crl_distribution_points, NULL, NULL);
+  if (crldp == NULL) {
+    if (tls_debug) fprintf(stderr,"%s: no crl distribution points in cert\n", __func__);
+    return NULL;
+  }
+
+  int i;
+  for (i = 0; i < sk_DIST_POINT_num(crldp); i++) { 
+    DIST_POINT *dp = sk_DIST_POINT_value(crldp, i);
+    urlptr = get_dp_url(dp);
+    if (urlptr != NULL) {
+      return urlptr;
+    }
+  }
+  if (tls_debug) fprintf(stderr,"%s: found no crl distribution point in cert?\n", __func__);
+  return NULL;
+}
+
+
 static SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
 {
     SSL_CTX *ctx;
@@ -1534,10 +1584,13 @@ validate_cert_vs_crl(X509 *cert, char *fname)
     int days = days_until_expiry(nupdate);
     if (days < 2) {
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated %s ", tls_crl_file, days < 0 ? "have been" : "be");
+      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated ", tls_crl_file, days < 0 ? "have been" : "be");
       ASN1_TIME_print(b, nupdate);
       BIO_printf(b, days < 0 ? " (%d days ago)" : " (in %d days)\n", days < 0 ? -days : days);
       BIO_free(b);
+      char *url = get_cert_crl_dp(cert);
+      if (url != NULL)
+	fprintf(stderr,"%%%%  Download a new CRL from %s\n", url);
     }
   }
   X509_STORE *store = X509_STORE_new();
