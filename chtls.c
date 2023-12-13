@@ -278,25 +278,35 @@ static void tls_configure_context(SSL_CTX *ctx)
 
     // Set up for CRL checking
     if (strlen(tls_crl_file) > 0) {
-      X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+      // Make a new store with X509_STORE_new to get stuff initialized properly.
+      // X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+      X509_STORE *store = X509_STORE_new();
+      // This means we need to reload locations set up above
+      if (X509_STORE_load_locations(store, tls_ca_file, NULL) == 0) {
+	fprintf(stderr,"Failed to load CA file %s\n", tls_ca_file);
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+      }
       FILE *crl_fd = fopen(tls_crl_file,"r");
       if (crl_fd == NULL) {
+	// This should already be checked in main()
 	fprintf(stderr,"%%%% Can not open CRL file %s\n", tls_crl_file);
 	perror("fopen");
-	return;
+	exit(EXIT_FAILURE);
       } 
       // Read the crl data
       X509_CRL *crl = PEM_read_X509_CRL(crl_fd, NULL, NULL, NULL);
       fclose(crl_fd);
       if (crl == NULL) {
 	fprintf(stderr,"%s: Failed to read CRL from file %s\n", __func__, tls_crl_file);
-	return;
+	exit(EXIT_FAILURE);
       }
       if (X509_STORE_add_crl(store, crl) == 0) {
 	fprintf(stderr,"%%%% %s: Failed to add CRL to store\n", __func__);
 	ERR_print_errors_fp(stderr);
-	return;
+	exit(EXIT_FAILURE);
       }
+      X509_STORE_set_get_issuer(store, X509_STORE_CTX_get1_issuer);
       // Verify the leaf cert against CRL
       X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
       // Update the SSL CTX store
@@ -305,7 +315,7 @@ static void tls_configure_context(SSL_CTX *ctx)
       if (SSL_CTX_set_purpose(ctx, X509_PURPOSE_ANY) == 0) { // @@@@ sloppy: server or client, depending
 	fprintf(stderr,"%%%% %s: Failed to set purpose\n", __func__);
 	ERR_print_errors_fp(stderr);
-	return;
+	exit(EXIT_FAILURE);
       }
     }
 }
@@ -1123,13 +1133,22 @@ tls_server(void *v)
       int err = SSL_get_error(ssl, v);
       if (err != SSL_ERROR_SSL) {
 	if (tls_debug) ERR_print_errors_fp(stderr);
+#if 0
       } else {
 	// @@@@ Experiment: what errors do we get in various situations?
 	int rr = ERR_get_error();
 	// Note: Applications should not make control flow decisions based on specific error codes.
 	int libno = ERR_GET_LIB(rr);
 	int rsn = ERR_GET_REASON(rr);
-	fprintf(stderr,"%%%% SSL error: lib %d, reason %d: %s\n", libno, rsn, ERR_error_string(rr, NULL));
+	// And here it shows why - apparently library def of ERR_LIB_X509V3 differs from include file.
+	fprintf(stderr,"%%%% SSL error: lib %d (X509v3 %d), reason %d (vfy failed %d): %s\n", libno, ERR_LIB_X509V3, rsn, SSL_R_CERTIFICATE_VERIFY_FAILED, ERR_error_string(rr, NULL));
+	// @@@@ This would be nice to have working, though!
+	if ((libno == ERR_LIB_X509V3) && (rsn == SSL_R_CERTIFICATE_VERIFY_FAILED)) {
+	  char ip[INET6_ADDRSTRLEN];
+	  fprintf(stderr,"%%%% TLS server: client at %s failed cert verification, closing\n",
+		    ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
+	}
+#endif
       }
       close(tsock);
       SSL_free(ssl);
@@ -1543,7 +1562,7 @@ validate_cert_vs_crl(X509 *cert, char *fname)
   int r = X509_verify_cert(ctx);
   if (r != 1) {
     int err = X509_STORE_CTX_get_error(ctx);
-    fprintf(stderr,"%%%% Warning: the cert %s faild verification: %s\n", fname, X509_verify_cert_error_string(err));
+    fprintf(stderr,"%%%% Warning: the cert %s failed verification: %s\n", fname, X509_verify_cert_error_string(err));
     return err;
   }
   return X509_V_OK;
