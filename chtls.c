@@ -1534,7 +1534,7 @@ validate_cert_vs_crl(X509 *cert, char *fname)
     int days = days_until_expiry(nupdate);
     if (days < 2) {
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-      BIO_printf(b, "%%%% Warning: CRL file %s expire%s ", tls_crl_file, days < 0 ? "d" : "s");
+      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated %s ", tls_crl_file, days < 0 ? "have been" : "be");
       ASN1_TIME_print(b, nupdate);
       BIO_printf(b, days < 0 ? " (%d days ago)" : " (in %d days)\n", days < 0 ? -days : days);
       BIO_free(b);
