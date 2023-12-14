@@ -69,3 +69,35 @@ Mostly so I remember (see also https://jamielinux.com/docs/openssl-certificate-a
 and for a combined client+server certificate
 
     openssl ca -config ../intermediate-ca.cnf -extensions usr_server_cert -days 375 -notext -md sha256 -in your.csr.pem -out certs/your.cert.pem
+
+## Certificate Revocation List (CRL)
+
+The CRL file lists certificates that have been revoked and are no longer valid. To make sure those certificates are not accepted by Chaos-over-TLS servers, you can download the current CRL file and specify it using the `crl` option, e.g.
+
+    tls key private/my.key.pem cert certs/my.cert.pem crl intermediate.crl.pem
+
+The CRL file is read on each new connection to the TLS server. At startup, cbridge checks your own certificate against the CRL and warns if it has been revoked.
+
+To make it easier to keep the CRL file up-to-date, the [crl-update.sh](crl-update.sh) script can be used. It should be run periodically, e.g. every night, and downloads and installs a new CRL file (if there is a new version of it).
+
+The CRL Distribution Point is currently https://chaosnet.net/intermediate.crl.pem.
+
+
+Conceptually, cbridge could download the CRL file internally, but it turns out that the `openssl` library is far too hairy and buggy(!) for this to be implemented in a reasonable way. The script should be OK. (If you have insights about this, please let me know!)
+
+### Why not OCSP
+
+The CRL list can, in the worst case, be out-of-date, since it is not updated on every TLS connection. An alternative is the Online Certificate Status Protocol (OCSP), which is a protocol for checking the certificate status on-the-fly. However, this requires a secure implementation of a server, and secure handling of the CA key at that server. The CRL approach is a compromise where the key handling can be very secure, which I deem more important.
+
+### How certificates are revoked and a new CRL is created
+
+Again, mostly so I remember.
+
+Revoking a cert:
+
+    openssl ca -config ../intermediate-ca.cnf -revoke certs/example.com.cert.pem
+
+Create a new CRL and install it:
+
+    openssl ca -config ../intermediate-ca.cnf -gencrl -out crl/intermediate.crl.pem
+    scp crl/intermediate.crl.pem chaosnet.net:chaosnet.net/
