@@ -93,7 +93,7 @@ if [ -r $OUTPUT ]; then
 	mv $OUTPUT $INCRL.new
 	[ -r $INCRL ] && mv $INCRL $INCRL.old.$onum
 	mv $INCRL.new $INCRL
-	echo CRL file updated - new CRL number $num - please restart cbridge!
+	echo CRL file updated - new CRL number $num
     fi
 fi
     
