@@ -83,7 +83,7 @@ To make it easier to keep the CRL file up-to-date, the [crl-update.sh](crl-updat
 The CRL Distribution Point is currently https://chaosnet.net/intermediate.crl.pem.
 
 
-Conceptually, cbridge could download the CRL file internally, but it turns out that the `openssl` library is far too hairy and buggy(!) for this to be implemented in a reasonable way. The script should be OK. (If you have insights about this, please let me know!)
+Conceptually, cbridge could download the CRL file internally, but it turns out that the OpenSSL library is far too hairy and buggy(!) for this to be implemented in a reasonable way. The script should be OK. (If you have insights about this, please let me know!)
 
 ### Why not OCSP
 
