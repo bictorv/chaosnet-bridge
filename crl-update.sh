@@ -11,7 +11,7 @@
 # since the FILE at the distribution point most likely is always later.)
 
 INPUT=$1
-if [ "X$INPUT" == "X" ]; then
+if [ "X$INPUT" = "X" ]; then
     INPUT=./cbridge.conf
 fi
 if [ ! -r $INPUT ]; then
@@ -21,7 +21,7 @@ fi
 
 TLSCONF=$(grep -v '^;' $INPUT | grep ^tls)
 
-if [ "X$TLSCONF" == "X" ]; then
+if [ "X$TLSCONF" = "X" ]; then
     echo No TLS configuration found in $INPUT
     exit 1
 fi
@@ -31,13 +31,13 @@ INDIR=$(dirname $INPUT)
 INCRL=$INDIR/$(echo $TLSCONF | grep crl | sed -E 's/.* crl ([^ ]+)( .*)?/\1/' )
 CERT=$INDIR/$(echo $TLSCONF | grep cert | sed -E 's/.* cert ([^ ]+)( .*)?/\1/' )
 CABUNDLE=$(echo $TLSCONF | grep ca-chain | sed -E 's/.* ca-chain ([^ ]+)( .*)?/\1/' )
-if [ "X$CABUNDLE" == "X" ]; then
+if [ "X$CABUNDLE" = "X" ]; then
     # Not found, use default name
    CABUNDLE=ca-chain.cert.pem
 fi
 CABUNDLE=$INDIR/$CABUNDLE
 
-if [ "X$CERT" == "X" -o ! -r $CERT ]; then
+if [ "X$CERT" = "X" -o ! -r $CERT ]; then
     echo Error: cert file $CERT not found
     exit 1
 fi
@@ -49,17 +49,24 @@ fi
 OUTPUT=/tmp/$(basename $INCRL)
 
 if [ -r $INCRL ]; then
-    next=$(openssl crl -in $INCRL -noout -nextupdate -dateopt iso_8601 | sed -e 's/.*=//')
-    last=$(openssl crl -in $INCRL -noout -lastupdate -dateopt iso_8601 | sed -e 's/.*=//')
-    # Needed for curl to parse it
-    # rlast=$(openssl crl -in $INCRL -noout -lastupdate -dateopt rfc_822 | sed -e 's/.*=//')
     url=$(openssl crl -in $INCRL -noout -text | grep URI: | sed -e 's/.*URI://')
+    if [ $(uname) = "Darwin" ]; then
+	# dateopt might be openssl3, and date requires format to parse date, and has other flags
+	next=$(openssl crl -in $INCRL -noout -nextupdate -dateopt iso_8601 | sed -e 's/.*=//')
+	last=$(openssl crl -in $INCRL -noout -lastupdate -dateopt iso_8601 | sed -e 's/.*=//')
 
-    # echo CRL last updated $last, next $next, URL $url
-
-    if [ $(date +"%s") -ge $(date -j -f "%F %TZ" "$next" +"%s") ]; then
-	# Keep this script running and it shouldn't happen very often
-	echo WARNING: The CRL $INCRL has expired!
+	if [ $(date +"%s") -ge $(date -j -f "%F %TZ" "$next" +"%s") ]; then
+	    # Keep this script running and it shouldn't happen very often
+	    echo WARNING: The CRL $INCRL has expired!
+	fi
+    elif [ $(uname) = "Linux" ]; then
+	# Linux might be running openssl1 which doesn't have dateopt, but date parses dates more frely
+	next=$(openssl crl -in $INCRL -noout -nextupdate | sed -e 's/.*=//')
+	last=$(openssl crl -in $INCRL -noout -lastupdate | sed -e 's/.*=//')
+	if [ $(date +"%s") -ge $(date -d "$next" +"%s") ]; then
+	    # Keep this script running and it shouldn't happen very often
+	    echo WARNING: The CRL $INCRL has expired!
+	fi
     fi
     # Fetch a new copy if it is newer
     rm -f $OUTPUT
@@ -68,7 +75,7 @@ else
     echo CRL file $INCRL does not exist, fetching a fresh copy
     # Find DP from $CERT
     url=$(openssl x509 -in $CERT -noout -ext crlDistributionPoints | grep URI: | sed -e 's/.*URI://')
-    if [ "X$url" == "X" ]; then
+    if [ "X$url" = "X" ]; then
 	# DP not found in cert (ok if it is old) - use default
 	url=https://chaosnet.net/intermediate.crl.pem
     fi
