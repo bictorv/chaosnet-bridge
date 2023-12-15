@@ -36,7 +36,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
             if info['addrs']:
                 gotip = True
         else:
-            # Last resort: try gethostbyname_ex - the given DNS server might not server IN class to us
+            # Last resort: try gethostbyname_ex - the given DNS server might not serve the IN class to us
             try:
                 hname,aliases,ips = socket.gethostbyname_ex(name)
                 gotip = True
@@ -51,6 +51,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
             except socket.error as msg:
                 if debug:
                     print("gethostbyname_ex: {}".format(msg), file=sys.stderr)
+                return ["ERROR {}".format(msg)]
     if debug:
         print("Got info {}".format(info), file=sys.stderr)
     resp = []

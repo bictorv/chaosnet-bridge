@@ -564,7 +564,11 @@ if __name__ == '__main__':
     if args.no_host_names:
         no_host_names = True
     if args.resolver:
-        dns_resolver_address = socket.gethostbyname(args.resolver)
+        try:
+            dns_resolver_address = socket.gethostbyname(args.resolver)
+        except OSError as msg:
+            print("Error resolving {!r}: {}".format(args.resolver, msg), file=sys.stderr)
+            exit(1);
     if -1 in args.subnets and len(args.subnets) != 1:
         # "all" supersedes all other
         args.subnets = [-1]

@@ -1077,7 +1077,11 @@ def print_directory_list(hd,fs):
 if __name__ == '__main__':
     codecs.register(LMregentry)
 
-    dns_resolver_addr = socket.gethostbyname(dns_resolver_name)
+    try:
+        dns_resolver_addr = socket.gethostbyname(dns_resolver_name)
+    except OSError as msg:
+        print("Error resolving {!r}: {}".format(dns_resolver_name, msg), file=sys.stderr)
+        exit(1)
 
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet FILE protocol client')
