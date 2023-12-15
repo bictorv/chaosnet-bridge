@@ -2162,13 +2162,13 @@ main(int argc, char *argv[])
   // Just a little user-friendly config validation
   if (do_tls || do_tls_server) {
     char *files[] = {tls_ca_file, tls_key_file, tls_cert_file, tls_crl_file };
-    char err[PATH_MAX + sizeof("cannot access ")+3];
+    char err[PATH_MAX + sizeof("%%%% cannot access ")+3];
     int i;
     for (i = 0; i < 4; i++) {
       if ((strlen(files[i]) > 0) && (access(files[i], R_OK) != 0)) {
-	sprintf(err,"cannot access \"%s\"",files[i]);
+	sprintf(err,"%%%% cannot access \"%s\"",files[i]);
 	perror(err);
-	printf(" configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\", crl \"%s\"\n",
+	fprintf(stderr,"%%%% configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\", crl \"%s\"\n",
 	       tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
 #if 0
 	exit(1);
