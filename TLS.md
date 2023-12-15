@@ -78,7 +78,7 @@ The CRL file lists certificates that have been revoked and are no longer valid. 
 
 The CRL file is read on each new connection to the TLS server. At startup, cbridge checks your own certificate against the CRL and warns if it has been revoked.
 
-To make it easier to keep the CRL file up-to-date, the [crl-update.sh](crl-update.sh) script can be used. It should be run periodically, e.g. every night, and downloads and installs a new CRL file (if there is a new version of it).
+To make it easier to keep the CRL file up-to-date, the [crl-update.sh](crl-update.sh) script can be used. It should be run periodically, e.g. every night, and downloads and installs a new CRL file (if there is a new version of it). Example files for running it nightly using systemctl are included (`cbridge-crl-update.timer` and `cbridge-crl-update.service`).
 
 The CRL Distribution Point is currently https://chaosnet.net/intermediate.crl.pem.
 
