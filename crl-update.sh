@@ -37,6 +37,10 @@ if [ "X$CABUNDLE" = "X" ]; then
 fi
 CABUNDLE=$INDIR/$CABUNDLE
 
+if [ "X$INCRL" = "X" ]; then
+    echo Error: no crl file configured
+    exit 1
+fi
 if [ "X$CERT" = "X" -o ! -r $CERT ]; then
     echo Error: cert file $CERT not found
     exit 1
@@ -91,17 +95,25 @@ if [ -r $OUTPUT ]; then
 	openssl crl -verify -noout -CAfile $CABUNDLE -in $OUTPUT
 	exit 1
     fi
-    nnext=$(openssl crl -in $OUTPUT -noout -nextupdate -dateopt iso_8601 | sed -e 's/.*=//')
-    if [ $(date +"%s") -ge $(date -j -f "%F %TZ" "$nnext" +"%s") ]; then
-	echo ERROR: The fetched CRL has expired already!
-    else
-	num=$(openssl crl -in $OUTPUT -noout -crlnumber | sed -e 's/.*=//')
-	[ -r $INCRL ] && onum=$(openssl crl -in $INCRL -noout -crlnumber | sed -e 's/.*=//')
-	mv $OUTPUT $INCRL.new
-	[ -r $INCRL ] && mv $INCRL $INCRL.old.$onum
-	mv $INCRL.new $INCRL
-	echo CRL file updated - new CRL number $num
+    if [ $(uname) = "Darwin" ]; then
+	nnext=$(openssl crl -in $OUTPUT -noout -nextupdate -dateopt iso_8601 | sed -e 's/.*=//')
+	if [ $(date +"%s") -ge $(date -j -f "%F %TZ" "$nnext" +"%s") ]; then
+	    echo ERROR: The fetched CRL has expired already!
+	    exit 1
+        fi
+    elif [ $(uname) = "Linux" ]; then
+	nnext=$(openssl crl -in $OUTPUT -noout -nextupdate | sed -e 's/.*=//')
+	if [ $(date +"%s") -ge $(date -d "$nnext" +"%s") ]; then
+	    echo ERROR: The fetched CRL has expired already!
+	    exit 1
+        fi
     fi
+    num=$(openssl crl -in $OUTPUT -noout -crlnumber | sed -e 's/.*=//')
+    [ -r $INCRL ] && onum=$(openssl crl -in $INCRL -noout -crlnumber | sed -e 's/.*=//')
+    mv $OUTPUT $INCRL.new
+    [ -r $INCRL ] && mv $INCRL $INCRL.old.$onum
+    mv $INCRL.new $INCRL
+    echo CRL file updated - new CRL number $num
 fi
     
 
