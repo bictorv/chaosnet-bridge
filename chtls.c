@@ -1639,6 +1639,30 @@ validate_cert_vs_crl(X509 *cert, char *fname)
   return X509_V_OK;
 }
 
+// Return 1 for server cert, otherwise 0
+static int
+server_cert_p(X509 *cert)
+{
+  int i;
+  EXTENDED_KEY_USAGE *extusage = X509_get_ext_d2i(cert, NID_ext_key_usage, &i, NULL);
+  if (extusage == NULL) {
+    fprintf(stderr,"%%%% Could not find extended key usage for cert\n");
+    ERR_print_errors_fp(stderr);
+  } else {
+    for (i = 0; i < sk_ASN1_OBJECT_num(extusage); i++) {
+      switch (OBJ_obj2nid(sk_ASN1_OBJECT_value(extusage, i))) {
+      case NID_server_auth:
+	if (tls_debug) fprintf(stderr,"Server cert\n");
+	return 1;
+      /* case NID_client_auth: */
+      /* 	fprintf(stderr,"Client cert\n"); */
+      /* 	break; */
+      }
+    }
+  }
+  return 0;
+}
+
 static int
 validate_cert_file(char *fname)
 {
@@ -1774,6 +1798,9 @@ validate_cert_file(char *fname)
   if (strlen(tls_crl_file) > 0) {
     if (validate_cert_vs_crl(cert, fname) != 0)
       return -1;
+  } else if (server_cert_p(cert)) {
+    fprintf(stderr,"%%%% Warning: your certificate can be used for a server, but you have not configured a crl.\n"
+	    "%%%% Please do - see https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md for how\n");
   }
   return 0;
 }
