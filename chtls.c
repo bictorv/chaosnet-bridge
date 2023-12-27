@@ -457,10 +457,11 @@ add_tls_route(int tindex, u_short srcaddr)
       fprintf(stderr,"%%%% Warning: Can not add %#o to mux list of tlsdest %d - list full, increase CHTLS_MAXMUX?\n", srcaddr, tindex);
   } else if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
     char ip[INET6_ADDRSTRLEN];
-    fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known (%#o) but route not found - NOT updating to %#o\n",
+    fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known but route not found - updating from %#o to %#o\n",
 	    tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
 	    tlsdest[tindex].tls_addr, srcaddr);
-    // @@@@ should perhaps close the conn, something is wrong?
+    // This is OK. Use the most recent.
+    tlsdest[tindex].tls_addr = srcaddr;
   } else {
     // nothing
   }
