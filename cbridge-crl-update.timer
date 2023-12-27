@@ -1,0 +1,18 @@
+# Install this and cbridge-crl-update.service /etc/systemd/system, run
+# sudo systemctl daemon-reload
+# then to enable and run the timer (which runs the service),
+# sudo systemctl enable --now cbridge-crl-update.timer
+# Check status with systemctl status cbridge-crl-update.timer or systemctl list-timers.
+[Unit]
+Description=Nightly update of the Chaosnet CRL file
+Documentation=https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md
+Requires=network-online.target
+After=network-online.target
+
+[Timer]
+OnCalendar=daily
+AccuracySec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

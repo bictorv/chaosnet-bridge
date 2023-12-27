@@ -1,4 +1,4 @@
-/* Copyright © 2005, 2017-2021 Björn Victor (bjorn@victor.se) */
+/* Copyright © 2005, 2017-2023 Björn Victor (bjorn@victor.se) */
 /*  Bridge program for various Chaosnet implementations. */
 /*
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -134,6 +134,7 @@ static char *private_hosts_file = NULL;
 char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
 char tls_key_file[PATH_MAX];	/* private key */
 char tls_cert_file[PATH_MAX];	/* certificate */
+char tls_crl_file[PATH_MAX];	/* certificate revocation list */
 // @@@@ should allow for different addrs on different ports/links. Punt for now.
 u_short tls_myaddr = 0;		/* my chaos address on TLS server links */
 int tls_server_port = 42042;
@@ -1984,7 +1985,8 @@ print_stats(int sig)
 #endif
 #if CHAOS_TLS
     if (do_tls || do_tls_server) {
-      printf("Using TLS myaddr %#o, keyfile %s, certfile %s, ca-chain %s\n", tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file);
+      printf("Using TLS myaddr %#o, keyfile %s, certfile %s, ca-chain %s, crl %s\n", 
+	     tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
       if (do_tls_server)
 	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
@@ -2166,15 +2168,15 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   // Just a little user-friendly config validation
   if (do_tls || do_tls_server) {
-    char *files[] = {tls_ca_file, tls_key_file, tls_cert_file };
+    char *files[] = {tls_ca_file, tls_key_file, tls_cert_file, tls_crl_file };
     char err[PATH_MAX + sizeof("%%%% cannot access ")+3];
     int i;
-    for (i = 0; i < 3; i++) {
-      if (access(files[i], R_OK) != 0) {
+    for (i = 0; i < 4; i++) {
+      if ((strlen(files[i]) > 0) && (access(files[i], R_OK) != 0)) {
 	sprintf(err,"%%%% cannot access \"%s\"",files[i]);
 	perror(err);
-	fprintf(stderr,"%%%%  configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", 
-		tls_key_file, tls_cert_file, tls_ca_file);
+	fprintf(stderr,"%%%% configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\", crl \"%s\"\n",
+	       tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
 #if 0
 	exit(1);
 #endif

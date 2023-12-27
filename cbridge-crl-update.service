@@ -1,0 +1,19 @@
+# Install in /etc/systemd/system together with the cbridge-crl-update.timer.
+# This service run by the cbridge-crl-update.timer
+# so it does NOT need to be enabled or started.
+[Unit]
+Description=Update Chaosnet CRL file
+Documentation=https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md
+Requires=network-online.target
+Wants=nss-lookup.target
+After=network-online.target
+After=nss-lookup.target
+
+[Service]
+# YOU NEED TO UPDATE THE PATHS HERE MANUALLY - note also the cbridge.conf parameter
+Type=simple
+WorkingDirectory=/home/pi/chaosnet-bridge/
+ExecStart=/home/pi/chaosnet-bridge/crl-update.sh /home/pi/chaosnet-bridge/cbridge.conf
+
+[Install]
+WantedBy=multi-user.target

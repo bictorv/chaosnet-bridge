@@ -15,6 +15,7 @@
 */
 
 #include "cbridge.h"
+#include <openssl/x509v3.h>
 
 // when to start warning about approaching cert expiry
 #define TLS_CERT_EXPIRY_WARNING_DAYS 90
@@ -24,6 +25,7 @@ extern u_short tls_myaddr;
 extern char tls_ca_file[];
 extern char tls_key_file[];
 extern char tls_cert_file[];
+extern char tls_crl_file[];
 extern int do_tls_ipv6;
 extern int do_tls_server;
 extern int tls_server_port;
@@ -51,6 +53,10 @@ parse_tls_config_line()
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no ca-chain file specified\n"); return -1; }
       strncpy(tls_ca_file, tok, PATH_MAX);
+    } else if (strncmp(tok,"crl",sizeof("crl")) == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no crl file specified\n"); return -1; }
+      strncpy(tls_crl_file, tok, PATH_MAX);
     } else if (strcmp(tok,"expirywarn") == 0) {
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no value for expirywarn specified\n"); return -1; }
@@ -208,6 +214,56 @@ tls_get_cert_cn(X509 *cert)
   return (u_char *)common_name_str;
 }
 
+static char *
+get_dp_url(DIST_POINT *dp)
+{
+  GENERAL_NAMES *gens;
+  GENERAL_NAME *gen;
+  int i, gtype;
+  ASN1_STRING *uri;
+  if (!dp->distpoint || dp->distpoint->type != 0)
+    return NULL;
+  gens = dp->distpoint->name.fullname;
+  for (i = 0; i < sk_GENERAL_NAME_num(gens); i++) {
+    gen = sk_GENERAL_NAME_value(gens, i);
+    uri = (ASN1_STRING *)GENERAL_NAME_get0_value(gen, &gtype);
+    if (gtype == GEN_URI && ASN1_STRING_length(uri) > 6) {
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+      char *uptr = (char *)ASN1_STRING_get0_data(uri);
+#else
+      char *uptr = (char *)ASN1_STRING_data(uri);
+#endif
+      return uptr;
+    }
+  }
+  return NULL;
+}
+
+static char *
+get_cert_crl_dp(X509 *cert)
+{
+  STACK_OF(DIST_POINT) *crldp;
+  char *urlptr;
+
+  crldp = (STACK_OF(DIST_POINT) *)X509_get_ext_d2i(cert, NID_crl_distribution_points, NULL, NULL);
+  if (crldp == NULL) {
+    if (tls_debug) fprintf(stderr,"%s: no crl distribution points in cert\n", __func__);
+    return NULL;
+  }
+
+  int i;
+  for (i = 0; i < sk_DIST_POINT_num(crldp); i++) { 
+    DIST_POINT *dp = sk_DIST_POINT_value(crldp, i);
+    urlptr = get_dp_url(dp);
+    if (urlptr != NULL) {
+      return urlptr;
+    }
+  }
+  if (tls_debug) fprintf(stderr,"%s: found no crl distribution point in cert?\n", __func__);
+  return NULL;
+}
+
+
 static SSL_CTX *tls_create_some_context(const SSL_METHOD *method)
 {
     SSL_CTX *ctx;
@@ -266,9 +322,52 @@ static void tls_configure_context(SSL_CTX *ctx)
       }
     // Make sure to verify the peer (both server and client)
     // Consider adding a callback to validate CN/subjectAltName?
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     // go up to "higher level CA"
     SSL_CTX_set_verify_depth(ctx, 2);
+
+    // Set up for CRL checking
+    if (strlen(tls_crl_file) > 0) {
+      // Make a new store with X509_STORE_new to get stuff initialized properly.
+      // X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+      X509_STORE *store = X509_STORE_new();
+      // This means we need to reload locations set up above
+      if (X509_STORE_load_locations(store, tls_ca_file, NULL) == 0) {
+	fprintf(stderr,"Failed to load CA file %s\n", tls_ca_file);
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+      }
+      FILE *crl_fd = fopen(tls_crl_file,"r");
+      if (crl_fd == NULL) {
+	// This should already be checked in main()
+	fprintf(stderr,"%%%% Can not open CRL file %s\n", tls_crl_file);
+	perror("fopen");
+	exit(EXIT_FAILURE);
+      } 
+      // Read the crl data
+      X509_CRL *crl = PEM_read_X509_CRL(crl_fd, NULL, NULL, NULL);
+      fclose(crl_fd);
+      if (crl == NULL) {
+	fprintf(stderr,"%s: Failed to read CRL from file %s\n", __func__, tls_crl_file);
+	exit(EXIT_FAILURE);
+      }
+      if (X509_STORE_add_crl(store, crl) == 0) {
+	fprintf(stderr,"%%%% %s: Failed to add CRL to store\n", __func__);
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+      }
+      X509_STORE_set_get_issuer(store, X509_STORE_CTX_get1_issuer);
+      // Verify the leaf cert against CRL
+      X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
+      // Update the SSL CTX store
+      SSL_CTX_set_cert_store(ctx, store);
+      // Now set up the verification params
+      if (SSL_CTX_set_purpose(ctx, X509_PURPOSE_ANY) == 0) { // @@@@ sloppy: server or client, depending
+	fprintf(stderr,"%%%% %s: Failed to set purpose\n", __func__);
+	ERR_print_errors_fp(stderr);
+	exit(EXIT_FAILURE);
+      }
+    }
 }
 
 
@@ -581,7 +680,11 @@ static int tcp_bind_socket(int type, u_short port)
 static int tcp_client_connect(struct sockaddr *sin)
 {
   int sock, unlucky = 1, foo;
+  u_long ntimes = 0;
+  char ip[INET6_ADDRSTRLEN];
   
+  (void)ip46_ntoa(sin, ip, sizeof(ip));
+
   while (unlucky) {
     if (tls_debug) fprintf(stderr,"TCP connect: socket family %d (%s)\n",
 			   sin->sa_family,
@@ -591,10 +694,9 @@ static int tcp_client_connect(struct sockaddr *sin)
       perror("socket(tcp)");
       exit(1);
     }
-
+    
     if (tls_debug) {
-      char ip[INET6_ADDRSTRLEN];
-      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip46_ntoa(sin, ip, sizeof(ip)),
+      fprintf(stderr,"TCP connect: connecting to %s port %d\n", ip,
 	      ntohs((sin->sa_family == AF_INET
 		     ? ((struct sockaddr_in *)sin)->sin_port
 		     : ((struct sockaddr_in6 *)sin)->sin6_port)));
@@ -608,12 +710,21 @@ static int tcp_client_connect(struct sockaddr *sin)
       // back off and try again - the other end might be down
       if (tls_debug)
 	fprintf(stderr,"TCP connect: trying again in %d s\n", unlucky);
+      else if (ntimes == 3)
+	fprintf(stderr,"%%%% TLS: connection to %s failed %lu times, trying again in %d s\n", ip, ntimes, unlucky);
       if ((foo = sleep(unlucky)) != 0) {
 	fprintf(stderr,"TCP connect: sleep returned %d\n", foo);
       }
       // Backoff: increase sleep until 30s, then go back to 10s
       unlucky++;
-      if (unlucky > 30) unlucky /= 3;
+      ntimes++;
+      if (unlucky > 30) {
+	unlucky /= 3;
+	// This happens the first time after sleeping 465 seconds + connection timeouts
+	// then every 275 seconds + timeouts
+	fprintf(stderr,"%%%% TLS: connection to %s failed %lu times, but still retrying - is the server up?\n",
+		ip, ntimes);
+      }
       if (close(sock) < 0)
 	perror("close(tcp_client_connect)");
       continue;
@@ -624,7 +735,7 @@ static int tcp_client_connect(struct sockaddr *sin)
   // log stuff about the connection
   if (tls_debug) {
     char ip[INET6_ADDRSTRLEN];
-    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip46_ntoa(sin, ip, sizeof(ip)),
+    fprintf(stderr,"TCP connect: connected to %s port %d\n", ip,
 	    ntohs((sin->sa_family == AF_INET
 		   ? ((struct sockaddr_in *)sin)->sin_port
 		   : ((struct sockaddr_in6 *)sin)->sin6_port)));
@@ -1068,11 +1179,28 @@ tls_server(void *v)
     }
     SSL_set_fd(ssl, tsock);
     int v = 0;
+    ERR_clear_error();		/* try to get the latest error below, not some old */
     if ((v = SSL_accept(ssl)) <= 0) {
       // this already catches verification - client end gets "SSL alert number 48"?
       int err = SSL_get_error(ssl, v);
       if (err != SSL_ERROR_SSL) {
 	if (tls_debug) ERR_print_errors_fp(stderr);
+#if 0
+      } else {
+	// @@@@ Experiment: what errors do we get in various situations?
+	int rr = ERR_get_error();
+	// Note: Applications should not make control flow decisions based on specific error codes.
+	int libno = ERR_GET_LIB(rr);
+	int rsn = ERR_GET_REASON(rr);
+	// And here it shows why - apparently library def of ERR_LIB_X509V3 differs from include file.
+	fprintf(stderr,"%%%% SSL error: lib %d (X509v3 %d), reason %d (vfy failed %d): %s\n", libno, ERR_LIB_X509V3, rsn, SSL_R_CERTIFICATE_VERIFY_FAILED, ERR_error_string(rr, NULL));
+	// @@@@ This would be nice to have working, though!
+	if ((libno == ERR_LIB_X509V3) && (rsn == SSL_R_CERTIFICATE_VERIFY_FAILED)) {
+	  char ip[INET6_ADDRSTRLEN];
+	  fprintf(stderr,"%%%% TLS server: client at %s failed cert verification, closing\n",
+		    ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
+	}
+#endif
       }
       close(tsock);
       SSL_free(ssl);
@@ -1091,6 +1219,7 @@ tls_server(void *v)
 	  close(tsock);
 	  continue;
 	}
+
 	u_char *client_cn = tls_get_cert_cn(ssl_client_cert);
 	u_short client_chaddr = 0;
 #if CHAOS_DNS
@@ -1144,6 +1273,15 @@ tls_server(void *v)
 	  continue;
 	}
 #endif
+	// Get serial
+	const ASN1_INTEGER *serialp = X509_get0_serialNumber(ssl_client_cert);
+	if (serialp != NULL) {
+	  u_long serial = ASN1_INTEGER_get(serialp);
+	  char ip[INET6_ADDRSTRLEN];
+	  // @@@@ only do this once per client/serial
+	  fprintf(stderr,"TLS client connecting: serial %6lX at IP %s, CN %s\n", serial, 
+		  ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
+	}
 	// create tlsdest, fill in stuff
 	add_server_tlsdest(client_cn, tsock, ssl, (struct sockaddr *)&caddr, clen, client_chaddr);
     } else {
@@ -1217,6 +1355,7 @@ handle_tls_input(int tindex)
   // verify it is on tls_myaddr subnet
   if ((srcaddr == 0) || ((srcaddr & 0xff00) != (tlsdest[tindex].tls_myaddr & 0xff00))) {
     if (tls_debug) print_tls_warning(tindex, cha, "hw source address not on my net");
+    else if (verbose) fprintf(stderr,"TLS: Hardware source address %#o is not on my net %#o\n", srcaddr, (tlsdest[tindex].tls_myaddr & 0xff00)>>8);
     PTLOCKN(linktab_lock,"linktab_lock");
     srcaddr = ch_srcaddr(cha);
     if (srcaddr > 0xff)
@@ -1230,7 +1369,7 @@ handle_tls_input(int tindex)
   int cks;
   if ((cks = ch_checksum((u_char *)&data, len)) != 0) {
     // "This can't possibly happen!" - really!
-    if (1 || tls_debug) print_tls_warning(tindex, cha, "bad checksum");
+    if (1 || tls_debug) print_tls_warning(tindex, cha, "BAD CHECKSUM");
     PTLOCKN(linktab_lock,"linktab_lock");
     srcaddr = ch_srcaddr(cha);
     if (srcaddr > 0xff)
@@ -1424,7 +1563,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 }
 
 static int
-days_until_expiry(ASN1_TIME *x)
+days_until_expiry(const ASN1_TIME *x)
 {
   // find out how many days until expiry
   ASN1_TIME *now;
@@ -1438,6 +1577,90 @@ days_until_expiry(ASN1_TIME *x)
     abort();
   }
   return days;
+}
+
+static int
+validate_cert_vs_crl(X509 *cert, char *fname)
+{
+  // Ideally, read the crl from the dist_point in the cert
+  FILE *f = fopen(tls_crl_file,"r");
+  if (f == NULL) {
+    perror("crl fopen");
+    return -1;
+  }
+  X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
+  if (crl == NULL) {
+    perror("PEM_read_X509_CRL");
+    ERR_print_errors_fp(stderr);
+    fclose(f);
+    return -1;
+  }
+  
+  // Check if it should be updated
+  const ASN1_TIME *nupdate = X509_CRL_get0_nextUpdate(crl);
+  if (nupdate != NULL) {
+    int days = days_until_expiry(nupdate);
+    if (days < 2) {
+      BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated ", tls_crl_file, days < 0 ? "have been" : "be");
+      ASN1_TIME_print(b, nupdate);
+      BIO_printf(b, days < 0 ? " (%d days ago)" : " (in %d days)\n", days < 0 ? -days : days);
+      BIO_free(b);
+      char *url = get_cert_crl_dp(cert);
+      if (url != NULL)
+	fprintf(stderr,"%%%%  Download a new CRL from %s\n", url);
+    }
+  }
+  X509_STORE *store = X509_STORE_new();
+  X509_STORE_CTX *ctx = X509_STORE_CTX_new();
+  // Why not validate the chain as well
+  if (X509_STORE_load_locations(store, tls_ca_file, NULL) == 0) {
+    perror("X509_STORE_load_locations");
+    ERR_print_errors_fp(stderr);
+    return -1;
+  }
+
+  // First set the flag for the store: verify the leaf cert only
+  X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
+  // Use this CRL
+  X509_STORE_add_crl(store, crl);
+  // Init the ctx so it has the store and cert
+  X509_STORE_CTX_init(ctx, store, cert, NULL);
+  // We're verifying it to be a client cert
+  X509_STORE_CTX_set_purpose(ctx, X509_PURPOSE_SSL_CLIENT);
+
+  // Now check the cert!
+  int r = X509_verify_cert(ctx);
+  if (r != 1) {
+    int err = X509_STORE_CTX_get_error(ctx);
+    fprintf(stderr,"%%%% Warning: the cert %s failed verification: %s\n", fname, X509_verify_cert_error_string(err));
+    return err;
+  }
+  return X509_V_OK;
+}
+
+// Return 1 for server cert, otherwise 0
+static int
+server_cert_p(X509 *cert)
+{
+  int i;
+  EXTENDED_KEY_USAGE *extusage = X509_get_ext_d2i(cert, NID_ext_key_usage, &i, NULL);
+  if (extusage == NULL) {
+    fprintf(stderr,"%%%% Could not find extended key usage for cert\n");
+    ERR_print_errors_fp(stderr);
+  } else {
+    for (i = 0; i < sk_ASN1_OBJECT_num(extusage); i++) {
+      switch (OBJ_obj2nid(sk_ASN1_OBJECT_value(extusage, i))) {
+      case NID_server_auth:
+	if (tls_debug) fprintf(stderr,"Server cert\n");
+	return 1;
+      /* case NID_client_auth: */
+      /* 	fprintf(stderr,"Client cert\n"); */
+      /* 	break; */
+      }
+    }
+  }
+  return 0;
 }
 
 static int
@@ -1460,7 +1683,7 @@ validate_cert_file(char *fname)
   fclose(f);
 
   // Check approaching expiration
-  ASN1_TIME *notAfter = X509_get_notAfter(cert);
+  const ASN1_TIME *notAfter = X509_get0_notAfter(cert);
   if (notAfter == NULL) {
     fprintf(stderr,"%%%% TLS: can't find expiration of cert %s\n", fname);
     return -1;
@@ -1571,6 +1794,14 @@ validate_cert_file(char *fname)
     }
   }
 #endif // CHAOS_DNS
+  // Check that it hasn't been revoked
+  if (strlen(tls_crl_file) > 0) {
+    if (validate_cert_vs_crl(cert, fname) != 0)
+      return -1;
+  } else if (server_cert_p(cert)) {
+    fprintf(stderr,"%%%% Warning: your certificate can be used for a server, but you have not configured a crl.\n"
+	    "%%%% Please do - see https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md for how\n");
+  }
   return 0;
 }
 
