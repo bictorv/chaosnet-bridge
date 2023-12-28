@@ -772,8 +772,14 @@ void *tls_connector(void *arg)
     // connect to server
     int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
 
-    if (tls_debug)
-      fprintf(stderr,"TLS client: connected\n");
+    if (tls_debug) {
+      char ip[INET6_ADDRSTRLEN];
+      fprintf(stderr,"TLS client: connected to %s (%s port %d)\n", td->tls_name,
+	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)),
+	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
+		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
+		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
+    }
 
     if ((ssl = SSL_new(ctx)) == NULL) {
       fprintf(stderr,"tls_connector: SSL_new failed");
