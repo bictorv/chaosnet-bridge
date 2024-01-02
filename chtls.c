@@ -1434,9 +1434,11 @@ handle_tls_input(int tindex)
       fprintf(stderr,"TLS: source addr %#o has DNS host name '%s' (TLS name '%s')\n", srcaddr, hname, tlsdest[tindex].tls_name);
 #endif
     srcrt = add_tls_route(tindex, srcaddr);
-  } else
-    if (tls_debug) fprintf(stderr,"TLS: Route found to source %#o for tlsdest %d: dest %#o\n",
-			   srcaddr, tindex, srcrt->rt_dest);
+  } 
+#if 0
+  else if (tls_debug) fprintf(stderr,"TLS: Route found to source %#o for tlsdest %d: dest %#o\n",
+			      srcaddr, tindex, srcrt->rt_dest);
+#endif
 
   // forward to destination
   forward_chaos_pkt(srcrt, srcrt != NULL ? srcrt->rt_cost : RTCOST_DIRECT,
