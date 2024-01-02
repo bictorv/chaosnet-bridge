@@ -49,7 +49,8 @@ int do_dns_forwarding = 0;
 static int n_dns_servers = 0;
 #define MAX_DNS_SERVERS MAXNS	// MAXNS from resolv.h
 static char *chaos_dns_servers[MAX_DNS_SERVERS];
-static char chaos_address_domain[NS_MAXDNAME] = CHAOS_ADDR_DOMAIN;
+// Need to have space for "%o." prefix
+static char chaos_address_domain[NS_MAXDNAME-7] = CHAOS_ADDR_DOMAIN;
 
 // consumer/producer lock and semaphores
 static pthread_mutex_t dns_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -137,7 +138,7 @@ dns_responder(u_char *rfc, int len)
 // from libresolv, ns_parse
 // * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
 // * Copyright (c) 1996,1999 by Internet Software Consortium.
-int
+/* static */ int // can't be static because declared in arpa/nameser.h
 ns_skiprr(const u_char *ptr, const u_char *eom, ns_sect section, int count) {
 	const u_char *optr = ptr;
 
@@ -160,7 +161,7 @@ ns_skiprr(const u_char *ptr, const u_char *eom, ns_sect section, int count) {
 	  return -EMSGSIZE; // RETERR(EMSGSIZE);
 	return (ptr - optr);
 }
-int
+static int
 truncate_dns_pkt(u_char *pkt, int len)
 {
   // truncate a [raw] packet "manually"
@@ -234,6 +235,7 @@ dns_forwarder_thread(void *v)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   u_char answer[NS_PACKETSZ*4];	/* fit ridiculous amounts to avoid ns_initparse breaking */
   int anslen;
   u_char ans[CH_PK_MAXLEN];	/* incl header+trailer */
@@ -338,6 +340,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char qstring[NS_MAXDNAME];
   u_char answer[NS_PACKETSZ];
   int anslen;
@@ -409,6 +412,7 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char a_dom[NS_MAXDNAME];
   int a_addr;
   char qstring[NS_MAXDNAME];
@@ -486,6 +490,7 @@ dns_list_root_nameservers(void)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char ns_dom[NS_MAXDNAME];
   char qstring[NS_MAXDNAME] = ".";
   u_char answer[NS_PACKETSZ];
@@ -545,9 +550,105 @@ dns_list_root_nameservers(void)
 }
 
 
+// debug
+#if 1
+static void print_resolver_state(struct __res_state *sp)
+{
+  printf("DNS resolver state in thread %p:\n", (void *)pthread_self());
+  printf(" Retrans %d, retry %d\n", sp->retrans, sp->retry);
+  printf(" Servers: %d\n ", sp->nscount);
+  for (int i = 0; i < sp->nscount; i++) {
+    printf(" %s:%d", inet_ntoa(sp->nsaddr_list[i].sin_addr), ntohs(sp->nsaddr_list[i].sin_port));
+  }
+  printf("\n Domains:\n ");
+  for (int i = 0; i < MAXDNSRCH && sp->dnsrch[i] != NULL; i++)
+    printf(" %s", sp->dnsrch[i]);
+  printf("\n Options:\n ");
+  if (sp->options & RES_INIT) printf(" Init");
+  if (sp->options & RES_DEBUG) printf(" Debug");
+  if (sp->options & RES_AAONLY) printf(" AuthOnly");
+  if (sp->options & RES_USEVC) printf(" VC");
+  if (sp->options & RES_PRIMARY) printf(" Primary");
+  if (sp->options & RES_IGNTC) printf(" IgnTC");
+  if (sp->options & RES_RECURSE) printf(" Recurse");
+  if (sp->options & RES_DEFNAMES) printf(" DefNames");
+  if (sp->options & RES_STAYOPEN) printf(" StayOpen");
+  if (sp->options & RES_DNSRCH) printf(" LocalTree");
+  // insecure
+  if (sp->options & RES_NOALIASES) printf(" NoAlias");
+#ifdef RES_USE_INET6
+  if (sp->options & RES_USE_INET6) printf(" Inet6");
+#endif
+  if (sp->options & RES_ROTATE) printf(" Rotate");
+  if (sp->options & RES_NOCHECKNAME) printf(" NoCheck");
+  if (sp->options & RES_KEEPTSIG) printf(" KeepTSIG");
+  if (sp->options & RES_BLAST) printf(" Blast");
+#ifdef RES_NO_NIBBLE
+  if (sp->options & RES_NO_NIBBLE) printf(" NoNibble");
+#endif
+#ifdef RES_NO_BITSTRING
+  if (sp->options & RES_NO_BITSTRING) printf(" NoBitstring");
+#endif
+  if (sp->options & RES_NOTLDQUERY) printf(" NoTLD");
+  if (sp->options & RES_USE_DNSSEC) printf(" DNSSec");
+#ifdef RES_USE_DNAME
+  if (sp->options & RES_USE_DNAME) printf(" Dname");
+#endif
+#ifdef RES_USE_A6
+  if (sp->options & RES_USE_A6) printf(" A6");
+#endif
+  if (sp->options & RES_USE_EDNS0) printf(" EDNS0");
+#ifdef RES_NO_NIBBLE2
+  if (sp->options & RES_NO_NIBBLE2) printf(" NoNibble2");
+#endif
+  printf("\n");
+}
+#endif
+
+static int n_parsed_servers = 0;
+static struct sockaddr_in parsed_servers[MAX_DNS_SERVERS];
+
 static void 
 init_chaos_dns_state(res_state statp) 
 {
+  // first parse the server names (once), then res_ninit and change nsaddr_list
+  if (n_parsed_servers == 0)	// Initialize
+    memset(&parsed_servers, 0, sizeof(parsed_servers));
+    
+  // Use default
+  if (n_dns_servers == 0) {
+    fprintf(stderr,"DNS: adding default server %s\n", CHAOS_DNS_SERVER);
+    chaos_dns_servers[n_dns_servers++] = strdup(CHAOS_DNS_SERVER);
+  }
+  // parse nameservers
+  if (n_parsed_servers == 0) {
+    // parse them only first time - under Linux, it somehow fails the second time around (in another thread)
+    for (int i = 0; i < n_dns_servers; i++) {
+      if (inet_aton(chaos_dns_servers[i], &parsed_servers[n_parsed_servers].sin_addr) <= 0) {
+	struct addrinfo *he, hi;
+	memset(&hi, 0, sizeof(hi));
+	hi.ai_family = AF_INET;
+	hi.ai_flags = AI_ADDRCONFIG;
+	int val = getaddrinfo(chaos_dns_servers[i], NULL, &hi, &he);
+	if (val == 0) {
+	  if (he->ai_family == AF_INET) {
+	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	    memcpy(&parsed_servers[n_parsed_servers].sin_addr, &s->sin_addr, sizeof(struct in_addr));
+	    n_parsed_servers++;
+	    if (trace_dns) fprintf(stderr,"DNS: parsed server '%s' OK\n", chaos_dns_servers[i]);
+	  } else {
+	    fprintf(stderr,"%%%% DNS: wrong address family %d for '%s'\n", he->ai_family, chaos_dns_servers[i]);
+	  }
+	} else {
+	  fprintf(stderr,"%%%% DNS: can not parse DNS server '%s': %s (%s)\n", chaos_dns_servers[i], gai_strerror(val), strerror(errno));
+	}
+      } else {
+	if (trace_dns) fprintf(stderr,"DNS: parsed server '%s' OK\n", chaos_dns_servers[i]);
+	n_parsed_servers++;		// Numeric address parsed
+      }
+    }
+    if (trace_dns) fprintf(stderr,"DNS: thread %p parsed %d servers\n", (void *)pthread_self(), n_parsed_servers);
+  }
   // initialize resolver library
   if (res_ninit(statp) < 0) {
     fprintf(stderr,"Can't init statp\n");
@@ -556,30 +657,21 @@ init_chaos_dns_state(res_state statp)
   // make sure to make recursive requests
   statp->options |= RES_RECURSE;
   statp->nscount = 0;
-  // change nameserver
-  if (n_dns_servers == 0) {
-    fprintf(stderr,"DNS: adding default server %s\n", CHAOS_DNS_SERVER);
-    chaos_dns_servers[n_dns_servers++] = strdup(CHAOS_DNS_SERVER);
-  }
-  for (int i = 0; i < n_dns_servers; i++) {
-    if (inet_aton(chaos_dns_servers[i], &statp->nsaddr_list[i].sin_addr) <= 0) {
-      struct hostent *chdns;
-      if (((chdns = gethostbyname2(chaos_dns_servers[i], AF_INET)) != NULL) 
-	  && (chdns->h_addrtype == AF_INET)) {
-	memcpy(&statp->nsaddr_list[i].sin_addr, chdns->h_addr_list[0], chdns->h_length);
-	statp->nscount++;
-      } else {
-	fprintf(stderr,"%%%% DNS: can not parse DNS server '%s'\n", chaos_dns_servers[i]);
-      }
-    } else {
-      statp->nscount++;
-    }
+  // Now copy the parsed server addrs
+  for (int i = 0; i < n_parsed_servers; i++) {
+    memcpy(&statp->nsaddr_list[i].sin_addr, &parsed_servers[i].sin_addr, sizeof(struct in_addr));
     statp->nsaddr_list[i].sin_family = AF_INET;
     statp->nsaddr_list[i].sin_port = htons(53);
   }
+  statp->nscount = n_parsed_servers;
+
   if (statp->nscount == 0) {
     fprintf(stderr,"%%%% DNS: could not parse any DNS servers!\n");
     // @@@@ probably exit?
+#if 1
+  } else if (trace_dns) {
+    print_resolver_state(statp);
+#endif
   }
   // what about the timeout? RES_TIMEOUT=5s, statp->retrans (RES_MAXRETRANS=30 s? ms?), ->retry (RES_DFLRETRY=2, _MAXRETRY=5)
 }
@@ -693,9 +785,10 @@ print_config_dns()
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   init_chaos_dns_state(statp);
 
-  printf("DNS config:\n");
+  printf("DNS config in thread %p:\n", (void *)pthread_self());
   if (n_dns_servers > 0) {
     printf(" Chaos DNS server%s: ", n_dns_servers == 1 ? "" : "s");
     for (int i = 0; i < n_dns_servers; i++)
@@ -825,13 +918,14 @@ dns_show_section(int sect, ns_msg m)
   }
 }
 
-void dumppkt_raw(unsigned char *ucp, int cnt);
+extern void dumppkt_raw(unsigned char *ucp, int cnt);
 
 static void
 dns_describe_packet(u_char *pkt, int len)
 {
   // resolver state, local to each thread
   struct __res_state chres;
+  memset(&chres, 0, sizeof(chres));
   res_state statp = &chres;
   ns_msg m;
 
