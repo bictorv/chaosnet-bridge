@@ -235,6 +235,7 @@ dns_forwarder_thread(void *v)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   u_char answer[NS_PACKETSZ*4];	/* fit ridiculous amounts to avoid ns_initparse breaking */
   int anslen;
   u_char ans[CH_PK_MAXLEN];	/* incl header+trailer */
@@ -339,6 +340,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char qstring[NS_MAXDNAME];
   u_char answer[NS_PACKETSZ];
   int anslen;
@@ -410,6 +412,7 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char a_dom[NS_MAXDNAME];
   int a_addr;
   char qstring[NS_MAXDNAME];
@@ -487,6 +490,7 @@ dns_list_root_nameservers(void)
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   char ns_dom[NS_MAXDNAME];
   char qstring[NS_MAXDNAME] = ".";
   u_char answer[NS_PACKETSZ];
@@ -781,6 +785,7 @@ print_config_dns()
   // resolver state, local to each thread
   struct __res_state chres;
   res_state statp = &chres;
+  memset(&chres, 0, sizeof(chres));
   init_chaos_dns_state(statp);
 
   printf("DNS config in thread %p:\n", (void *)pthread_self());
@@ -920,6 +925,7 @@ dns_describe_packet(u_char *pkt, int len)
 {
   // resolver state, local to each thread
   struct __res_state chres;
+  memset(&chres, 0, sizeof(chres));
   res_state statp = &chres;
   ns_msg m;
 
