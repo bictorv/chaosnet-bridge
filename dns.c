@@ -547,7 +547,7 @@ dns_list_root_nameservers(void)
 
 
 // debug
-#if 0
+#if 1
 static void print_resolver_state(struct __res_state *sp)
 {
   printf("DNS resolver state in thread %p:\n", (void *)pthread_self());
@@ -664,7 +664,7 @@ init_chaos_dns_state(res_state statp)
   if (statp->nscount == 0) {
     fprintf(stderr,"%%%% DNS: could not parse any DNS servers!\n");
     // @@@@ probably exit?
-#if 0
+#if 1
   } else if (trace_dns) {
     print_resolver_state(statp);
 #endif
