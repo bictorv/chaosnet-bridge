@@ -135,8 +135,8 @@ char tls_ca_file[PATH_MAX] = "ca-chain.cert.pem";  /* trust chain */
 char tls_key_file[PATH_MAX];	/* private key */
 char tls_cert_file[PATH_MAX];	/* certificate */
 char tls_crl_file[PATH_MAX];	/* certificate revocation list */
-// @@@@ should allow for different addrs on different ports/links. Punt for now.
-u_short tls_myaddrs[TLSDEST_MAX];		/* my chaos address on TLS server links */
+// allow clients from different subnets to connect, here are my different addrs
+u_short tls_myaddrs[TLSDEST_MAX];		/* my chaos addresses on TLS server links */
 int tls_n_myaddrs = 0;
 int tls_server_port = 42042;
 
