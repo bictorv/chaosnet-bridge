@@ -1361,7 +1361,7 @@ print_tls_warning(int tindex, struct chaos_header *cha, char *header)
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(data+len);
   u_short srcaddr = ntohs(tr->ch_hw_srcaddr);
 
-  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s %s addr %#o myadd %#o\n",
+  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s %s addr %#o myaddr %#o\n",
 	  header, ch_opcode_name(ch_opcode(cha)), ch_srcaddr(cha), ch_srcindex(cha), 
 	  srcaddr, 
 	  tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
