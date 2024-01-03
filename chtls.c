@@ -1406,7 +1406,11 @@ handle_tls_input(int tindex)
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
   srcaddr = ntohs(tr->ch_hw_srcaddr);
   // verify it is on tls_myaddr subnet
-  if ((srcaddr == 0) || ((srcaddr & 0xff00) != (tlsdest[tindex].tls_myaddr & 0xff00))) {
+  if ((srcaddr == 0) || 
+      // We are client: other end must be on same subnet as us
+      (!tlsdest[tindex].tls_serverp && ((srcaddr & 0xff00) != (tlsdest[tindex].tls_myaddr & 0xff00))) ||
+      // We are server: we must have a matching myaddr
+      (tlsdest[tindex].tls_serverp && (my_tls_myaddr(srcaddr) == 0))) {
     if (tls_debug) print_tls_warning(tindex, cha, "hw source address not on my net");
     else if (verbose) fprintf(stderr,"TLS: Hardware source address %#o is not on my net %#o\n", srcaddr, (tlsdest[tindex].tls_myaddr & 0xff00)>>8);
     PTLOCKN(linktab_lock,"linktab_lock");
