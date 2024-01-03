@@ -943,6 +943,8 @@ void *tls_connector(void *arg)
 
 // signalling stuff
 
+// @@@@ keep track of how often this is called, and if more than N times/second, back off,
+// since it might be a sign of persistent errors.
 static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 // called by tls_write_record, tls_read_record on failure
 {
