@@ -136,7 +136,8 @@ char tls_key_file[PATH_MAX];	/* private key */
 char tls_cert_file[PATH_MAX];	/* certificate */
 char tls_crl_file[PATH_MAX];	/* certificate revocation list */
 // @@@@ should allow for different addrs on different ports/links. Punt for now.
-u_short tls_myaddr = 0;		/* my chaos address on TLS server links */
+u_short tls_myaddrs[TLSDEST_MAX];		/* my chaos address on TLS server links */
+int tls_n_myaddrs = 0;
 int tls_server_port = 42042;
 
 int do_tls = 0, do_tls_server = 0;
@@ -1985,8 +1986,11 @@ print_stats(int sig)
 #endif
 #if CHAOS_TLS
     if (do_tls || do_tls_server) {
-      printf("Using TLS myaddr %#o, keyfile %s, certfile %s, ca-chain %s, crl %s\n", 
-	     tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
+      printf("Using TLS myaddrs %#o",tls_myaddrs[0]);
+      for (i = 1; i < tls_n_myaddrs; i++)
+	printf(",%#o", tls_myaddrs[i]);
+      printf(", keyfile %s, certfile %s, ca-chain %s, crl %s\n", 
+	     tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
       if (do_tls_server)
 	printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6" : "IPv4");
     }
