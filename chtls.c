@@ -878,6 +878,7 @@ void *tls_connector(void *arg)
 	    fprintf(stderr,"\n");
 	  }
 	  int found = 0;
+	  // @@@@ check for private subnet addresses, which should not be in DNS?
 	  for (i = 0; i < naddrs; i++) {
 	    if (claddrs[i] == td->tls_addr) {
 	      found = 1;
@@ -1300,6 +1301,7 @@ tls_server(void *v)
 	      }
 	    }
 	  }
+	  // @@@@ check for private subnet addresses, which should not be in DNS
 	  if (client_chaddr == 0) {
 	    // @@@@ should limit the frequency of warnings?
 	    char ip[INET6_ADDRSTRLEN];
