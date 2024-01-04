@@ -35,9 +35,9 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 	set my chudp portnr (default 42042). If `dynamic`, add new chudp links [dynamically](#dynamic-links-and-routes) when receiving pkts from unknown sources. With ipv6 option, listens to both v4 and v6 (enabled also by defining a chudp link where the host has an ipv6 addr). With debug on, prints some debug stuff. 
 - `tls` [ `key` *keyfile* ] [ `cert` *certfile* ] [ `ca-chain` *ca-chain-cert-file* ] [ `myaddrs` *list* ] [ `server` *portnr* ] [ `debug` off/on ] [ `expirywarn `*days* ] [ `crl` *crlfile* ]
 
-	set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*. If `server` is specified, a TLS server is started listening to *portnr* (default 42042, if at EOL). TLS servers are always "dynamic" in that they listen to connections from anywhere, but accept only those using certificates trusted by the CA trust chain. Server-end connections are added dynamically at runtime, and can not be pre-declared. 
+	set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*. If `server` is specified, a TLS server is started listening to *portnr* (default 42042, if at EOL). This requires a server certificate. TLS servers are always "dynamic" in that they listen to connections from anywhere, but accept only those using certificates trusted by the CA trust chain. Server-end connections are added dynamically at runtime, and can not be pre-declared. 
 
-	The server's local address is set to one of the addresses on the `myaddrs` *list* parameter (octal, comma-separated, no space around the commas). Connections are accepted only from clients on subnets matching those addresses.
+	The `myaddrs` *list* parameter (octal, comma-separated, no space around the commas) specifies which local addresses are to be used by the server. Connections are accepted only from clients on subnets matching those addresses.
 
 	With debug on, prints some debug stuff.  `expirywarn` defaults to 90, the number of days before certificate expiry to start whining about it.
 	
