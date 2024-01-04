@@ -21,7 +21,8 @@
 #define TLS_CERT_EXPIRY_WARNING_DAYS 90
 static int tls_cert_expiry_warning_days = TLS_CERT_EXPIRY_WARNING_DAYS;
 
-extern u_short tls_myaddr;
+extern u_short tls_myaddrs[];
+extern int tls_n_myaddrs;
 extern char tls_ca_file[];
 extern char tls_key_file[];
 extern char tls_cert_file[];
@@ -35,6 +36,16 @@ static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
 static void tls_wait_for_reconnect_signal(struct tls_dest *td);
+
+// Find the tls_myaddrs matching the other address
+static u_short my_tls_myaddr(u_short other)
+{
+  for (int i = 0; i < tls_n_myaddrs; i++) {
+    if ((tls_myaddrs[i] & 0xff00) == (other & 0xff00))
+      return tls_myaddrs[i];
+  }
+  return 0;
+}
 
 int
 parse_tls_config_line()
@@ -65,13 +76,36 @@ parse_tls_config_line()
 	fprintf(stderr,"tls: bad value %s for expirywarn specified\n", tok);
 	return -1;
       }
-    } else if (strncmp(tok,"myaddr",sizeof("myaddr")) == 0) {
+    } else if ((strncmp(tok,"myaddr",sizeof("myaddr")) == 0) ||
+	       (strncmp(tok,"myaddrs",sizeof("myaddrs")) == 0)) {
       tok = strtok(NULL, " \t\r\n");
-      if (tok == NULL) { fprintf(stderr,"tls: no address for myaddr specified\n"); return -1; }
-      if ((sscanf(tok, "%ho", &tls_myaddr) != 1) || !valid_chaos_host_address(tls_myaddr)) {
-	fprintf(stderr,"tls: bad octal value %s for myaddr specified\n", tok);
+      if (tok == NULL) { fprintf(stderr,"tls: no address for myaddrs specified\n"); return -1; }
+      char *sp, *ep;
+      for (sp = tok, ep = index(tok, ','); ep != NULL; sp = ep+1, ep = index(ep+1, ',')) {
+	if (tls_n_myaddrs > TLSDEST_MAX) {
+	  fprintf(stderr,"Error in tls \"myaddrs\" setting - too many addresses listed, max %d\n", TLSDEST_MAX);
+	  return -1;
+	}
+	*ep = '\0';		// zap comma
+	if (strlen(sp) == 0) {
+	  fprintf(stderr,"Syntax error in tls \"myaddrs\" setting - empty address?\n");
+	  return -1;
+	}
+	if ((sscanf(sp, "%ho", &tls_myaddrs[tls_n_myaddrs]) != 1) || !valid_chaos_host_address(tls_myaddrs[tls_n_myaddrs])) {
+	  fprintf(stderr,"tls: bad octal value %s for myaddrs specified\n", sp);
+	  return -1;
+	}
+	tls_n_myaddrs++;
+      }
+      // add the single/last one
+      if (strlen(sp) == 0) {
+	fprintf(stderr,"Syntax error in tls \"myaddrs\" setting - empty address?\n");
+	return -1;
+      } else if ((sscanf(sp, "%ho", &tls_myaddrs[tls_n_myaddrs]) != 1) || !valid_chaos_host_address(tls_myaddrs[tls_n_myaddrs])) {
+	fprintf(stderr,"tls: bad octal value %s for myaddrs specified\n", sp);
 	return -1;
       }
+      tls_n_myaddrs++;
     }
     else if (strncmp(tok,"server",sizeof("server")) == 0) {
       tok = strtok(NULL, " \t\r\n");
@@ -95,14 +129,17 @@ parse_tls_config_line()
       return -1;
     }
   }
-  if ((tls_myaddr == 0) && (mychaddr[0] != 0)) {
+  if ((tls_n_myaddrs == 0) && (mychaddr[0] != 0)) {
     if (do_tls_server)
       fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
     // default - see send_empty_sns below
-    tls_myaddr = mychaddr[0];
+    tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
   }
   if (verbose) {
-    printf("Using TLS myaddr %#o, keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_myaddr, tls_key_file, tls_cert_file, tls_ca_file);
+    printf("Using TLS myaddrs %#o",tls_myaddrs[0]);
+    for (int i = 1; i < tls_n_myaddrs; i++)
+      printf(",%#o", tls_myaddrs[i]);
+    printf(", keyfile \"%s\", certfile \"%s\", ca-chain \"%s\"\n", tls_key_file, tls_cert_file, tls_ca_file);
     if (do_tls_server)
       printf(" and starting TLS server at port %d (%s)\n", tls_server_port, do_tls_ipv6 ? "IPv6+IPv4" : "IPv4");
   }
@@ -116,7 +153,7 @@ send_empty_sns(struct tls_dest *td, u_short onbehalfof)
   u_char pkt[CH_PK_MAXLEN];
   struct chaos_header *ch = (struct chaos_header *)pkt;
   // use correct source for this link
-  u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : (tls_myaddr > 0 ? tls_myaddr : mychaddr[0]);  // default
+  u_short src = td->tls_myaddr > 0 ? td->tls_myaddr : my_tls_myaddr(td->tls_addr);
   u_short dst = td->tls_addr;
 
   struct chroute *rt = find_in_routing_table(dst, 1, 0);
@@ -435,16 +472,23 @@ add_tls_route(int tindex, u_short srcaddr)
   } else if ((srcaddr & 0xff00) == (tlsdest[tindex].tls_myaddr & 0xff00)) {
     // make a routing entry for host srcaddr through tls link at tlsindex
     rt = add_to_routing_table(srcaddr, 0, tlsdest[tindex].tls_myaddr, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
+  } else if (my_tls_myaddr(srcaddr) != 0) {
+    // Not same subnet as existing route, or new
+    u_short new = my_tls_myaddr(srcaddr);
+    if (tls_debug) fprintf(stderr,"TLS: adding NEW route using myaddr %#o for index %d\n", new, tindex);
+    rt = add_to_routing_table(srcaddr, 0, new, RT_DYNAMIC, LINK_TLS, RTCOST_ASYNCH);
   } else {
     if (1 || tls_debug) 
-      fprintf(stderr,"%%%% TLS: asked to add route to %#o but wrong subnet (not matching tls_myaddr %#o / %#o) - not updating\n",
-	      srcaddr, tlsdest[tindex].tls_myaddr, tls_myaddr);
+      fprintf(stderr,"%%%% TLS: asked to add route to %#o but wrong subnet (not matching tls_myaddrs) - not updating\n", srcaddr);
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
+  // Done with routing, now work on tlsdest
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if (tlsdest[tindex].tls_addr == 0) {
-    if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o\n", tlsdest[tindex].tls_addr, srcaddr);
+    if (tls_debug) fprintf(stderr,"TLS route addition updates tlsdest addr from %#o to %#o and myaddr from %#o to %#o\n",
+			   tlsdest[tindex].tls_addr, srcaddr, tlsdest[tindex].tls_myaddr, my_tls_myaddr(srcaddr));
     tlsdest[tindex].tls_addr = srcaddr;
+    tlsdest[tindex].tls_myaddr = my_tls_myaddr(srcaddr); // matching myaddr
   }
   else if (((tlsdest[tindex].tls_addr >> 8) == (srcaddr >> 8)) && (tlsdest[tindex].tls_addr != srcaddr)) {
     // add multiplexed dest @@@@ maybe let this be configurable?
@@ -453,6 +497,7 @@ add_tls_route(int tindex, u_short srcaddr)
     if (j < CHTLS_MAXMUX) {
       if (tls_debug) fprintf(stderr,"Adding %#o to mux list %d of tlsdest %d\n", srcaddr, j, tindex);
       tlsdest[tindex].tls_muxed[j] = srcaddr;
+      tlsdest[tindex].tls_myaddr = my_tls_myaddr(srcaddr); // make sure myaddr matches
     } else
       fprintf(stderr,"%%%% Warning: Can not add %#o to mux list of tlsdest %d - list full, increase CHTLS_MAXMUX?\n", srcaddr, tindex);
   } else if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
@@ -462,6 +507,7 @@ add_tls_route(int tindex, u_short srcaddr)
 	    tlsdest[tindex].tls_addr, srcaddr);
     // This is OK. Use the most recent.
     tlsdest[tindex].tls_addr = srcaddr;
+    tlsdest[tindex].tls_myaddr = my_tls_myaddr(srcaddr); // matching myaddr
   } else {
     // nothing
   }
@@ -572,12 +618,12 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     }
     if (tls_debug) {
       char ip6[INET6_ADDRSTRLEN];
-      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o\n", name,
+      fprintf(stderr,"Adding new TLS destination %s from %s port %d chaddr %#o myaddr %#o\n", name,
 	      ip46_ntoa(sa, ip6, sizeof(ip6)),
 	      ntohs((sa->sa_family == AF_INET
 		     ? ((struct sockaddr_in *)sa)->sin_port
 		     : ((struct sockaddr_in6 *)sa)->sin6_port)),
-	      chaddr);
+	      chaddr, my_tls_myaddr(chaddr));
     }
 
     memset(&tlsdest[tlsdest_len], 0, sizeof(struct tls_dest));
@@ -589,7 +635,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     tlsdest[tlsdest_len].tls_sock = sock;
     tlsdest[tlsdest_len].tls_ssl = ssl;
     tlsdest[tlsdest_len].tls_addr = chaddr;
-    tlsdest[tlsdest_len].tls_myaddr = tls_myaddr;
+    tlsdest[tlsdest_len].tls_myaddr = my_tls_myaddr(chaddr);
     tlsdest_len++;
   }
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
@@ -832,6 +878,7 @@ void *tls_connector(void *arg)
 	    fprintf(stderr,"\n");
 	  }
 	  int found = 0;
+	  // @@@@ check for private subnet addresses, which should not be in DNS?
 	  for (i = 0; i < naddrs; i++) {
 	    if (claddrs[i] == td->tls_addr) {
 	      found = 1;
@@ -897,6 +944,8 @@ void *tls_connector(void *arg)
 
 // signalling stuff
 
+// @@@@ keep track of how often this is called, and if more than N times/second, back off,
+// since it might be a sign of persistent errors.
 static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
 // called by tls_write_record, tls_read_record on failure
 {
@@ -1252,6 +1301,7 @@ tls_server(void *v)
 	      }
 	    }
 	  }
+	  // @@@@ check for private subnet addresses, which should not be in DNS
 	  if (client_chaddr == 0) {
 	    // @@@@ should limit the frequency of warnings?
 	    char ip[INET6_ADDRSTRLEN];
@@ -1315,7 +1365,7 @@ print_tls_warning(int tindex, struct chaos_header *cha, char *header)
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(data+len);
   u_short srcaddr = ntohs(tr->ch_hw_srcaddr);
 
-  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s %s addr %#o myadd %#o\n",
+  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s %s addr %#o myaddr %#o\n",
 	  header, ch_opcode_name(ch_opcode(cha)), ch_srcaddr(cha), ch_srcindex(cha), 
 	  srcaddr, 
 	  tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
@@ -1360,7 +1410,11 @@ handle_tls_input(int tindex)
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&data[len-CHAOS_HW_TRAILERSIZE];
   srcaddr = ntohs(tr->ch_hw_srcaddr);
   // verify it is on tls_myaddr subnet
-  if ((srcaddr == 0) || ((srcaddr & 0xff00) != (tlsdest[tindex].tls_myaddr & 0xff00))) {
+  if ((srcaddr == 0) || 
+      // We are client: other end must be on same subnet as us
+      (!tlsdest[tindex].tls_serverp && ((srcaddr & 0xff00) != (tlsdest[tindex].tls_myaddr & 0xff00))) ||
+      // We are server: we must have a matching myaddr
+      (tlsdest[tindex].tls_serverp && (my_tls_myaddr(srcaddr) == 0))) {
     if (tls_debug) print_tls_warning(tindex, cha, "hw source address not on my net");
     else if (verbose) fprintf(stderr,"TLS: Hardware source address %#o is not on my net %#o\n", srcaddr, (tlsdest[tindex].tls_myaddr & 0xff00)>>8);
     PTLOCKN(linktab_lock,"linktab_lock");
@@ -1751,30 +1805,36 @@ validate_cert_file(char *fname)
     fprintf(stderr,"\n");
   }
   int found = 0;
-  // Check if server address belongs to CN
   if (do_tls_server) {
-    for (i = 0; i < naddrs; i++) {
-      if (claddrs[i] == tls_myaddr) {
-	found = 1;
-	break;
+    // Check if configured myaddrs are among server CN addresses
+    // (Check if server CN addresses are configured in myaddrs: not necessarily)
+    for (i = 0; i < tls_n_myaddrs; i++) {
+      found = 0;
+      for (int j = 0; j < naddrs; j++) {
+	if (claddrs[j] == tls_myaddrs[i]) {
+	  found = 1;
+	  break;
+	}
       }
+      if (!found) {
+	// Couldn't find this myaddr among CN addresses, see whose it is?
+	u_char hname[256];	/* random size limit */
+	int nlen;
+	if ((nlen = dns_name_of_addr(tls_myaddrs[i], hname, sizeof(hname))) < 0) {
+	  if (nlen < -1)
+	    fprintf(stderr,"%%%% TLS: DNS error while looking up myaddr:\n");
+	  fprintf(stderr,"%%%% TLS: Addresses of cert %s CN %s do not match the configured myaddr %#o\n", 
+		  fname, client_cn, tls_myaddrs[i]);
+	} else
+	  fprintf(stderr,"%%%% TLS: Configured myaddr %#o does not belong to cert %s CN %s but to %s\n", 
+		tls_myaddrs[i], fname, client_cn, hname);
+	// Make sure to do something about it, like terminate
+	return -1;
+      } else if (tls_debug) 
+	fprintf(stderr,"TLS found myaddr %#o in addresses of %s\n", tls_myaddrs[i], client_cn);
     }
-    if (!found) {
-      u_char hname[256];  /* random size limit */
-      int nlen;
-      if ((nlen = dns_name_of_addr(tls_myaddr, hname, sizeof(hname))) < 0) {
-	if (nlen < -1)
-	  fprintf(stderr,"%%%% TLS: DNS error while looking up myaddr:\n");
-	fprintf(stderr,"%%%% TLS: Addresses of cert %s CN %s do not match the configured myaddr %#o\n", 
-		fname, client_cn, tls_myaddr);
-      } else
-	fprintf(stderr,"%%%% TLS: Configured myaddr %#o does not belong to cert %s CN %s but to %s\n", 
-		tls_myaddr, fname, client_cn, hname);
-      // Make sure to do something about it, like terminate
-      return -1;
-    } else if (tls_debug) 
-      fprintf(stderr,"TLS found myaddr %#o in addresses of %s\n", tls_myaddr, client_cn);
   }
+  // Check that all TLS links have a myaddr among the CN addresses
   for (i = 0; i < tlsdest_len; i++) {
     if (tlsdest[i].tls_myaddr != 0) {
       found = 0;
@@ -1785,7 +1845,7 @@ validate_cert_file(char *fname)
 	}
       }
       if (!found) {
-	u_char hname[256];  /* random size limit */
+	u_char hname[256];	/* random size limit */
 	int nlen;
 	if ((nlen = dns_name_of_addr(tlsdest[i].tls_myaddr, hname, sizeof(hname))) < 0) {
 	  if (nlen < -1)
@@ -1810,6 +1870,12 @@ validate_cert_file(char *fname)
   } else if (server_cert_p(cert)) {
     fprintf(stderr,"%%%% Warning: your certificate can be used for a server, but you have not configured a crl.\n"
 	    "%%%% Please do - see https://github.com/bictorv/chaosnet-bridge/blob/master/TLS.md for how\n");
+  }
+  if (do_tls_server && !server_cert_p(cert)) {
+    fprintf(stderr,"%%%% Error: your certificate can not be used for a server, "
+	    "but your configured cbridge to start a tls server.\n"
+	    "%%%% If you want to run a server, get a new certificate!\n");
+    return -1;
   }
   return 0;
 }
