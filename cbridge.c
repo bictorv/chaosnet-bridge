@@ -1823,7 +1823,7 @@ parse_config_line(char *line)
       if (strlen(tok) < sizeof(myname)) {
 	strncpy(myname, tok, sizeof(myname));
       } else {
-	fprintf(stderr,"myname too long: max %lu bytes allowed.\n", sizeof(myname));
+	fprintf(stderr,"myname too long: max %zu bytes allowed.\n", sizeof(myname));
 	return -1;
       }
     }

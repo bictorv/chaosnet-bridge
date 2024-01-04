@@ -277,7 +277,7 @@ void * unix_input(void *v)
 	  fprintf(stderr,"Received zero HW trailer (%#o, %#o, %#x) from Unix\n",
 		  tr->ch_hw_destaddr, tr->ch_hw_srcaddr, tr->ch_hw_checksum);
       } else if (debug || unixdebug) {
-	fprintf(stderr,"Unix: Received no HW trailer (len %d != %lu = %d+%lu+%lu)\n",
+	fprintf(stderr,"Unix: Received no HW trailer (len %d != %zu = %d+%zu+%zu)\n",
 		len, ch_nbytes(ch)+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE,
 		ch_nbytes(ch), CHAOS_HEADERSIZE, CHAOS_HW_TRAILERSIZE);
 	if (debug)

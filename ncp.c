@@ -1938,7 +1938,7 @@ parse_contact_args(struct conn *conn, u_char *data, u_char *contact, int len)
       // otherwise return a copy
       u_char *c = (u_char *)calloc(e-p+1, 1);
       if (c == NULL) { perror("calloc failed in parse_contact_args"); exit(1); }
-      if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %ld bytes\n", e-p);
+      if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %zd bytes\n", e-p);
       memcpy(c, p, e-p);
       conn->conn_contact_args_len = e-p;
       conn->conn_contact_args = c;
@@ -2661,7 +2661,7 @@ retransmit_controlled_packets(struct conn *conn)
 	    send_chaos_pkt(tempkt, pklen);
 	    set_pkqueue_elem_transmitted(q, &now);
 	    nsent++;
-	  } else if (ncp_debug) printf("%%%% NCP: packet too long (%d > %lu)\n", pklen, sizeof(tempkt));
+	  } else if (ncp_debug) printf("%%%% NCP: packet too long (%d > %zu)\n", pklen, sizeof(tempkt));
 	}
       }
     }

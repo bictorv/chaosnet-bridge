@@ -328,7 +328,7 @@ ch_dumpkt(unsigned char *ucp, int cnt)
   if (cnt == len+CHAOS_HEADERSIZE)
     fprintf(stderr,"[No trailer]\n");
   else if (cnt < len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE)
-    fprintf(stderr,"[Incomplete trailer: pkt size %d < (header + len + trailer size) = %lu]\n",
+    fprintf(stderr,"[Incomplete trailer: pkt size %d < (header + len + trailer size) = %zu]\n",
 	    cnt, len+CHAOS_HEADERSIZE+CHAOS_HW_TRAILERSIZE);
   else {
     u_int cks = ch_checksum((u_char *)ch, len);

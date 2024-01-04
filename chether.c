@@ -1014,7 +1014,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 	tr->ch_hw_srcaddr = trailer_from;
 	tr->ch_hw_destaddr = ntohs(ch_destaddr((struct chaos_header *)buf));
 	tr->ch_hw_checksum = ntohs(ch_checksum(buf, rlen+2*sizeof(u_short)));
-	if (chether_debug) printf(" updating length to %d + %ld = %ld (rlen %d)\n",
+	if (chether_debug) printf(" updating length to %d + %zd = %zd (rlen %d)\n",
 				  pkend, CHAOS_HW_TRAILERSIZE, pkend + CHAOS_HW_TRAILERSIZE, rlen);
 	rlen = pkend + CHAOS_HW_TRAILERSIZE;
       } 
@@ -1024,7 +1024,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
       }
 #if 1
       else if (chether_debug) {
-	printf("Ether: NOT adding trailer: from %#o, fits %s, already there %s (%d %lu)\n",
+	printf("Ether: NOT adding trailer: from %#o, fits %s, already there %s (%d %zu)\n",
 	       trailer_from,
 	       (rlen + CHAOS_HW_TRAILERSIZE < buflen) ? "yes" : "no",
 	       (rlen < CHAOS_HEADERSIZE + ch_nbytes((struct chaos_header *)buf) + CHAOS_HW_TRAILERSIZE) ? "yes" : "no",
