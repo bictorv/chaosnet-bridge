@@ -491,7 +491,7 @@ chip_input_handle_data(u_char *chdata, int chlen, struct sockaddr *sa, int salen
     if (debug) ch_dumpkt(chdata, chlen);
     if (!found) {
       if (!chip_dynamic) {
-	fprintf(stderr,"%%%% CHIP pkt received from unknown source %s (Chaos hw %#o) - dropping it\n", ip46_ntoa(sa, ipaddr, sizeof(ipaddr)), srcaddr);
+	if (chip_debug) fprintf(stderr,"%%%% CHIP pkt received from unknown source %s (Chaos hw %#o) - dropping it\n", ip46_ntoa(sa, ipaddr, sizeof(ipaddr)), srcaddr);
 	return;
       } else {
 	if (chip_debug || verbose || debug)
