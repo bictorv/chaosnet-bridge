@@ -1262,26 +1262,32 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
 
   if (ncp_debug > 1) printf("NCP: about to make %s pkt\n", ch_opcode_name(opcode));
 
-  PTLOCKN(c->conn_lock,"conn_lock");
-  c->conn_lhost = find_my_closest_addr(c->conn_rhost);
-  if (ncp_debug) printf("NCP: my closest addr to %#o (%#x) is %#o (%#x)\n",
-			c->conn_rhost, c->conn_rhost, c->conn_lhost, c->conn_lhost);
-  if (c->conn_lidx == 0)
-    c->conn_lidx = make_fresh_index();
-  PTUNLOCKN(c->conn_lock,"conn_lock");
-  if (ncp_debug > 1) print_conn("Updated", c, 0);
+  if ((cs->state != CS_Open_Sent) || (opcode != CHOP_OPN)) {
+    // When resending an OPN, don't re-initialize the conn
+    PTLOCKN(c->conn_lock,"conn_lock");
+    c->conn_lhost = find_my_closest_addr(c->conn_rhost);
+    if (ncp_debug) printf("NCP: my closest addr to %#o (%#x) is %#o (%#x)\n",
+			  c->conn_rhost, c->conn_rhost, c->conn_lhost, c->conn_lhost);
+    if (c->conn_lidx == 0)
+      c->conn_lidx = make_fresh_index();
+    PTUNLOCKN(c->conn_lock,"conn_lock");
+    if (ncp_debug > 1) print_conn("Updated", c, 0);
 
-  PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-  cs->local_winsize = c->initial_winsize;
+    PTLOCKN(cs->conn_state_lock,"conn_state_lock");
+    cs->local_winsize = c->initial_winsize;
 
-  // initial pkt nr random, make sure we don't think it's acked
-  // ITS starts at 1, but random is better against hijacks.
-  cs->pktnum_made_highest = make_u_short_random();
-  cs->pktnum_sent_acked = c->conn_state->pktnum_made_highest;
-  cs->pktnum_sent_receipt = c->conn_state->pktnum_made_highest;
-  cs->send_pkts_pktnum_highest = c->conn_state->pktnum_made_highest;
-  c->initial_pktnum = c->conn_state->pktnum_made_highest; // @@@@ debug
-
+    // initial pkt nr random, make sure we don't think it's acked
+    // ITS starts at 1, but random is better against hijacks.
+    cs->pktnum_made_highest = make_u_short_random();
+    cs->pktnum_sent_acked = c->conn_state->pktnum_made_highest;
+    cs->pktnum_sent_receipt = c->conn_state->pktnum_made_highest;
+    cs->send_pkts_pktnum_highest = c->conn_state->pktnum_made_highest;
+    c->initial_pktnum = c->conn_state->pktnum_made_highest; // @@@@ debug
+  } else {
+    // Resending an OPN in Open_Sent: need to lock, still
+    PTLOCKN(cs->conn_state_lock,"conn_state_lock");
+    fprintf(stderr,"%%%% Sending %s in %s state\n", ch_opcode_name(opcode), state_name(cs->state));
+  }
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
   if (opcode == CHOP_BRD) {
@@ -2749,7 +2755,7 @@ probe_connection(struct conn *conn)
     if (ncp_debug) printf("conn %p (%s) hasn't received in %ld seconds, host down!\n", 
 			  conn, conn_state_name(conn),
 			  now.tv_sec - cs->time_last_received);
-    set_conn_state(conn, CS_Open, CS_Host_Down, 0);
+    set_conn_state(conn, cs->state, CS_Host_Down, 0);
     // close and die
     user_socket_los(conn, "Host %#o down - no reception for %ld seconds", conn->conn_rhost,
 		    now.tv_sec - cs->time_last_received);
@@ -2934,7 +2940,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     // [And only for each 1/3rd, not every pkt after that.]
     // pktnum_read_highest: highest pktnum received
     int unacked = pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked);
-    if ((unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
+    if ((cs->time_last_received > 0) && (unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
       if (ncp_debug) printf(" 1/3 window un-acked (%d), acked %#x, sending STS\n", unacked, cs->pktnum_acked);
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
@@ -3070,7 +3076,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
 
   // Dispatch based on state and opcode
   switch (cs->state) {
-  case CS_Listening: {
+  case CS_Listening: 
     if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
       // Change state early
       set_conn_state(conn, CS_Listening, CS_RFC_Received, 0);
@@ -3079,7 +3085,16 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       // ignore all other pkts
       return;
     break;
-  }
+  case CS_Open_Sent:
+    if (ch_opcode(ch) == CHOP_RFC) {
+      // retransmission of RFC; we already handled it once, changed state and notified "our end"
+      // so just retransmit the OPN with the same data
+      if (ncp_debug) printf("%%%% NCP: %s pkt received in %s state - resending OPN\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
+      send_opn_pkt(conn);
+    } else {
+      if (ncp_debug) printf("%%%% NCP: %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
+    }
+    break;
   case CS_BRD_Sent:
     // @@@@ do something? 
   case CS_RFC_Sent:
@@ -3182,7 +3197,6 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
   case CS_CLS_Received:
   case CS_LOS_Received:
   case CS_Host_Down:
-  case CS_Open_Sent:	       // Should only happen for the STS above
   case CS_RFC_Received:	       // Should only get retransmitted RFCs
     if (!((cs->state == CS_RFC_Received) && (ch_opcode(ch) != CHOP_RFC)) &&
 	!((cs->state == CS_Answered) && (ch_opcode(ch) != CHOP_ANS))) {
@@ -3280,10 +3294,96 @@ packet_to_unknown_conn_handler(u_char *pkt, int len, struct chaos_header *ch, u_
   return conn;
 }
 
+// Mechanism to send a loopback packet asynchronously.
+// Otherwise the transmission (in an NCP handler thread) is discovered as "to me" (in send_chaos_pkt)
+// and handled (by handle_pkt_for_me) by calling the packet_to_conn_handler in the same thread,
+// which leads to locking problems (and probably worse, if the locking would be handled).
+// I really hope pthreads are efficient! :-)
+
+// fwd declaration
+static void packet_to_conn_handler_internal(u_char *pkt, int len);
+
+// Thread args structure
+struct asynch_ptc_args {
+  int ptc_dlen;
+  u_char *ptc_data;
+};
+
+// Thread function
+static void *
+asynch_packet_to_conn_handler(void *args)
+{
+  struct asynch_ptc_args *ptc = args;
+  // Do the work
+  packet_to_conn_handler_internal(ptc->ptc_data, ptc->ptc_dlen);
+  // Free the args
+  if (ncp_debug) fprintf(stderr,"NCP: asynch thread %p done, freeing data %p and args %p\n",
+			 (void *)pthread_self(), ptc->ptc_data, ptc);
+  free(ptc->ptc_data);
+  free(ptc);
+  return NULL;
+}
+
+// Start the thread
+static void asynch_packet_to_conn(u_char *pkt, int len)
+{
+  // Copy the packet data
+  u_char *data = malloc(len + (len%2));
+  if (data == NULL) {
+    fprintf(stderr,"%s: malloc failed!\n", __func__);
+    abort();
+  }
+  memcpy(data, pkt, len);
+
+  // Set up thread args structure
+  struct asynch_ptc_args *ptc = malloc(sizeof(struct asynch_ptc_args));
+  if (ptc == NULL) {
+    fprintf(stderr,"%s: malloc failed!\n", __func__);
+    abort();
+  }
+  ptc->ptc_data = data;
+  ptc->ptc_dlen = len;
+
+  // Start the thread!
+  pthread_t thr;
+  if (pthread_create(&thr, NULL, &asynch_packet_to_conn_handler, ptc) < 0) {
+    perror("pthread_create(asynch_packet_to_conn_handler)");
+    abort();
+  }
+  if (ncp_debug) fprintf(stderr,"NCP: Started asynch pkt thread %p for %p, len %d\n", (void *)thr, data, len);
+  // and be done
+}
+
+static int
+packet_loopback_p(u_char *pkt, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)pkt;
+  if (is_mychaddr(ch_srcaddr(ch)) && (ch_srcaddr(ch) == ch_destaddr(ch)))
+    return 1;
+  else
+    return 0;
+}
+
 // NCP packet handler, packets coming from network for a local address.
 // Called from cbridge (handle_pkt_for_me)
-void 
-packet_to_conn_handler(u_char *pkt, int len)
+void packet_to_conn_handler(u_char *pkt, int len)
+{
+  // start by checking if this is "loopback", i.e. source addr==dest addr==myaddr
+  // then start new thread calling this function and return directly, to make it asynchronous
+  // and handle locking problems.
+
+  if (packet_loopback_p(pkt, len)) {
+    struct chaos_header *ch = (struct chaos_header *)pkt;
+    if (ncp_debug) fprintf(stderr,"NCP: loopback pkt from <%#o,%#x> to <%#o,%#x> - doing it async\n",
+			   ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch));
+    asynch_packet_to_conn(pkt, len);
+  } else
+    packet_to_conn_handler_internal(pkt, len);
+}
+
+// Non-loopback version
+static void 
+packet_to_conn_handler_internal(u_char *pkt, int len)
 {
   struct conn *conn = NULL;
   struct chaos_header *ch = (struct chaos_header *)pkt;
