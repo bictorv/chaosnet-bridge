@@ -436,6 +436,13 @@ void print_tlsdest_config()
       for (j = 1; j < CHTLS_MAXMUX && tlsdest[i].tls_muxed[j] != 0; j++)
 	printf(",%o", tlsdest[i].tls_muxed[j]);
     }
+    if (tlsdest[i].tls_connection_time > 0) {
+      char tbuf[64];
+      strftime(tbuf, sizeof(tbuf), "%F %T", localtime(&tlsdest[i].tls_connection_time));
+      printf(", last connection attempt %s", tbuf);
+    }
+    if (tlsdest[i].tls_open_tries > 0)
+      printf(", open tried %d times", tlsdest[i].tls_open_tries);
     printf("\n");
   }
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
@@ -515,10 +522,65 @@ add_tls_route(int tindex, u_short srcaddr)
   return rt;
 }
 
+static char *
+seconds_as_interval(u_int t)
+{
+  char tbuf[64], *tp = tbuf;
+  
+  if (t == 0)
+    return strdup("now");
+
+  if (t > 365*60*60*24) {
+    int y = t/(365*60*60*24);
+    sprintf(tp, "%d year%s ", y, y==1 ? "" : "s");
+    t %= 365*60*60*24;
+    tp += strlen(tp);
+  }
+  if (t > 60*60*24*7) {
+    int w = t/(60*60*24*7);
+    sprintf(tp, "%d week%s ", w, w == 1 ? "" : "s");
+    t %= 60*60*24*7;
+    tp += strlen(tp);
+  }
+  if (t > 60*60*24) {
+    int d = t/(60*60*24);
+    sprintf(tp, "%d day%s ", d, d == 1 ? "" : "s");
+    t %= (60*60*24);
+    tp = &tbuf[strlen(tbuf)];
+  }
+  if (t > 60*60) {
+    int h = t/(60*60);
+    sprintf(tp, "%d hour%s ", h, h == 1 ? "" : "s");
+    t %= 60*60;
+    tp = &tbuf[strlen(tbuf)];
+  }
+  if (t > 60)
+    sprintf(tp, "%dm %ds", (t/60), t % 60);
+  else
+    sprintf(tp, "%d s", t);
+  return strdup(tbuf);
+}
+
 static void
 close_tlsdest(struct tls_dest *td)
 {
+  char ip[INET6_ADDRSTRLEN];
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
+  if ((td->tls_ssl != NULL) || (td->tls_sock != 0)) {
+    double conntime = td->tls_connection_time > 0 ? difftime(time(NULL), td->tls_connection_time) : 0;
+    if (conntime > 0) {
+      char *interval = seconds_as_interval(conntime);
+      fprintf(stderr,"TLS %s disconnecting at IP %s, connected %s\n", 
+	      td->tls_serverp ? "client" : "server",
+	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)), interval);
+      free(interval);
+    } else {
+      fprintf(stderr,"TLS %s disconnecting at IP %s\n", 
+	      td->tls_serverp ? "client" : "server",
+	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)));
+    }
+  }
+
   if (td->tls_serverp) {
     // forget remote sockaddr
     memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
@@ -576,6 +638,8 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
   td->tls_serverp = 0;
   td->tls_sock = tsock;
   td->tls_ssl = ssl;
+  td->tls_connection_time = time(NULL);
+  td->tls_open_tries = 0;	// it is now open
 
   // initiate these
   if (pthread_mutex_init(&td->tcp_reconnect_mutex, NULL) != 0)
@@ -631,13 +695,16 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     memcpy(&tlsdest[tlsdest_len].tls_sa, sa, sa_len);
     if (name != NULL)
       strncpy((char *)&tlsdest[tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
-    tlsdest[tlsdest_len].tls_serverp = 1;
-    tlsdest[tlsdest_len].tls_sock = sock;
-    tlsdest[tlsdest_len].tls_ssl = ssl;
-    tlsdest[tlsdest_len].tls_addr = chaddr;
-    tlsdest[tlsdest_len].tls_myaddr = my_tls_myaddr(chaddr);
+    td = &tlsdest[tlsdest_len];
+    td->tls_serverp = 1;
+    td->tls_sock = sock;
+    td->tls_ssl = ssl;
+    td->tls_addr = chaddr;
+    td->tls_myaddr = my_tls_myaddr(chaddr);
     tlsdest_len++;
   }
+  td->tls_connection_time = time(NULL);
+  td->tls_open_tries = 0;	// it is now open
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
   if (verbose) print_tlsdest_config();
 
@@ -724,7 +791,7 @@ static int tcp_bind_socket(int type, u_short port)
 }
 
 // TCP connector, with backoff
-static int tcp_client_connect(struct sockaddr *sin)
+static int tcp_client_connect(struct sockaddr *sin, struct tls_dest *td)
 {
   int sock, unlucky = 1, foo;
   u_long ntimes = 0;
@@ -748,6 +815,8 @@ static int tcp_client_connect(struct sockaddr *sin)
 		     ? ((struct sockaddr_in *)sin)->sin_port
 		     : ((struct sockaddr_in6 *)sin)->sin6_port)));
     }
+
+    td->tls_connection_time = time(NULL); // note latest attempt
 
     if (connect(sock, sin, (sin->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) < 0) {
       if (tls_debug) {
@@ -816,11 +885,13 @@ void *tls_connector(void *arg)
 		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
     }
     // connect to server
-    int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
+    int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6), td);
 
-    if (tls_debug) {
+    td->tls_connection_time = time(NULL); // update attempt to actual opening
+
+    if (1 || tls_debug) {
       char ip[INET6_ADDRSTRLEN];
-      fprintf(stderr,"TLS client: connected to %s (%s port %d)\n", td->tls_name,
+      fprintf(stderr,"TLS client: connected to server %s (%s port %d)\n", td->tls_name,
 	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)),
 	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
 		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
@@ -957,7 +1028,9 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
     SSL_free(td->tls_ssl);
     td->tls_ssl = NULL;
   }
+  td->tls_open_tries++;		// Count how many times we've asked to reopen
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
+
 
   // Count this as a lost/aborted pkt.
   // Lost (on input):
@@ -1011,17 +1084,26 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
     close_tlsdest(td);    
   } else {
     // let connector thread do the closing/freeing
-    if (tls_debug)
-      fprintf(stderr,"TLS_please_reopen_tcp (%s)\n",td->tls_name);
-    // signal the connection thread - don't care if nobody's waiting (already working on it, probably)
-    if (pthread_mutex_lock(&td->tcp_reconnect_mutex) < 0)
-      perror("pthread_mutex_lock(reconnect)");
-    if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
-      perror("tls_please_reopen_tcp(cond)\n");
-      exit(1);
-    } 
-    if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
-      perror("pthread_mutex_unlock(reconnect)");
+    if (time(NULL) - td->tls_connection_time < 10) {
+      // Don't signal too often?
+      if (tls_debug) fprintf(stderr,"%%%% TLS please reopen: too soon, only %ld sec since last attempt\n",
+			     time(NULL) - td->tls_connection_time);
+    } else if ((td->tls_open_tries % 10) == 1) { // Only each 10th attempt, including the first?
+      if (tls_debug)
+	fprintf(stderr,"TLS_please_reopen_tcp (%s) try %d age %ld\n",td->tls_name, td->tls_open_tries,
+		time(NULL)-td->tls_connection_time);
+      // signal the connection thread - don't care if nobody's waiting (already working on it, probably)
+      if (pthread_mutex_lock(&td->tcp_reconnect_mutex) < 0)
+	perror("pthread_mutex_lock(reconnect)");
+      if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
+	perror("tls_please_reopen_tcp(cond)\n");
+	exit(1);
+      }
+      if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
+	perror("pthread_mutex_unlock(reconnect)");
+    } else if (tls_debug)
+      if (tls_debug) fprintf(stderr,"%%%% TLS please reopen: too few attempts yet (%d)\n",
+			     td->tls_open_tries);
   }
 }
 static void tls_wait_for_reconnect_signal(struct tls_dest *td)
@@ -1068,7 +1150,7 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((ssl = td->tls_ssl) == NULL) {
     PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
-    if (tls_debug) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
+    if (tls_debug && td->tls_open_tries == 0) fprintf(stderr,"TLS write record: SSL is null, please reopen\n");
     tls_please_reopen_tcp(td, 0);
     return -1;
   }

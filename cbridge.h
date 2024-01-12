@@ -223,6 +223,8 @@ struct tls_dest {
   int tls_sock;			/* TCP socket */
   SSL *tls_ssl;			/* SSL conn */
   u_short tls_muxed[CHTLS_MAXMUX]; /* See above: Other addresses we're muxing for */
+  time_t tls_connection_time;	   /* when was the last connection/attempt made? */
+  int tls_open_tries;		   /* how many times we tried to open until successful */
 };
 
 // TLS stuff
