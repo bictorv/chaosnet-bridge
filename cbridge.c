@@ -1464,7 +1464,7 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
   char *tok;
   int res;
   u_short port = default_port;
-  char *sep = NULL;
+  char *sep = NULL, sepchar;
   struct addrinfo *he, hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = PF_UNSPEC;
@@ -1472,11 +1472,30 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
 
   tok = strtok(NULL," \t\r\n");
   if (default_port > 0) {
-    sep = rindex(tok, ':');
-    if ((sep != NULL) && (strlen(sep) > 1)) {
+    // Parse port, if given: try first | and then : for separator (| works better with numeric IPv6 addresses)
+    // First try | for separator
+    sep = rindex(tok,'|');
+    if ((sep != NULL) && strlen(sep) > 1) {
+      sepchar = '|';
       port = atoi((char *)sep+1);
-      // for getaddrinfo
+      if ((port == 0) || (port < 1024)) {
+	fprintf(stderr,"bad port number '%s'\n", sep+1);
+	return -1;
+      }
+      // zap separator for getaddrinfo
       *sep = '\0';
+    } else {
+      sep = rindex(tok, ':');
+      if ((sep != NULL) && (strlen(sep) > 1)) {
+	sepchar = ':';
+	port = atoi((char *)sep+1);
+	if ((port == 0) || (port < 1024)) {
+	  fprintf(stderr,"bad port number '%s'\n", sep+1);
+	  return -1;
+	}
+	// zap separator for getaddrinfo
+	*sep = '\0';
+      }
     }
   }
 
@@ -1500,7 +1519,7 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
     strncpy(nameptr, tok, nameptr_len);
   } else {
     if (sep != NULL)
-      *sep = ':';		/* put colon back for error messages */
+      *sep = sepchar;		/* put separator back for error messages */
     fprintf(stderr,"bad %s arg %s: %s (%d)\n",
 	    type, tok, gai_strerror(res), res);
     return -1;
