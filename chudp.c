@@ -194,7 +194,7 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
     i++;			/* Align */
   if (i != (len + CHUDP_HEADERSIZE)) {
     if (debug)
-      fprintf(stderr,"==== chudp_send: calculated length %lu differs from actual %d\n",
+      fprintf(stderr,"==== chudp_send: calculated length %zu differs from actual %d\n",
 	      i - CHUDP_HEADERSIZE, len);
 #if 0 // Don't trust caller!!
     i = (len + CHUDP_HEADERSIZE)/2*2;	/* trust caller, round up */
@@ -210,7 +210,7 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
       == NULL)
     strerror_r(errno, ip, sizeof(ip));
   if (chudp_debug || verbose || debug) {
-    fprintf(stderr,"CHUDP: Sending %s: %lu + %lu + %d + %lu = %d bytes to %s:%d\n",
+    fprintf(stderr,"CHUDP: Sending %s: %zu + %zu + %d + %zu = %d bytes to %s:%d\n",
 	    ch_opcode_name(ch_opcode(ch)),
 	    CHUDP_HEADERSIZE, CHAOS_HEADERSIZE, ch_nbytes(ch), CHAOS_HW_TRAILERSIZE, i,
 	    ip, ntohs(((struct sockaddr_in *)sout)->sin_port));
@@ -253,9 +253,11 @@ add_chudp_route(u_short srcaddr)
       fprintf(stderr,"CHUDP: not updating static route to %#o via %#o (%s)\n",
 	      srcaddr, rt->rt_braddr, rt_linkname(rt->rt_link));
     }
-  } else {
+  } else if (srcaddr != 0) {
     // Add a host route
     rt = add_to_routing_table(srcaddr, 0, 0, RT_DYNAMIC, LINK_CHUDP, RTCOST_ASYNCH);
+  } else if (chudp_debug || debug) {
+    fprintf(stderr,"CHUDP: got phony source address 0 to add routing to, skipping.\n");
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
   return rt;
@@ -316,6 +318,12 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
 #if 1
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)&buf[cnt-CHAOS_HW_TRAILERSIZE];
   u_short srctrailer = 0, srcaddr = ch_srcaddr(ch);
+  // A little validation can't hurt? Unless it gets too often.
+  if ((srcaddr == 0) || ch_opcode(ch) < 1 || (ch_opcode(ch) > CHOP_BRD && ch_opcode(ch) < CHOP_DAT)) {
+    fprintf(stderr,"%%%% CHUDP: got bogus packet from %s (src %#o, opcode %#o), rejecting\n", 
+	    ip, srcaddr, ch_opcode(ch));
+    return 0;	    
+  }
   if (cnt >= CHUDP_HEADERSIZE + CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE)
     // Prefer HW sender (i.e. the chudp host rather than origin host)
     srctrailer = ntohs(tr->ch_hw_srcaddr);
