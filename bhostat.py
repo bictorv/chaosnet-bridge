@@ -17,7 +17,7 @@
 
 import socket, io
 import sys, subprocess, threading, errno
-import re, string
+import re, string, time
 import functools
 from struct import unpack
 from datetime import datetime, timedelta
@@ -31,6 +31,7 @@ import dns.resolver
 packet_address = '/tmp/chaos_packet'
 
 debug = False
+verbose = False
 
 # Default DNS resolver for Chaosnet
 dns_resolver = 'DNS.Chaosnet.NET'
@@ -338,7 +339,12 @@ class ChaosTime:
             data = data[2:]
             hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
             # cf RFC 868
-            print("{:16} {}".format(hname,datetime.fromtimestamp(unpack("I",data[0:4])[0]-2208988800)))
+            t = unpack("I",data[0:4])[0]-2208988800
+            if verbose:
+                dt = t-time.time()
+                print("{:16} {} (delta {}{})".format(hname,datetime.fromtimestamp(t),"+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))))
+            else:
+                print("{:16} {}".format(hname,datetime.fromtimestamp(t)))
 
 # The UPTIME protocol
 class ChaosUptime:
@@ -551,6 +557,8 @@ if __name__ == '__main__':
                             help="Service to ask for (STATUS, TIME, UPTIME, FINGER, ROUTING, LOAD, LASTCN, DNS)")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
+    parser.add_argument("-v",'--verbose',dest='verbose',action='store_true',
+                            help='Turn on verbose printouts')
     parser.add_argument("-n",'--no-host-names', dest='no_host_names', action='store_true',
                             help="Prefer not to ask hosts for their names")
     parser.add_argument("-R","--resolver", default=dns_resolver,
@@ -561,6 +569,8 @@ if __name__ == '__main__':
     if args.debug:
         print(args)
         debug = True
+    if args.verbose:
+        verbose = True
     if args.no_host_names:
         no_host_names = True
     if args.resolver:
