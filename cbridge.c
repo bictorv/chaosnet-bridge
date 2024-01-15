@@ -1487,14 +1487,18 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
     } else {
       sep = rindex(tok, ':');
       if ((sep != NULL) && (strlen(sep) > 1)) {
-	sepchar = ':';
-	port = atoi((char *)sep+1);
-	if ((port == 0) || (port < 1024)) {
-	  fprintf(stderr,"bad port number '%s'\n", sep+1);
-	  return -1;
+	struct in6_addr ip6;
+	if (inet_pton(AF_INET6, tok, &ip6) == 0) {
+	  // Only parse a port if it isn't an IPv6 address
+	  sepchar = ':';
+	  port = atoi((char *)sep+1);
+	  if ((port == 0) || (port < 1024)) {
+	    fprintf(stderr,"bad port number '%s'\n", sep+1);
+	    return -1;
+	  }
+	  // zap separator for getaddrinfo
+	  *sep = '\0';
 	}
-	// zap separator for getaddrinfo
-	*sep = '\0';
       }
     }
   }

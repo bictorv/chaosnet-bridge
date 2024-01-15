@@ -111,9 +111,11 @@ For links, you need to specify what link layer implementation is used for it.
 - `chudp` *host*:*port* (or *host*|*port*)
 
 	this is a Chaos-over-UDP link to *host* (IPv4, IPv6, or hostname) on *port* (default 42042). Default cost: `asynch`. 
+	The *host*:*port* syntax is invalid for numeric IPv6 *host* parts - use *host*|*port* if you want to specify a port.
 - `tls` *host*:*port* (or *host*|*port*)
 
 	this is a Chaos-over-TLS link, client end, connecting to *host* (IPv4, IPv6, or hostname) at *port* (default 42042). Default cost: `asynch`. 
+	The *host*:*port* syntax is invalid for numeric IPv6 *host* parts - use *host*|*port* if you want to specify a port.
 - `chip` *addr*
 
 	this is a Chaos-over-IP link to *addr* (IPv4, IPv6, or hostname). See below about subnet links. Default cost: `asynch`. 
