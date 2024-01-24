@@ -1,4 +1,4 @@
-# Copyright © 2020-2021 Björn Victor (bjorn@victor.se)
+# Copyright © 2020-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server/forwarder for DOMAIN protocol
 # Uses the stream API of the NCP of cbridge, the bridge program for various Chaosnet implementations.
 
@@ -14,18 +14,13 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import socket, io
-import sys, subprocess, threading, time
-import re, string
+import socket, sys, time
 import functools
-from datetime import datetime
 # pip3 install dnspython
 import dns.resolver
 
-from concurrent.futures import ThreadPoolExecutor
+from chaosnet import StreamConn
 
-# The directory of this need to match the "socketdir" ncp setting in cbridge.
-stream_socket_address = '/tmp/chaos_stream'
 # This is the default forwarding server
 dns_forwarder_name = 'DNS.Chaosnet.NET'
 dns_forwarder_addr = None
@@ -33,60 +28,11 @@ dns_forwarder_addr = None
 # -d
 debug = False
 
-class StreamConn:
-    sock = None
-    active = False
-    contact = None
-    remote = None
-
-    def __init__(self):
-        self.get_socket()
-    def __str__(self):
-        return "<{} {} {} {}>".format(type(self).__name__, self.contact,
-                                          "active" if self.active else "passive",
-                                          self.remote)
-    def __del__(self):
-        if debug:
-            print("{!s} being deleted".format(self))
-
-    def close(self, msg="Thank you"):
-        if debug:
-            print("Closing {} with msg {}".format(self,msg), file=sys.stderr)
-        # self.send_packet(Opcode.CLS, msg)
-        try:
-            self.sock.close()
-        except socket.error as msg:
-            print('Socket error closing:',msg)
-        self.sock = None
-
-    def get_socket(self):
-        address = stream_socket_address
-        # Create a Unix socket
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-
-        # Connect the socket to the port where the server is listening
-        self.sock.connect(address)
-        return self.sock
-        # try:
-        #     self.sock.connect(address)
-        #     return self.sock
-        # except socket.error as msg:
-        #     print('Socket error for {}: {}'.format(address,msg), file=sys.stderr)
-        #     return None
-    
-    def send_data(self, data):
-        # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
-        if isinstance(data, str):
-            msg = bytes(data,"ascii")
-        else:
-            msg = data
-        if debug:
-            print("> {} to {}".format(len(msg), self), file=sys.stderr)
-        self.sock.sendall(msg)
-
-    def get_message(self):
+class DomainStream(StreamConn):
+    # The DOMAIN message, that is, which starts with a length word
+    def get_domain_message(self):
         # Read header to see how long the pkt is
-        hdr = self.sock.recv(2)
+        hdr = self.get_bytes(2)
         # length
         if len(hdr) != 2:
             if debug:
@@ -95,59 +41,26 @@ class StreamConn:
         length = hdr[0] + hdr[1]*256
         if debug:
             print("< {} from {}".format(length, self), file=sys.stderr)
-        data = self.sock.recv(length)
+        data = self.get_bytes(length)
         return data
-
-    def get_line(self):
-        rline = b""
-        b = self.sock.recv(1)
-        if len(b) == 0:
-            if debug:
-                print("Received empty string", file=sys.stderr)
-            return b
-        while len(b) > 0 and b != b"\r" and b != b"\n":
-            rline += b
-            b = self.sock.recv(1)
-        if b == b"\r":
-            b = self.sock.recv(1)
-            if b != b"\n":
-                print("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b),
-                          file=sys.stderr)
-                exit(1)
-        return rline
-
-    def listen(self, contact):
-        self.contact = contact
-        if debug:
-            print("Listen for {}".format(contact))
-        self.send_data("LSN {}\r\n".format(contact))
-        inp = self.get_line()
-        if len(inp) == 0:
-            return None
-        op,data = inp.split(b' ', maxsplit=1)
-        if debug:
-            print("{}: {}".format(op,data), file=sys.stderr)
-        if op == b"RFC":
-            self.remote = str(data,"ascii")
-            return self.remote
-        else:
-            print("Expected RFC: {}".format(inp), file=sys.stderr)
-            return None
-
+    def send_domain_messsage(self,data):
+        dlen = len(data)
+        # Send length
+        self.send_data(bytes([int(dlen/256), dlen & 0xff])+data)        
 
 class Domain_Server:
     conn = None
 
     def listen(self):
-        self.conn = StreamConn()
+        self.conn = DomainStream()
 
         rfc = self.conn.listen("DOMAIN")
         if rfc == None:
             return None
-        self.conn.send_data("OPN\r\n")
+        self.conn.send_opn()
         try:
             while True:
-                request = self.conn.get_message()
+                request = self.conn.get_domain_message()
                 if request is None:
                     if debug:
                         print("Got {} message".format(request), file=sys.stderr)
@@ -161,11 +74,7 @@ class Domain_Server:
                 if debug:
                     print("Got DNS response {}, sending to {}".format(resp,rfc), file=sys.stderr)
                 wresp = resp.to_wire()
-                wlen = len(wresp)
-                # Send length
-                self.conn.send_data(bytes([int(wlen/256), wlen & 0xff]))
-                # and data
-                self.conn.send_data(wresp)
+                self.conn.send_domain_messsage(wresp)
         except dns.exception.FormError as msg:
             if debug:
                 print("DNS Error: {}".format(msg), file=sys.stderr)
@@ -191,7 +100,7 @@ if __name__ == '__main__':
             # Try to parse it as an IPv4 or IPv6 numeric address
             if socket.inet_pton(socket.AF_INET, args.forwarder):
                 dns_forwarder_addr = args.forwarder
-            if socket.inet_pton(socket.AF_INET6, args.forwarder):
+            elif socket.inet_pton(socket.AF_INET6, args.forwarder):
                 dns_forwarder_addr = args.forwarder
         except:
             # and then as a name. OK, this misses ipv6, but...

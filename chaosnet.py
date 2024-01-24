@@ -63,7 +63,7 @@ class NCPConn:
                                           "{:o}".format(self.remote) if type(self.remote) is int else self.remote)
     def __del__(self):
         if debug:
-            print("{!s} being deleted".format(self))
+            print("{!s} being deleted".format(self), file=sys.stderr)
 
     def set_debug(self,val):
         global debug
@@ -71,13 +71,14 @@ class NCPConn:
 
     def close(self, msg=b"Thank you"):
         if debug:
-            print("\r\nClosing {} with msg {}".format(self,msg), file=sys.stderr)
+            print("Closing {} with msg {}".format(self,msg), file=sys.stderr)
         self.send_cls(msg)
         time.sleep(0.5)
         try:
             self.sock.close()
         except socket.error as msg:
-            print('Socket error closing:',msg)
+            print('Socket error closing: {}'.format(msg), file=sys.stderr)
+        self.sock = None
 
     def get_socket(self):
         address = self.socket_address
@@ -89,8 +90,7 @@ class NCPConn:
             self.sock.connect(address)
             return self.sock
         except socket.error as msg:
-            print("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg), file=sys.stderr)
-            sys.exit(1)
+            raise OSError("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg))
 
     def send_socket_data(self, data):
         self.sock.sendall(data)
@@ -108,9 +108,7 @@ class NCPConn:
         if b == b"\r":
             b = self.get_bytes(1)
             if b != b"\n":
-                print("\r\nERROR: return not followed by newline in get_line from {}: got {}".format(self,b),
-                          file=sys.stderr)
-                exit(1)
+                raise OSError("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b))
         return rline
 
 class PacketConn(NCPConn):
@@ -123,18 +121,27 @@ class PacketConn(NCPConn):
         return bytes([opc, 0, plen & 0xff, int(plen/256)])
   
     def send_data(self, data):
-        # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
         if isinstance(data, str):
             msg = bytes(data,"ascii")
         else:
             msg = data
         if debug:
-            print("\r\n> {} to {}".format(len(msg), self), file=sys.stderr)
-        self.send_socket_data(self.packet_header(Opcode.DAT, len(msg)) + msg)
+            print("> {} bytes to {}".format(len(msg), self), file=sys.stderr)
+        n = 0
+        for i in range(0, len(msg), 488):
+            n = n+1
+            chunk = msg[i:i+488]
+            clen = len(chunk)
+            if debug:
+                print("Sending chunk {} len {}".format(n,clen), file=sys.stderr)
+            # self.send_socket_data(self.packet_header(Opcode.DAT, clen) + chunk)
+            self.send_packet(Opcode.DAT, chunk)
+        if debug:
+            print("Sent all {} bytes in {} packets".format(len(msg),n), file=sys.stderr)
 
     def send_packet(self, opc, data=None):
         if debug:
-            print("\r\n>>> {} len {}".format(Opcode(opc).name, len(data) if data is not None else 0), file=sys.stderr)
+            print(">>> {} len {}".format(Opcode(opc).name, len(data) if data is not None else 0), file=sys.stderr)
         if data is None:
             self.send_socket_data(self.packet_header(opc, 0))
         else:
@@ -144,6 +151,10 @@ class PacketConn(NCPConn):
         self.send_packet(Opcode.LOS, msg)
     def send_cls(self, msg):
         self.send_packet(Opcode.CLS, msg)
+    def send_ans(self, msg):
+        self.send_packet(Opcode.ANS, msg)
+    def send_opn(self):
+        self.send_packet(Opcode.OPN)
     def send_eof(self, wait=False):
         if wait:
             self.send_packet(Opcode.EOF,b"wait")
@@ -172,22 +183,25 @@ class PacketConn(NCPConn):
         else:
             assert(length <= 488)
         if debug:
-            print("\r\n< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
+            print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
         data = self.get_bytes(length)
         return opc, data
 
     def listen(self, contact):
         self.contact = contact
         if debug:
-            print("Listen for {}".format(contact))
+            print("Listen for {}".format(contact), file=sys.stderr)
         self.send_packet(Opcode.LSN,bytes(contact,"ascii"))
         op,data = self.get_packet()
         if debug:
-            print("\r\n{}: {}".format(op,data), file=sys.stderr)
+            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
         if op == Opcode.RFC:
-            self.remote = str(data,"ascii")
-            self.send_packet(Opcode.OPN)
-            return self.remote
+            hostandargs = str(data,"ascii").split(" ",maxsplit=1)
+            self.remote = hostandargs[0]
+            self.args = hostandargs[1:]
+            # Packet conn has to send its own OPN
+            # self.send_packet(Opcode.OPN)
+            return self.remote,self.args
         else:
             raise OSError("Expected RFC: {}".format(inp))
             return None
@@ -197,8 +211,8 @@ class PacketConn(NCPConn):
         if options is not None:
             h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
         if debug:
-            print("\r\nOptions: {} = {}".format(options, h), file=sys.stderr)
-            print("\r\nRFC: {}".format(h), file=sys.stderr)
+            print("Options: {} = {}".format(options, h), file=sys.stderr)
+            print("RFC: {}".format(h), file=sys.stderr)
         self.active = True
         self.contact = contact
         self.send_packet(Opcode.RFC, h)
@@ -210,7 +224,7 @@ class PacketConn(NCPConn):
             self.remote = str(data,"ascii")
             return True
         elif opc == Opcode.LOS:
-            print("\r\nGot LOS: {}".format(str(data,"ascii")), file=sys.stderr)
+            print("Got LOS: {}".format(str(data,"ascii")), file=sys.stderr)
             return False
         else:
             raise OSError("Expected OPN, got {}".format(Opcode(opc).name))
@@ -223,11 +237,11 @@ class PacketConn(NCPConn):
             return None
         elif opc == Opcode.LOS:
             if debug:
-                print("\r\nLOS: {}".format(str(data,"ascii")), file=sys.stderr)
+                print("LOS: {}".format(str(data,"ascii")), file=sys.stderr)
             return None
         elif opc == Opcode.EOF:
             if debug:
-                print("\r\n{} got EOF: {}".format(self,data), file=sys.stderr)
+                print("{} got EOF: {}".format(self,data), file=sys.stderr)
             return None
         elif opc != Opcode.DAT:
             raise OSError("Unexpected opcode {}".format(opc))
@@ -236,7 +250,7 @@ class PacketConn(NCPConn):
             return data
         else:
             if debug:
-                print("read less than expected: {} < {}, going for more".format(len(data),dlen))
+                print("read less than expected: {} < {}, going for more".format(len(data),dlen), file=sys.stderr)
             return data + self.get_message(dlen-len(data))
 
     def copy_until_eof(self, outstream=sys.stdout):
@@ -247,18 +261,17 @@ class PacketConn(NCPConn):
                 return None
             elif opc == Opcode.LOS:
                 if debug:
-                    print("\r\nLOS: {}".format(str(data,"ascii")), file=sys.stderr)
+                    print("LOS: {}".format(str(data,"ascii")), file=sys.stderr)
                 return None
             elif opc == Opcode.EOF:
                 if debug:
-                    print("\r\n{} got EOF: {}".format(self,data), file=sys.stderr)
+                    print("{} got EOF: {}".format(self,data), file=sys.stderr)
                 return None
             # @@@@ handle ANS too?
             elif opc != Opcode.DAT:
                 raise OSError("Unexpected opcode {}".format(opc))
                 return None
             else:
-                cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
                 last = None
                 while True:
                     data = self.sock.recv(488)
@@ -267,13 +280,10 @@ class PacketConn(NCPConn):
                             # finish with a fresh line
                             print("",file=outstream)
                         return None
-                    for c in data:
-                        last = c
-                        # translate
-                        if c in cmap:
-                            print(chr(cmap[c]),end='',file=outstream)
-                        else:
-                            print(chr(c),end='',file=outstream)
+                    # Translate to Unix
+                    out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                    last = out[-1]
+                    print("{!s}".format(out), file=outstream)
 
 # For simple broadcast protocols
 # Iterator gives source address and data for each ANS
@@ -336,6 +346,8 @@ class StreamConn(NCPConn):
             print("> {} to {}\r".format(len(msg), self), file=sys.stderr)
         self.send_socket_data(msg)
 
+    def send_opn(self):
+        self.send_data("OPN\r\n")
     def send_los(self, msg):
         # Can't do this over stream interface
         pass
@@ -346,15 +358,17 @@ class StreamConn(NCPConn):
     def listen(self, contact):
         self.contact = contact
         if debug:
-            print("Listen for {}".format(contact))
+            print("Listen for {}".format(contact), file=sys.stderr)
         self.send_data("LSN {}\r\n".format(contact))
         inp = self.get_line()
         op,data = inp.split(b' ', maxsplit=1)
         if debug:
             print("{}: {}\r".format(op,data), file=sys.stderr)
         if op == b"RFC":
-            self.remote = str(data,"ascii")
-            return self.remote
+            hostandargs = str(data,"ascii").split(" ",maxsplit=1)
+            self.remote = hostandargs[0]
+            self.args = hostandargs[1:]
+            return self.remote,self.args
         else:
             raise OSError("Expected RFC: {}\r".format(inp))
             return None
@@ -365,15 +379,15 @@ class StreamConn(NCPConn):
         if options is not None:
             h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
         if debug:
-            print("RFC to {} for {}".format(host,h))
+            print("RFC to {} for {!r}".format(host,h), file=sys.stderr)
         self.send_data("RFC {}".format(h))
         inp = self.get_line()
         op, data = inp.split(b' ', maxsplit=1)
         if debug:
-            print("\r\n{}: {}".format(op,data), file=sys.stderr)
+            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
         if op == b"OPN":
             self.active = True
-            self.remote = host                  #should parse OPN data
+            self.remote = host                  #should we parse OPN data?
             self.contact = contact
             return True
         else:
@@ -383,14 +397,14 @@ class StreamConn(NCPConn):
     def get_message(self, length=488):
         data = self.sock.recv(length)
         if debug:
-            print("\r\n< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
+            print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
         if len(data) == 0:
             # This is handled somewhere
             raise OSError("Error: Got no bytes: {}".format(data))
         elif len(data) < length:
             d2 = self.sock.recv(length-len(data))
             if debug:
-                print("\r\n< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
+                print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
             data += d2
         return data
 
@@ -429,6 +443,8 @@ class Simple:
         for hname in hnames:
             self.conn = PacketConn()
             try:
+                if debug:
+                    print("Simple connect to {} {} {}".format(hname,contact,args), file=sys.stderr)
                 self.conn.connect(hname, contact, args, options, simple=True)
                 if printer is not None:
                     src, data = self.result()
@@ -451,6 +467,8 @@ class Simple:
         opc, data = self.conn.get_packet()
         if opc == Opcode.ANS:
             src = data[0] + data[1]*256
+            if debug:
+                print("Simple ANS len {} from {:o}".format(len(data)-2,src), file=sys.stderr)
             return src, data[2:]
         elif opc == Opcode.LOS:
             if debug:

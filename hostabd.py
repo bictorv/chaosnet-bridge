@@ -1,4 +1,4 @@
-# Copyright © 2023 Björn Victor (bjorn@victor.se)
+# Copyright © 2023-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server for HOSTAB protocol.
 # As an extension, the request can also be a Chaosnet address (octal), which is looked up
 # giving the same response as if the corresponding name had been requested.
@@ -136,6 +136,7 @@ if __name__ == '__main__':
             h = c.listen("HOSTAB")
             if debug:
                 print("Conn from {}".format(h), file=sys.stderr)
+            c.send_opn()
             xec = threading.Thread(target=hostab_server, args=(c,args.timeout,dns_resolver_address,args.default_domain))
             xec.start()
             # hostab_server(c, timeout=args.timeout)
