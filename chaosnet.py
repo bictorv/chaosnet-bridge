@@ -1,4 +1,4 @@
-# Copyright © 2023 Björn Victor (bjorn@victor.se)
+# Copyright © 2023-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet support for python.
 # Demonstrates the APIs for the NCP of cbridge: both the simpler stream protocol and the packet protocol.
 
@@ -14,7 +14,11 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import socket, io, sys, time
+# TODO:
+# - raises OSError in places, but should use a more specific exception?
+# - let debug be connection-local and initable
+
+import socket, sys, time
 from enum import IntEnum, auto
 
 # The directories of these need to match the "socketdir" ncp setting in cbridge.
@@ -22,7 +26,6 @@ stream_socket_address = '/tmp/chaos_stream'
 packet_socket_address = '/tmp/chaos_packet'
 # -d
 debug = False
-packetp = False
 
 # Chaos packet opcodes
 class Opcode(IntEnum):
@@ -57,7 +60,7 @@ class NCPConn:
     def __str__(self):
         return "<{} {} {} {}>".format(type(self).__name__, self.contact,
                                           "active" if self.active else "passive",
-                                          self.remote)
+                                          "{:o}".format(self.remote) if type(self.remote) is int else self.remote)
     def __del__(self):
         if debug:
             print("{!s} being deleted".format(self))
@@ -86,7 +89,7 @@ class NCPConn:
             self.sock.connect(address)
             return self.sock
         except socket.error as msg:
-            print('\r\nSocket errror:',msg, file=sys.stderr)
+            print("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg), file=sys.stderr)
             sys.exit(1)
 
     def send_socket_data(self, data):
@@ -156,17 +159,22 @@ class PacketConn(NCPConn):
         hdr = self.get_bytes(4)
         if hdr is None or len(hdr) == 0:
             # This is handled somewhere
-            raise OSError("Error: Got no bytes: {}".format(hdr))
+            raise OSError("Error: {} got no bytes: {}".format(self,hdr))
         # First is opcode
         opc = hdr[0]
         # then zero
         assert(hdr[1] == 0)
         # then length
         length = hdr[2] + hdr[3]*256
-        assert(length <= 488)
+        if opc == Opcode.ANS:
+            # Includes 2 bytes of source!
+            assert length <= 490
+        else:
+            assert(length <= 488)
         if debug:
             print("\r\n< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
-        return opc, self.get_bytes(length)
+        data = self.get_bytes(length)
+        return opc, data
 
     def listen(self, contact):
         self.contact = contact
@@ -181,28 +189,31 @@ class PacketConn(NCPConn):
             self.send_packet(Opcode.OPN)
             return self.remote
         else:
-            print("\r\nExpected RFC: {}".format(inp), file=sys.stderr)
+            raise OSError("Expected RFC: {}".format(inp))
             return None
 
-    def connect(self, host, contact, args=[], options=None):
-        h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
+    def connect(self, host, contact, args=[], options=None, simple=False):
+        h = bytes(("{} {}"+" {}"*len(args)).format("{:o}".format(host) if type(host) is int else host,contact.upper(),*args),"ascii")
         if options is not None:
             h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
         if debug:
             print("\r\nOptions: {} = {}".format(options, h), file=sys.stderr)
             print("\r\nRFC: {}".format(h), file=sys.stderr)
+        self.active = True
+        self.contact = contact
         self.send_packet(Opcode.RFC, h)
+        if simple:
+            # Need to return and let caller call get_packet
+            return True
         opc, data = self.get_packet()
         if opc == Opcode.OPN:
-            self.active = True
             self.remote = str(data,"ascii")
-            self.contact = contact
             return True
         elif opc == Opcode.LOS:
             print("\r\nGot LOS: {}".format(str(data,"ascii")), file=sys.stderr)
             return False
         else:
-            print("\r\nExpected OPN: {}".format(opc), file=sys.stderr)
+            raise OSError("Expected OPN, got {}".format(Opcode(opc).name))
             return False
 
     def get_message(self, dlen=488):
@@ -211,7 +222,7 @@ class PacketConn(NCPConn):
             self.close()
             return None
         elif opc == Opcode.LOS:
-            if True or debug:
+            if debug:
                 print("\r\nLOS: {}".format(str(data,"ascii")), file=sys.stderr)
             return None
         elif opc == Opcode.EOF:
@@ -219,7 +230,7 @@ class PacketConn(NCPConn):
                 print("\r\n{} got EOF: {}".format(self,data), file=sys.stderr)
             return None
         elif opc != Opcode.DAT:
-            print("\r\nUnexpected opcode {}".format(opc), file=sys.stderr)
+            raise OSError("Unexpected opcode {}".format(opc))
             return None
         elif len(data) >= dlen:
             return data
@@ -227,7 +238,89 @@ class PacketConn(NCPConn):
             if debug:
                 print("read less than expected: {} < {}, going for more".format(len(data),dlen))
             return data + self.get_message(dlen-len(data))
-    
+
+    def copy_until_eof(self, outstream=sys.stdout):
+        while True:
+            opc, data = self.get_packet()
+            if opc == Opcode.CLS:
+                self.close()
+                return None
+            elif opc == Opcode.LOS:
+                if debug:
+                    print("\r\nLOS: {}".format(str(data,"ascii")), file=sys.stderr)
+                return None
+            elif opc == Opcode.EOF:
+                if debug:
+                    print("\r\n{} got EOF: {}".format(self,data), file=sys.stderr)
+                return None
+            # @@@@ handle ANS too?
+            elif opc != Opcode.DAT:
+                raise OSError("Unexpected opcode {}".format(opc))
+                return None
+            else:
+                cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
+                last = None
+                while True:
+                    data = self.sock.recv(488)
+                    if len(data) == 0:
+                        if last not in [0o215,0o212,0o15,0o12]:
+                            # finish with a fresh line
+                            print("",file=outstream)
+                        return None
+                    for c in data:
+                        last = c
+                        # translate
+                        if c in cmap:
+                            print(chr(cmap[c]),end='',file=outstream)
+                        else:
+                            print(chr(c),end='',file=outstream)
+
+# For simple broadcast protocols
+# Iterator gives source address and data for each ANS
+class BroadcastConn(PacketConn):
+    def __init__(self, subnets, contact, args=[], options=None):
+        super().__init__()
+        # Allow aliases for "all" and "local" subnets
+        if len(subnets) == 1 and subnets[0] == -1:
+            subnets = ["all"]
+        elif len(subnets) == 1 and subnets[0] == 0:
+            subnets = ["local"]
+        self.contact = contact
+        self.remote = subnets
+        h = bytes("{} {}".format(",".join(map(str,subnets)),contact),"ascii")
+        for a in args:
+            if isinstance(a,str):
+                h += b" "+bytes(a)
+            else:
+                h += b" "+a
+        if options is not None:
+            h = bytes("["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] ","ascii")+h
+        self.send_packet(Opcode.BRD, h)
+        return None
+
+    def __iter__(self):
+        return self
+    def __next__(self):
+        try:
+            opc, data = self.get_packet()
+            if opc == None:
+                raise StopIteration
+        except OSError:
+            raise StopIteration
+        if opc == Opcode.ANS:
+            src = data[0] + data[1]*256
+            if debug:
+                print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
+            return src,data[2:]
+        elif opc == Opcode.LOS or opc == Opcode.CLS:
+            # LOS from cbridge, CLS from buggy BSD
+            if debug:
+                print("Got {}: {}".format(Opcode(opc).name, data), file=sys.stderr)
+            # @@@@ Hmm, should just ignore it?
+            raise StopIteration
+        else:
+            raise OSError("Got unexpected {} len {}: {}".format(Opcode(opc).name, len(data) if data is not None else 0, data))
+
 class StreamConn(NCPConn):
     def __init__(self):
         self.socket_address = stream_socket_address
@@ -263,12 +356,12 @@ class StreamConn(NCPConn):
             self.remote = str(data,"ascii")
             return self.remote
         else:
-            print("\r\nExpected RFC: {}\r".format(inp), file=sys.stderr)
+            raise OSError("Expected RFC: {}\r".format(inp))
             return None
 
     def connect(self, host, contact, args=[], options=None):
         self.contact = contact
-        h = ("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args)
+        h = ("{} {}"+" {}"*len(args)).format("{:o}".format(host) if type(host) is int else host,contact.upper(),*args)
         if options is not None:
             h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
         if debug:
@@ -284,7 +377,7 @@ class StreamConn(NCPConn):
             self.contact = contact
             return True
         else:
-            print("\r\nExpected OPN: {}".format(inp), file=sys.stderr)
+            raise OSError("Expected OPN: {}".format(inp))
             return False
 
     def get_message(self, length=488):
@@ -301,21 +394,59 @@ class StreamConn(NCPConn):
             data += d2
         return data
 
+    def copy_until_eof(self, outstream=sys.stdout):
+        cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
+        last = None
+        while True:
+            data = self.sock.recv(488)
+            if len(data) == 0:
+                if last not in [0o215,0o212,0o15,0o12]:
+                    # finish with a fresh line
+                    print("",file=outstream)
+                return None
+            for c in data:
+                last = c
+                # translate
+                if c in cmap:
+                    print(chr(cmap[c]),end='',file=outstream)
+                else:
+                    print(chr(c),end='',file=outstream)
+
+# Generic simple protocol
 class Simple:
     conn = None
     hname = None
-    def __init__(self, hname, contact, args=[], options=None):
-        self.hname = hname
-        self.conn = Conn()
-        h = ("{} {}"+" {}"*len(args)).format(hname,contact,*args)
-        if options is not None:
-            h = "["+",".join(list(map(lambda o: "{}={}".format(o, options[o]), filter(lambda o: options[o], options))))+"] "+h
-        try:
-            if debug:
-                print("RFC {}".format(h), file=sys.stderr)
-            self.conn.send_packet(Opcode.RFC, bytes(h,"ascii"))
-        except socket.error:
-            return None
+    # To support chaining with broadcast
+    hdr_printed = False
+    printed_sources = []
+    def __init__(self, hnames, contact, args=[], options=None, header=None, printer=None, nonprinter=None, already_printed=None):
+        if already_printed is not None:
+            self.printed_sources = already_printed
+        # Accept a list of host names to contact
+        if type(hnames) is not list:
+            hnames = [hnames]
+        nonprinted = []
+        for hname in hnames:
+            self.conn = PacketConn()
+            try:
+                self.conn.connect(hname, contact, args, options, simple=True)
+                if printer is not None:
+                    src, data = self.result()
+                    if not self.hdr_printed and header is not None:
+                        print(header)
+                        self.hdr_printed = True
+                    if not printer(src,data):
+                        # Save this if it wasn't printed now (e.g. Free lispm)
+                        nonprinted.append([src,data])
+                    self.printed_sources.append(src)
+                else:
+                    return None
+            except socket.error:
+                pass
+        if nonprinter is not None and len(nonprinted) > 0:
+            # At the end, maybe print those not printed earlier
+            nonprinter(nonprinted)
+        return None
     def result(self):
         opc, data = self.conn.get_packet()
         if opc == Opcode.ANS:
@@ -326,8 +457,32 @@ class Simple:
                 print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
             return None, None
         else:
-            print("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data), file=sys.stderr)
+            raise OSError("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
             return None
+
+# Given subnets, contact, options, header, and a printer (taking ANS as arg),
+# broadcast and then iterate printer over responses, filtering previously received ones
+class BroadcastSimple:
+    # To support chaining with unicast
+    hdr_printed = False
+    printed_sources = []
+    def __init__(self, subnets, contact, args=[], options=None, header=None, printer=None, nonprinter=None, already_printed=None):
+        nonprinted = []
+        if already_printed is not None:
+            self.printed_sources = already_printed
+        for src,data in BroadcastConn(subnets, contact, options=options, args=args):
+            if src in self.printed_sources:
+                continue                  # already handled
+            self.printed_sources.append(src)
+            if not self.hdr_printed and header is not None:
+                print(header)               # print header
+                self.hdr_printed = True
+            if not printer(src,data):
+                # Save this if it wasn't printed now (e.g. Free lispm)
+                nonprinted.append([src,data])
+        # At the end, maybe print those not printed earlier
+        if len(nonprinted) > 0 and nonprinter is not None:
+            nonprinter(nonprinted)
 
 ################ DNS
 # pip3 install dnspython
