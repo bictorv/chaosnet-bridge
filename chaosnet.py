@@ -184,8 +184,7 @@ class PacketConn(NCPConn):
             assert(length <= 488)
         if debug:
             print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
-        data = self.get_bytes(length)
-        return opc, data
+        return opc, self.get_bytes(length)
 
     def listen(self, contact):
         self.contact = contact
@@ -199,8 +198,6 @@ class PacketConn(NCPConn):
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
-            # Packet conn has to send its own OPN
-            # self.send_packet(Opcode.OPN)
             return self.remote,self.args
         else:
             raise OSError("Expected RFC: {}".format(inp))
@@ -230,7 +227,7 @@ class PacketConn(NCPConn):
             raise OSError("Expected OPN, got {}".format(Opcode(opc).name))
             return False
 
-    def get_message(self, dlen=488):
+    def get_message(self, dlen=488, partialOK=False):
         opc, data = self.get_packet()
         if opc == Opcode.CLS:
             self.close()
@@ -246,7 +243,9 @@ class PacketConn(NCPConn):
         elif opc != Opcode.DAT:
             raise OSError("Unexpected opcode {}".format(opc))
             return None
-        elif len(data) >= dlen:
+        elif len(data) == 0:
+            return None
+        elif partialOK or len(data) >= dlen:
             return data
         else:
             if debug:
@@ -343,7 +342,7 @@ class StreamConn(NCPConn):
         else:
             msg = data
         if debug:
-            print("> {} to {}\r".format(len(msg), self), file=sys.stderr)
+            print("> {} to {}".format(len(msg), self), file=sys.stderr)
         self.send_socket_data(msg)
 
     def send_opn(self):
@@ -363,14 +362,14 @@ class StreamConn(NCPConn):
         inp = self.get_line()
         op,data = inp.split(b' ', maxsplit=1)
         if debug:
-            print("{}: {}\r".format(op,data), file=sys.stderr)
+            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
         if op == b"RFC":
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
             return self.remote,self.args
         else:
-            raise OSError("Expected RFC: {}\r".format(inp))
+            raise OSError("Expected RFC: {}".format(inp))
             return None
 
     def connect(self, host, contact, args=[], options=None):
@@ -394,14 +393,14 @@ class StreamConn(NCPConn):
             raise OSError("Expected OPN: {}".format(inp))
             return False
 
-    def get_message(self, length=488):
+    def get_message(self, length=488, partialOK=False):
         data = self.sock.recv(length)
         if debug:
             print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
         if len(data) == 0:
             # This is handled somewhere
             raise OSError("Error: Got no bytes: {}".format(data))
-        elif len(data) < length:
+        elif not partialOK and len(data) < length:
             d2 = self.sock.recv(length-len(data))
             if debug:
                 print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
