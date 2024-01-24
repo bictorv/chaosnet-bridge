@@ -194,13 +194,13 @@ class PacketConn(NCPConn):
         op,data = self.get_packet()
         if debug:
             print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
-        if op == Opcode.RFC:
+        if op == Opcode.RFC or op == Opcode.BRD: # BRD is supposed to be translated to RFC!
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
             return self.remote,self.args
         else:
-            raise OSError("Expected RFC: {}".format(inp))
+            raise OSError("Expected RFC: {}".format(Opcode(op).name))
             return None
 
     def connect(self, host, contact, args=[], options=None, simple=False):
@@ -369,7 +369,7 @@ class StreamConn(NCPConn):
             self.args = hostandargs[1:]
             return self.remote,self.args
         else:
-            raise OSError("Expected RFC: {}".format(inp))
+            raise OSError("Expected RFC: {}".format(op))
             return None
 
     def connect(self, host, contact, args=[], options=None):
@@ -383,14 +383,14 @@ class StreamConn(NCPConn):
         inp = self.get_line()
         op, data = inp.split(b' ', maxsplit=1)
         if debug:
-            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
+            print("{}: {}".format(op,data), file=sys.stderr)
         if op == b"OPN":
             self.active = True
             self.remote = host                  #should we parse OPN data?
             self.contact = contact
             return True
         else:
-            raise OSError("Expected OPN: {}".format(inp))
+            raise OSError("Expected OPN: {}".format(op))
             return False
 
     def get_message(self, length=488, partialOK=False):

@@ -1286,7 +1286,7 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   } else {
     // Resending an OPN in Open_Sent: need to lock, still
     PTLOCKN(cs->conn_state_lock,"conn_state_lock");
-    fprintf(stderr,"%%%% Sending %s in %s state\n", ch_opcode_name(opcode), state_name(cs->state));
+    if (ncp_debug) fprintf(stderr,"%%%% Sending %s in %s state\n", ch_opcode_name(opcode), state_name(cs->state));
   }
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
@@ -1456,7 +1456,8 @@ packet_conn_header_from_pkt(struct conn *conn, struct chaos_header *pkt, u_char 
   }
   if (opc == CHOP_ANS)
     len += 2;
-  out[olen++] = opc;
+  // Translate BRD to RFC
+  out[olen++] = opc == CHOP_BRD ? CHOP_RFC : opc;
   out[olen++] = 0;
   // lsb
   out[olen++] = len & 0xff;
@@ -3853,7 +3854,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       if (ncp_debug) printf("Passing BRD on as RFC by skipping %d bytes of subnet mask\n", ch_ackno(pkt));
       buf += ch_ackno(pkt);
     case CHOP_RFC:
-      sprintf((char *)obuf,"RFC %s\r\n", buf);
+      sprintf((char *)obuf,"RFC %s\r\n", buf); // Note: not opcode name - translate BRD to RFC
       len += 4+2;
       break;
     case CHOP_OPN:
