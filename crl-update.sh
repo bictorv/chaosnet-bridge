@@ -1,4 +1,4 @@
-#/bin/sh
+#!/bin/sh
 ## Copyright © 2023 Björn Victor (bjorn@victor.se)
 ## Script to fetch a fresh CRL file if needed. Run it periodically, e.g. every night.
 
