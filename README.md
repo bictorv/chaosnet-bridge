@@ -2,7 +2,7 @@
 
 This program is a bridge between Chaosnet implementations. It supports different link layer implementations:
 - Chaos-over-Ethernet (protocol nr 0x0804, cf https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml)
-- Chaos-over-UDP (encapsulation used by the klh10/its pdp10 emulator, see https://its.victor.se/wiki/ch11)
+- Chaos-over-UDP (encapsulation used by e.g. the klh10/its pdp10 emulator, see https://its.victor.se/wiki/ch11)
 - Chaos-over-Unix-sockets (used by the usim CADR emulator, see http://www.unlambda.com/cadr/) 
 - Chaos-over-TLS (see below)
 - Chaos-over-IP (using IP protocol 16, cf https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml)
@@ -23,7 +23,8 @@ It also implements the transport layer of Chaosnet (using any of the above link 
 You can configure the bridge to connect subnets and/or individual hosts. 
 
 Use cases could be
-- connecting ITSes running on klh10. Rather than configuring your
+- connecting ITSes running on klh10 or simh, or [the usim CADR emulator](https://tumbleweed.nu/lm-3/).
+  Rather than configuring your
   klh10 to handle all other chudp hosts and iptables to forward chudp
   pkts over the tun interface, keep routing in the bridge
   program. Adding new chudp hosts now doesn't require klh10
@@ -34,7 +35,7 @@ Use cases could be
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
   with others using usim (use a Chaos-over-UDP or -over-TLS or
   -over-IP link between them). 
-- connecting remote Chaosnet-over-IP networks, e.g. in case you run TOPS-20 with Chaosnet, or a
+- connecting remote Chaosnet-over-IP networks, e.g. in case you run [TOPS-20 with Chaosnet](https://github.com/bictorv/tops20-chaos), or a
   [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
 - and interconnecting these, of course!
 
@@ -82,6 +83,10 @@ the "chaosd" server (found with the usim CADR emulator, see
 http://www.unlambda.com/cadr/, or at https://tumbleweed.nu/lm-3/).
 There can be only one such server per host system (on the same host as
 the bridge) since the named socket of the server is constant.
+
+(Note that the modern usim at https://tumbleweed.nu/lm-3/ does not
+need the "chaosd" server, but can connect directly to cbridge using
+Chaos-over-UDP.)
 
 ### Chaos-over-Ethernet
 
@@ -142,7 +147,7 @@ Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`
 
 ### Network Control Program
 
-A simple unix sockets interface for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup).
+A simple unix sockets interface ("API") for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup). There is also a higher-level Python library.
 
 ## Routing basics
 
