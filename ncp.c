@@ -1140,10 +1140,10 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
 	// Copy contact name, space, args
 	int clen = strlen((char *)c->conn_contact);
 	strcpy((char *)rfcwithargs, (char *)c->conn_contact);
-	rfcwithargs[clen] = ' ';
+	rfcwithargs[clen++] = ' ';
 	// treat this as binary
-	memcpy(&rfcwithargs[clen+1], c->conn_contact_args, c->conn_contact_args_len);
-	clen += c->conn_contact_args_len + 1;
+	memcpy(&rfcwithargs[clen], c->conn_contact_args, c->conn_contact_args_len);
+	clen += c->conn_contact_args_len;
 	// swap it
 	htons_buf((u_short*)rfcwithargs, (u_short *)data, clen);
 	pklen += clen;
@@ -1170,8 +1170,6 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   set_ch_nbytes(ch, pklen);
 
   pklen += CHAOS_HEADERSIZE;
-  if (pklen % 2)
-    pklen++;
   return pklen;
 }
 
@@ -1931,7 +1929,7 @@ parse_contact_args(struct conn *conn, u_char *data, u_char *contact, int len)
     if (stringp) {
       // skip spaces
       while (*p == ' ') p++;
-      for (i = 0, e = p; i < j && (*e != '\n') && (*e != '\r'); e++, i++);
+      for (i = 0, e = p; i < j && (*e != '\0') && (*e != '\n') && (*e != '\r'); e++, i++);
     } else {
       // data from a packet, just use it
       e = data+len;
