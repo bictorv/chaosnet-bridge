@@ -432,5 +432,7 @@ if __name__ == '__main__':
         else:
             print("Bad service arg {}, please use {} (in any case)".format(args.service, service_names))
             exit(1)
+    except OSError as msg:
+        print(msg, file=sys.stderr)
     except KeyboardInterrupt:
         pass
