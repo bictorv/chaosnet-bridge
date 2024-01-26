@@ -1078,9 +1078,14 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
     // @@@@ find the syscall error and report it.
     // @@@@ For now:
     // punt;
-    fprintf(stderr,"SSL_write error %d\n", err);
-    if (tls_debug)
-      ERR_print_errors_fp(stderr);
+    if (tls_debug) {
+      if (err == SSL_ERROR_SYSCALL)
+	perror("SSL_write error");
+      else {
+	fprintf(stderr,"SSL_write error %d\n", err);
+	ERR_print_errors_fp(stderr);
+      }
+    }
     PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
     // close/free etc
     tls_please_reopen_tcp(td, 0);
@@ -1667,7 +1672,7 @@ validate_cert_vs_crl(X509 *cert, char *fname)
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
       BIO_printf(b, "%%%% Warning: CRL file %s should %s updated ", tls_crl_file, days < 0 ? "have been" : "be");
       ASN1_TIME_print(b, nupdate);
-      BIO_printf(b, days < 0 ? " (%d days ago)" : " (in %d days)\n", days < 0 ? -days : days);
+      BIO_printf(b, days < 0 ? " (%d days ago)\n" : " (in %d days)\n", days < 0 ? -days : days);
       BIO_free(b);
       char *url = get_cert_crl_dp(cert);
       if (url != NULL)
