@@ -89,10 +89,12 @@ def name_server():
         # cbridge down, try again in a while
         if debug:
             print("Conn refused: {}".format(msg), file=sys.stderr)
+        time.sleep(5)
         pass
     except (socket.error,BrokenPipeError) as msg:
         if debug:
             print("Error: {}".format(msg), file=sys.stderr)
+        time.sleep(2)
 
 if __name__ == '__main__':
     import argparse
