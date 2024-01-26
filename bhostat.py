@@ -229,8 +229,13 @@ class ChaosLoadName(SimpleProtocol):
                 return False
             # Print a header to show what's about to happen
             print("[{:s}]".format(hname))
-            s = SimpleStreamProtocol(hname,"NAME")
-            s.copy_until_eof()
+            try:
+                s = SimpleStreamProtocol(hname,"NAME")
+                s.copy_until_eof()
+            except OSError as msg:
+                if debug:
+                    print(msg, file=sys.stderr)
+                return False
             return True
     def nonprinter(self,datas):
         if len(datas) > 0:
