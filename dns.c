@@ -551,7 +551,7 @@ dns_list_root_nameservers(void)
 
 
 // debug
-#if 1
+#if 0
 static void print_resolver_state(struct __res_state *sp)
 {
   printf("DNS resolver state in thread %p:\n", (void *)pthread_self());
@@ -668,7 +668,7 @@ init_chaos_dns_state(res_state statp)
   if (statp->nscount == 0) {
     fprintf(stderr,"%%%% DNS: could not parse any DNS servers!\n");
     // @@@@ probably exit?
-#if 1
+#if 0
   } else if (trace_dns) {
     print_resolver_state(statp);
 #endif
@@ -796,6 +796,7 @@ print_config_dns()
     printf("\n");
   }
   if (n_dns_servers == 1) {
+    // @@@@ but if it is on a private network it's normal to have only one
     printf(" Suggested DNS servers: ");
     int nrec = dns_list_root_nameservers();
     if (nrec > MAX_DNS_SERVERS) 
