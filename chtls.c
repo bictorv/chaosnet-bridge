@@ -36,6 +36,7 @@ static int tls_tcp_ursock;		/* ur-socket to listen on (for server end) */
 
 static int tls_write_record(struct tls_dest *td, u_char *buf, int len);
 static void tls_wait_for_reconnect_signal(struct tls_dest *td);
+static int validate_crl_file();
 
 // Find the tls_myaddrs matching the other address
 static u_short my_tls_myaddr(u_short other)
@@ -805,6 +806,7 @@ void *tls_connector(void *arg)
   SSL_CTX *ctx = tls_create_client_context();
   tls_configure_context(ctx);
 
+  int crl_expiry_warned = 0;
   while (1) {
     // @@@@ re-parse tlsdest?
     if (tls_debug) {
@@ -825,6 +827,21 @@ void *tls_connector(void *arg)
 	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
 		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
 		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
+    }
+
+    if (strlen(tls_crl_file) > 0) {
+      // Validate the CRL file. If it has expired, don't open the connection since validation will fail anyway.
+      if (validate_crl_file() < 0) {
+	if (crl_expiry_warned == 0) {
+	  fprintf(stderr,"%%%% CRL file %s has expired - you must download a fresh copy.\n", tls_crl_file);
+	  // But only warn once
+	  crl_expiry_warned = 1;
+	}
+	close(tsock);
+	sleep(30);		// Wait a while for it to get updated.
+	continue;		// Try again
+      } else
+	crl_expiry_warned = 0;	// If it hasn't expired, we haven't warned (it might now be updated)
     }
 
     if ((ssl = SSL_new(ctx)) == NULL) {
@@ -1222,6 +1239,7 @@ tls_server(void *v)
   SSL_CTX *ctx = tls_create_server_context();
   tls_configure_context(ctx);
 
+  int crl_expiry_warned = 0;
   while (1) {
     struct sockaddr_storage caddr;
     u_int clen = sizeof(caddr);
@@ -1231,6 +1249,20 @@ tls_server(void *v)
       perror("accept (TLS server)");
       // @@@@ what could go wrong here?
       exit(1);
+    }
+    if (strlen(tls_crl_file) > 0) {
+      // Validate the CRL file. If it has expired, don't open the connection since validation will fail anyway.
+      if (validate_crl_file() < 0) {
+	if (crl_expiry_warned == 0) {
+	  fprintf(stderr,"%%%% CRL file %s has expired - you must download a fresh copy.\n", tls_crl_file);
+	  // But only warn once
+	  crl_expiry_warned = 1;
+	}
+	close(tsock);
+	sleep(30);		// Wait a while for it to get updated.
+	continue;
+      } else
+	crl_expiry_warned = 0;	// If it hasn't expired, we haven't warned (it might now be updated)
     }
     if ((ssl = SSL_new(ctx)) == NULL) {
       fprintf(stderr,"SSL_new failed: ");
@@ -1631,7 +1663,7 @@ forward_on_tls(struct chroute *rt, u_short schad, u_short dchad, struct chaos_he
 }
 
 static int
-days_until_expiry(const ASN1_TIME *x)
+days_until_expiry(const ASN1_TIME *x, int return_sec_instead)
 {
   // find out how many days until expiry
   ASN1_TIME *now;
@@ -1644,7 +1676,53 @@ days_until_expiry(const ASN1_TIME *x)
     perror("ASN1 error");
     abort();
   }
-  return days;
+  if (return_sec_instead)
+    return days*24*60*60+secs;
+  else
+    return days;
+}
+
+static int
+validate_crl_date(X509_CRL *crl, X509 *cert)
+{
+  // Check if it should be updated
+  const ASN1_TIME *nupdate = X509_CRL_get0_nextUpdate(crl);
+  if (nupdate != NULL) {
+    int days = days_until_expiry(nupdate, 0);
+    if (days < 2) {
+      BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
+      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated ", tls_crl_file, days < 0 ? "have been" : "be");
+      ASN1_TIME_print(b, nupdate);
+      BIO_printf(b, days < 0 ? " (%d days ago)\n" : days == 0 ? " (T%dDAY!)\n" : " (in %d days)\n", days < 0 ? -days : days);
+      BIO_free(b);
+      if (cert != NULL) {
+	char *url = get_cert_crl_dp(cert);
+	if (url != NULL)
+	  fprintf(stderr,"%%%%  Download a new CRL from %s\n", url);
+      }
+    }
+    int sec = days_until_expiry(nupdate, 1);
+    if (sec <= 0)
+      return -1;		// Expired
+  }
+  return 0;			// OK
+}
+static int
+validate_crl_file()
+{
+  FILE *f = fopen(tls_crl_file,"r");
+  if (f == NULL) {
+    perror("crl fopen");
+    return -1;
+  }
+  X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
+  if (crl == NULL) {
+    perror("PEM_read_X509_CRL");
+    ERR_print_errors_fp(stderr);
+    fclose(f);
+    return -1;
+  }
+  return validate_crl_date(crl,NULL);
 }
 
 static int
@@ -1663,22 +1741,8 @@ validate_cert_vs_crl(X509 *cert, char *fname)
     fclose(f);
     return -1;
   }
-  
-  // Check if it should be updated
-  const ASN1_TIME *nupdate = X509_CRL_get0_nextUpdate(crl);
-  if (nupdate != NULL) {
-    int days = days_until_expiry(nupdate);
-    if (days < 2) {
-      BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-      BIO_printf(b, "%%%% Warning: CRL file %s should %s updated ", tls_crl_file, days < 0 ? "have been" : "be");
-      ASN1_TIME_print(b, nupdate);
-      BIO_printf(b, days < 0 ? " (%d days ago)\n" : " (in %d days)\n", days < 0 ? -days : days);
-      BIO_free(b);
-      char *url = get_cert_crl_dp(cert);
-      if (url != NULL)
-	fprintf(stderr,"%%%%  Download a new CRL from %s\n", url);
-    }
-  }
+  validate_crl_date(crl, cert);
+
   X509_STORE *store = X509_STORE_new();
   X509_STORE_CTX *ctx = X509_STORE_CTX_new();
   // Why not validate the chain as well
@@ -1758,7 +1822,7 @@ validate_cert_file(char *fname)
   } else {
     if (tls_debug) {
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
-      int days = days_until_expiry(notAfter);
+      int days = days_until_expiry(notAfter,0);
       BIO_printf(b, "TLS: certificate %s expires in %d days, on ", fname, days);
       ASN1_TIME_print(b, notAfter);
       BIO_printf(b, "\n");
@@ -1770,7 +1834,7 @@ validate_cert_file(char *fname)
       perror("%%%% TLS: failed to compare expiration time");
       return -1;
     } else if (cmp < 0) {
-      int days = days_until_expiry(notAfter);
+      int days = days_until_expiry(notAfter,0);
       BIO *b = BIO_new_fp(stderr, BIO_NOCLOSE);
       if (days == 0)
 	BIO_printf(b, "%%%% TLS: certificate %s expires TODAY: ", fname);
