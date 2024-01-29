@@ -36,10 +36,9 @@ def give_finger_response(conn, args):
                                 args)))
     if debug:
         print("Running {!s}".format(pargs),file=sys.stderr)
-    r = subprocess.run(pargs, stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    # Translate to lispm characters, kind of - should also handle Unicode de-translation?
-    rout = r.stdout.translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
+    r = subprocess.run(pargs, stdout=subprocess.PIPE,stderr=subprocess.STDOUT, text=True)
+    # Translate to lispm characters, kind of partially de-utf-ing
+    rout = bytes(r.stdout.translate(str.maketrans("ÅÄÖåäöé","AAOaaoe")),"utf-8").translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
     # Send the response, and close the conn
     if debug:
         print("sending data len {}".format(len(rout)))
@@ -79,6 +78,8 @@ def name_server():
 
     # Set up a listener for NAME
     try:
+        if debug:
+            print("Listening for NAME", file=sys.stderr)
         host,args = conn.listen("NAME")
         conn.send_opn()
         if debug:
@@ -89,12 +90,12 @@ def name_server():
         # cbridge down, try again in a while
         if debug:
             print("Conn refused: {}".format(msg), file=sys.stderr)
-        time.sleep(5)
+        time.sleep(15)
         pass
     except (socket.error,BrokenPipeError) as msg:
         if debug:
             print("Error: {}".format(msg), file=sys.stderr)
-        time.sleep(2)
+        time.sleep(10)
 
 if __name__ == '__main__':
     import argparse
