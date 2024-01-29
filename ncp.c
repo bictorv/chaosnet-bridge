@@ -2939,7 +2939,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
     // [And only for each 1/3rd, not every pkt after that.]
     // pktnum_read_highest: highest pktnum received
     int unacked = pktnum_diff(cs->pktnum_read_highest, cs->pktnum_acked);
-    if ((cs->time_last_received > 0) && (unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
+    if ((cs->time_last_received > 0) && (opcode != CHOP_RFC) && (unacked > 0) && (unacked % (cs->local_winsize/3)) == 0) {
       if (ncp_debug) printf(" 1/3 window un-acked (%d), acked %#x, sending STS\n", unacked, cs->pktnum_acked);
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
@@ -3373,7 +3373,8 @@ void packet_to_conn_handler(u_char *pkt, int len)
 
   if (packet_loopback_p(pkt, len)) {
     struct chaos_header *ch = (struct chaos_header *)pkt;
-    if (ncp_debug) fprintf(stderr,"NCP: loopback pkt from <%#o,%#x> to <%#o,%#x> - doing it async\n",
+    if (ncp_debug) fprintf(stderr,"NCP: loopback %s pkt %#x from <%#o,%#x> to <%#o,%#x> - doing it async\n",
+			   ch_opcode_name(ch_opcode(ch)), ch_packetno(ch),
 			   ch_srcaddr(ch),ch_srcindex(ch),ch_destaddr(ch),ch_destindex(ch));
     asynch_packet_to_conn(pkt, len);
   } else
