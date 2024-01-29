@@ -199,6 +199,9 @@ class PacketConn(NCPConn):
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
             return self.remote,self.args
+        elif opc == Opcode.LOS:
+            raise OSError("LOS: {}".format(str(data,"ascii")))
+            return None
         else:
             raise OSError("Expected RFC: {}".format(Opcode(op).name))
             return None
@@ -221,7 +224,7 @@ class PacketConn(NCPConn):
             self.remote = str(data,"ascii")
             return True
         elif opc == Opcode.LOS:
-            print("Got LOS: {}".format(str(data,"ascii")), file=sys.stderr)
+            raise OSError("LOS: {}".format(str(data,"ascii")))
             return False
         else:
             raise OSError("Expected OPN, got {}".format(Opcode(opc).name))
@@ -368,6 +371,9 @@ class StreamConn(NCPConn):
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
             return self.remote,self.args
+        elif op == b"LOS":
+            raise OSError("LOS: {}".format(str(data,"ascii")))
+            return None,None
         else:
             raise OSError("Expected RFC: {}".format(op))
             return None
@@ -389,6 +395,8 @@ class StreamConn(NCPConn):
             self.remote = host                  #should we parse OPN data?
             self.contact = contact
             return True
+        elif op == b"LOS":
+            raise OSError("LOS: {}".format(str(data,"ascii")))
         else:
             raise OSError("Expected OPN: {}".format(op))
             return False
