@@ -230,7 +230,7 @@ class ChaosLoadName(SimpleProtocol):
             # Print a header to show what's about to happen
             print("[{:s}]".format(hname))
             try:
-                s = SimpleStreamProtocol(hname,"NAME")
+                s = SimpleStreamProtocol(hname,"NAME",options=self.options)
                 s.copy_until_eof()
             except OSError as msg:
                 if debug:
