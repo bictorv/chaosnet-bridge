@@ -18,7 +18,7 @@ import socket, time
 import sys, subprocess, threading
 from datetime import datetime
 
-from chaosnet import StreamConn, PacketConn, ChaosError
+from chaosnet import StreamConn, PacketConn, ChaosError, LOSError
 
 # Default finger program. Should accept '-s' and '-l' as switches, for best effect.
 # Can be set with the --program switch.
@@ -66,6 +66,7 @@ def name_server():
             conn = PacketConn()
         else:
             conn = StreamConn()
+        conn.set_debug(debug)
     except ChaosError as m:
         # cbridge down, try again in a while
         if debug:
@@ -81,9 +82,9 @@ def name_server():
         if debug:
             print("Listening for NAME", file=sys.stderr)
         host,args = conn.listen("NAME")
-        conn.send_opn()
         if debug:
             print(datetime.now(),'got RFC from {!s} with args {!r}'.format(host,args))
+        conn.send_opn()
         # Send the response in a separate thread
         t = threading.Thread(target=give_finger_response,args=(conn, args)).start()
     except ConnectionRefusedError as m:
@@ -92,7 +93,10 @@ def name_server():
             print("Conn refused: {}".format(msg), file=sys.stderr)
         time.sleep(15)
         pass
-    except (socket.error,BrokenPipeError) as msg:
+    except LOSError as msg:
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+    except (socket.error,BrokenPipeError,ChaosError) as msg:
         if debug:
             print("Error: {}".format(msg), file=sys.stderr)
         time.sleep(10)

@@ -124,9 +124,11 @@ class NCPConn:
         # Read an OPN/CLS in response to our RFC
         rline = b""
         b = self.get_bytes(1)
-        while b != b"\r" and b != b"\n":
+        while b != b"\r" and b != b"\n" and b != b"":
             rline += b
             b = self.get_bytes(1)
+        if rline == b"":
+            raise ChaosError("got no data in get_line for {}".format(self))
         if b == b"\r":
             b = self.get_bytes(1)
             if b != b"\n":
@@ -380,7 +382,7 @@ class StreamConn(NCPConn):
         inp = self.get_line()
         op,data = inp.split(b' ', maxsplit=1)
         if debug:
-            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
+            print("{}: {}".format(op,data), file=sys.stderr)
         if op == b"RFC":
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
