@@ -15,7 +15,6 @@
 #    limitations under the License.
 
 # TODO:
-# - raises OSError in places, but should use a more specific exception?
 # - let debug be connection-local and initable
 
 import socket, sys, time
@@ -26,6 +25,21 @@ stream_socket_address = '/tmp/chaos_stream'
 packet_socket_address = '/tmp/chaos_packet'
 # -d
 debug = False
+
+# Exceptions
+class ChaosError(Exception):
+    message = "Chaosnet Error"
+    def __init__(self,msg):
+        self.message=msg
+        super().__init__(msg)
+class ChaosSocketError(ChaosError):
+    pass
+class EOFError(ChaosError):
+    pass
+class LOSError(ChaosError):
+    pass
+class UnexpectedOpcode(ChaosError):
+    pass
 
 # Chaos packet opcodes
 class Opcode(IntEnum):
@@ -84,19 +98,27 @@ class NCPConn:
         address = self.socket_address
         # Create a Unix socket
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if debug:
+            print("{} got socket {}".format(self,self.sock), file=sys.stderr)
 
         # Connect the socket to the port where the server is listening
         try:
             self.sock.connect(address)
             return self.sock
         except socket.error as msg:
-            raise OSError("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg))
+            raise ChaosSocketError("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg))
 
     def send_socket_data(self, data):
-        self.sock.sendall(data)
+        try:
+            self.sock.sendall(data)
+        except OSError as msg:
+            raise ChaosSocketError(msg)
 
     def get_bytes(self, nbytes):
-        return self.sock.recv(nbytes)
+        try:
+            return self.sock.recv(nbytes)
+        except OSError as msg:
+            raise ChaosSocketError(msg)
 
     def get_line(self):
         # Read an OPN/CLS in response to our RFC
@@ -108,7 +130,7 @@ class NCPConn:
         if b == b"\r":
             b = self.get_bytes(1)
             if b != b"\n":
-                raise OSError("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b))
+                raise ChaosError("ERROR: return not followed by newline in get_line from {}: got {}".format(self,b))
         return rline
 
 class PacketConn(NCPConn):
@@ -162,7 +184,7 @@ class PacketConn(NCPConn):
             # @@@@ NOTE BUG: when both client and server are using NCP on same host, the EOF isn't ACKed!
             opc,ack = self.get_packet()
             if opc != Opcode.ACK:
-                raise OSError("in {}: Expected ACK after EOF[wait], got {}".format(self,Opcode(opc).name))
+                raise UnexpectedOpcode("in {}: Expected ACK after EOF[wait], got {}".format(self,Opcode(opc).name))
         else:
             self.send_packet(Opcode.EOF)
 
@@ -170,7 +192,7 @@ class PacketConn(NCPConn):
         hdr = self.get_bytes(4)
         if hdr is None or len(hdr) == 0:
             # This is handled somewhere
-            raise OSError("Error: {} got no bytes: {}".format(self,hdr))
+            raise ChaosSocketError("Error: {} got no bytes: {}".format(self,hdr))
         # First is opcode
         opc = hdr[0]
         # then zero
@@ -199,12 +221,10 @@ class PacketConn(NCPConn):
             self.remote = hostandargs[0]
             self.args = hostandargs[1:]
             return self.remote,self.args
-        elif opc == Opcode.LOS:
-            raise OSError("LOS: {}".format(str(data,"ascii")))
-            return None
+        elif op == Opcode.LOS:
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
-            raise OSError("Expected RFC: {}".format(Opcode(op).name))
-            return None
+            raise UnexpectedOpcode("Expected RFC: {}".format(Opcode(op).name))
 
     def connect(self, host, contact, args=[], options=None, simple=False):
         h = bytes(("{} {}"+" {}"*len(args)).format("{:o}".format(host) if type(host) is int else host,contact.upper(),*args),"ascii")
@@ -223,12 +243,12 @@ class PacketConn(NCPConn):
         if opc == Opcode.OPN:
             self.remote = str(data,"ascii")
             return True
+        elif opc == Opcode.CLS:
+            raise ChaosError(str(data,"ascii"))
         elif opc == Opcode.LOS:
-            raise OSError("LOS: {}".format(str(data,"ascii")))
-            return False
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
-            raise OSError("Expected OPN, got {}".format(Opcode(opc).name))
-            return False
+            raise UnexpectedOpcode("Expected OPN, got {}".format(Opcode(opc).name))
 
     def get_message(self, dlen=488, partialOK=False):
         opc, data = self.get_packet()
@@ -236,15 +256,13 @@ class PacketConn(NCPConn):
             self.close()
             return None
         elif opc == Opcode.LOS:
-            if debug:
-                print("LOS: {}".format(str(data,"ascii")), file=sys.stderr)
-            return None
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
         elif opc == Opcode.EOF:
             if debug:
                 print("{} got EOF: {}".format(self,data), file=sys.stderr)
-            return None
+            raise EOFError("EOF")
         elif opc != Opcode.DAT:
-            raise OSError("Unexpected opcode {}".format(opc))
+            raise UnexpectedOpcode("Unexpected opcode {}".format(opc))
             return None
         elif len(data) == 0:
             return None
@@ -262,21 +280,17 @@ class PacketConn(NCPConn):
                 self.close()
                 return None
             elif opc == Opcode.LOS:
-                if debug:
-                    print("LOS: {}".format(str(data,"ascii")), file=sys.stderr)
-                return None
+                raise LOSError("LOS: {}".format(str(data,"ascii")))
             elif opc == Opcode.EOF:
-                if debug:
-                    print("{} got EOF: {}".format(self,data), file=sys.stderr)
-                return None
+                raise EOFError("{} got EOF: {}".format(self,data))
             # @@@@ handle ANS too?
             elif opc != Opcode.DAT:
-                raise OSError("Unexpected opcode {}".format(opc))
+                raise UnexpectedOpcode("Unexpected opcode {}".format(opc))
                 return None
             else:
                 last = None
                 while True:
-                    data = self.sock.recv(488)
+                    data = self.get_bytes(488)
                     if len(data) == 0:
                         if last not in [0o215,0o212,0o15,0o12]:
                             # finish with a fresh line
@@ -317,7 +331,8 @@ class BroadcastConn(PacketConn):
             opc, data = self.get_packet()
             if opc == None:
                 raise StopIteration
-        except OSError:
+        except ChaosSocketError:
+            # e.g. reading nothing
             raise StopIteration
         if opc == Opcode.ANS:
             src = data[0] + data[1]*256
@@ -325,13 +340,13 @@ class BroadcastConn(PacketConn):
                 print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
             return src,data[2:]
         elif opc == Opcode.LOS or opc == Opcode.CLS:
-            # LOS from cbridge, CLS from buggy BSD
+            # LOS from cbridge after BRD time-outs, CLS from buggy BSD
             if debug:
                 print("Got {}: {}".format(Opcode(opc).name, data), file=sys.stderr)
-            # @@@@ Hmm, should just ignore it?
+            # just ignore it.
             raise StopIteration
         else:
-            raise OSError("Got unexpected {} len {}: {}".format(Opcode(opc).name, len(data) if data is not None else 0, data))
+            raise UnexpectedOpcode("Got unexpected {} len {}: {}".format(Opcode(opc).name, len(data) if data is not None else 0, data))
 
 class StreamConn(NCPConn):
     def __init__(self):
@@ -372,11 +387,10 @@ class StreamConn(NCPConn):
             self.args = hostandargs[1:]
             return self.remote,self.args
         elif op == b"LOS":
-            raise OSError("LOS: {}".format(str(data,"ascii")))
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
             return None,None
         else:
-            raise OSError("Expected RFC: {}".format(op))
-            return None
+            raise UnexpectedOpcode("Expected RFC: {}".format(op))
 
     def connect(self, host, contact, args=[], options=None):
         self.contact = contact
@@ -395,21 +409,22 @@ class StreamConn(NCPConn):
             self.remote = host                  #should we parse OPN data?
             self.contact = contact
             return True
+        elif op == b"CLS":
+            raise ChaosError(str(data,"ascii"))
         elif op == b"LOS":
-            raise OSError("LOS: {}".format(str(data,"ascii")))
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
-            raise OSError("Expected OPN: {}".format(op))
-            return False
+            raise UnexpectedOpcode("Expected OPN: {}".format(op))
 
     def get_message(self, length=488, partialOK=False):
-        data = self.sock.recv(length)
+        data = self.get_bytes(length)
         if debug:
             print("< {} of {} from {}".format(len(data), length, self), file=sys.stderr)
         if len(data) == 0:
             # This is handled somewhere
-            raise OSError("Error: Got no bytes: {}".format(data))
+            raise ChaosSocketError("Error: Got no bytes: {}".format(data))
         elif not partialOK and len(data) < length:
-            d2 = self.sock.recv(length-len(data))
+            d2 = self.get_bytes(length-len(data))
             if debug:
                 print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
             data += d2
@@ -419,7 +434,7 @@ class StreamConn(NCPConn):
         cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
         last = None
         while True:
-            data = self.sock.recv(488)
+            data = self.get_bytes(488)
             if len(data) == 0:
                 if last not in [0o215,0o212,0o15,0o12]:
                     # finish with a fresh line
@@ -458,7 +473,7 @@ class Simple:
                     if not self.hdr_printed and header is not None:
                         print(header)
                         self.hdr_printed = True
-                    if not printer(src,data):
+                    if data is not None and not printer(src,data):
                         # Save this if it wasn't printed now (e.g. Free lispm)
                         nonprinted.append([src,data])
                     self.printed_sources.append(src)
@@ -480,10 +495,10 @@ class Simple:
         elif opc == Opcode.LOS:
             if debug:
                 print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
             return None, None
         else:
-            raise OSError("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
-            return None
+            raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
 
 # Given subnets, contact, options, header, and a printer (taking ANS as arg),
 # broadcast and then iterate printer over responses, filtering previously received ones

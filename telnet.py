@@ -18,7 +18,7 @@ import socket, sys, threading
 from datetime import datetime
 import tty, termios
 
-from chaosnet import StreamConn, PacketConn
+from chaosnet import StreamConn, PacketConn, ChaosError
 
 # -d
 debug = False
@@ -60,7 +60,7 @@ class TCPconn:
         while ts < len(data):
             s = self.sock.send(data[ts:])
             if s == 0:
-                raise OSError("Error: Sent no bytes: (total sent {})".format(ts))
+                raise ChaosError("Error: Sent no bytes: (total sent {})".format(ts))
             ts = ts+s
         # self.sock.sendall(data)
 
@@ -101,7 +101,7 @@ class TCPconn:
         if len(data) == 0:
             # This is handled somewhere
             self.sock.close()
-            raise OSError("Error: Got no bytes: {}".format(data))
+            raise ChaosError("Error: Got no bytes: {}".format(data))
         elif len(data) < length:
             d2 = self.sock.recv(length-len(data))
             if debug:
@@ -232,7 +232,7 @@ def input_handler(sock, once=False):
     while True:
         try:
             data = sock.get_message(1)
-        except OSError as e:
+        except ChaosError as e:
             if debug:
                 print("\r\nError getting message: {}".format(e),file=sys.stderr)
             print("\r",file=sys.stdout,end='')
@@ -313,13 +313,14 @@ def telnet(host,contact="TELNET", options=None, tcp=False):
                 oldmode = termios.tcgetattr(tin)
                 tty.setraw(tin)
                 try:
-                    # Send IAC DO Suppress-go-ahead
-                    send_command(sock,[253,3])
-                    if ttytype:
-                        # Send IAC WILL TTYTYPE
-                        send_command(sock,[251,24])
-                    if location is not None:
-                        send_command(sock,[251,23])   # WILL SEND-LOCATION
+                    if contact.upper() == "TELNET":
+                        # Send IAC DO Suppress-go-ahead
+                        send_command(sock,[253,3])
+                        if ttytype:
+                            # Send IAC WILL TTYTYPE
+                            send_command(sock,[251,24])
+                        if location is not None:
+                            send_command(sock,[251,23])   # WILL SEND-LOCATION
                     while True:
                         try:
                             line = read_a_line(tin) # tin.read(1)
@@ -346,10 +347,10 @@ def telnet(host,contact="TELNET", options=None, tcp=False):
                         except EOFError:
                             line = b"\x04"
                         sock.send_data(line)
-                except OSError as e:
-                    if debug:
-                        print("\r\nOSError: {}\r".format(e), file=sys.stderr)
-                except BrokenPipeError as e:
+                except ChaosError as e:
+                    if debug or True:
+                        print("\r\nChaosError: {}\r".format(e), file=sys.stderr)
+                except (BrokenPipeError,AttributeError) as e:
                     if debug:
                         print("\r\nBroken pipe: {}\r".format(e), file=sys.stderr)
                 finally:

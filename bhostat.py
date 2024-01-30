@@ -22,7 +22,7 @@ import functools
 from struct import unpack
 from datetime import datetime, timedelta
 
-from chaosnet import BroadcastSimple, Simple, BroadcastConn, StreamConn
+from chaosnet import BroadcastSimple, Simple, BroadcastConn, StreamConn, ChaosError
 from chaosnet import dns_name_of_address, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
 
 # pip3 install dnspython
@@ -47,7 +47,7 @@ def host_name(addr, timeout=2):
     try:
         s = Simple(addr, "STATUS", options=dict(timeout=timeout))
         src, data = s.result()
-    except OSError as msg:
+    except ChaosError as msg:
         if debug:
             print("Error while getting STATUS of {}: {}".format(addr,msg), file=sys.stderr)
         # host_names[addr] = "????"
@@ -232,7 +232,7 @@ class ChaosLoadName(SimpleProtocol):
             try:
                 s = SimpleStreamProtocol(hname,"NAME",options=self.options)
                 s.copy_until_eof()
-            except OSError as msg:
+            except ChaosError as msg:
                 if debug:
                     print(msg, file=sys.stderr)
                 return False
@@ -437,7 +437,7 @@ if __name__ == '__main__':
         else:
             print("Bad service arg {}, please use {} (in any case)".format(args.service, service_names))
             exit(1)
-    except OSError as msg:
+    except ChaosError as msg:
         print(msg, file=sys.stderr)
     except KeyboardInterrupt:
         pass

@@ -23,7 +23,7 @@ import socket, sys, threading, time
 import functools
 from datetime import datetime
 
-from chaosnet import StreamConn, PacketConn
+from chaosnet import StreamConn, PacketConn, ChaosError
 
 # -d
 debug = False
@@ -32,7 +32,7 @@ def echo_sender(conn, data):
     try:
         while True:
             conn.send_data(data)
-    except OSError as e:
+    except ChaosError as e:
         if debug:
             print("ECHO sender: {}".format(e), file=sys.stderr)
         return

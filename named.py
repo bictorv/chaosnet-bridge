@@ -18,7 +18,7 @@ import socket, time
 import sys, subprocess, threading
 from datetime import datetime
 
-from chaosnet import StreamConn, PacketConn
+from chaosnet import StreamConn, PacketConn, ChaosError
 
 # Default finger program. Should accept '-s' and '-l' as switches, for best effect.
 # Can be set with the --program switch.
@@ -66,7 +66,7 @@ def name_server():
             conn = PacketConn()
         else:
             conn = StreamConn()
-    except OSError as m:
+    except ChaosError as m:
         # cbridge down, try again in a while
         if debug:
             print("Error {}, sleeping and retrying".format(m), file=sys.stderr)

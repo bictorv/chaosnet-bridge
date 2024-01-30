@@ -17,7 +17,7 @@
 
 import sys, socket, threading, re, time
 
-from chaosnet import PacketConn, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
+from chaosnet import PacketConn, ChaosError, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
 
 # The typical chaosnet end-of-line (#\return)
 eol = b"\215"
@@ -83,7 +83,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
 
 def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
     try:
-        data = conn.get_message(1)             #get a packet
+        data = conn.get_line()             #get a line
         while data:
             if debug:
                 print("Got data {}".format(data), file=sys.stderr)
@@ -96,7 +96,7 @@ def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
             conn.send_data(eol.join(map(lambda s:bytes(s,"ascii"),resp))+eol)
             conn.send_eof(True)
             data = conn.get_message(1)
-    except OSError as m:
+    except ChaosError as m:
         # for example EOF[wait] didn't get an ack, then we're broken
         if debug:
             print(m, file=sys.stderr)
@@ -140,7 +140,7 @@ if __name__ == '__main__':
             xec = threading.Thread(target=hostab_server, args=(c,args.timeout,dns_resolver_address,args.default_domain))
             xec.start()
             # hostab_server(c, timeout=args.timeout)
-        except (BrokenPipeError, socket.error, OSError) as msg:
+        except (BrokenPipeError, socket.error, ChaosError) as msg:
             if debug:
                 print("Error: {}".format(msg), file=sys.stderr)
             # Could be cbridge crashed

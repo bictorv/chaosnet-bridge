@@ -19,7 +19,7 @@ import socket, sys, time, subprocess, re
 import functools
 import os
 
-from chaosnet import PacketConn
+from chaosnet import PacketConn, ChaosError
 
 # -d
 debug = False
@@ -143,7 +143,7 @@ if __name__ == '__main__':
                 if debug:
                     print("Updated u,p,i,is: {} {} {} {}".format(uname,pname,idle,idlestring_min(idle)), file=sys.stderr)
             c.send_ans(b"\215".join([uname,loc,idlestring_min(idle),pname,aff])+b"\215")
-        except (BrokenPipeError, socket.error) as msg:
+        except (BrokenPipeError, socket.error, ChaosError) as msg:
             if debug:
                 print("Error: {}".format(msg), file=sys.stderr)
             time.sleep(10)
