@@ -4014,16 +4014,27 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 			      ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
     ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
     len = ch_nbytes(pkt);
-  } else if ((cs->state == CS_Open) && (opc == CHOP_UNC) && (conn->conn_type == CT_Packet)) {
-    // UNC packet data includes packetno and ackno
-    buf[0] = ch_packetno(pkt) & 0xff;
-    buf[1] = ch_packetno(pkt) >> 8;
-    buf[2] = ch_ackno(pkt) & 0xff;
-    buf[3] = ch_ackno(pkt) >> 8;
-    ntohs_buf((u_short *)data, (u_short *)(buf+4), ch_nbytes(pkt));
-    len = ch_nbytes(pkt) + 4;
-    if (ncp_debug) printf("NCP %s: got %s for conn type %s, len %d+4 = %d\n",
-			  __func__, ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn), ch_nbytes(pkt), len);
+  } else if ((cs->state == CS_Open) && (opc == CHOP_UNC)) {
+    if  (conn->conn_type != CT_Packet) {
+      // Can only handle UNC on Packet sockets
+      if (ncp_debug)
+	printf("NCP %s: received UNC packet on %s conn, faking LOS and dropping conn\n", __func__, conn_type_name(conn));
+      // fake it
+      sprintf(buf,"Received UNC packet on %s conn - sorry", conn_type_name(conn));
+      len = strlen(buf);
+      set_ch_opcode(pkt, CHOP_LOS);
+      set_conn_state(conn, cs->state, CS_LOS_Received, 1);
+    } else {
+      // UNC packet data includes packetno and ackno
+      buf[0] = ch_packetno(pkt) & 0xff;
+      buf[1] = ch_packetno(pkt) >> 8;
+      buf[2] = ch_ackno(pkt) & 0xff;
+      buf[3] = ch_ackno(pkt) >> 8;
+      ntohs_buf((u_short *)data, (u_short *)(buf+4), ch_nbytes(pkt));
+      len = ch_nbytes(pkt) + 4;
+      if (ncp_debug) printf("NCP %s: got %s for conn type %s, len %d+4 = %d\n",
+			    __func__, ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn), ch_nbytes(pkt), len);
+    }
   } else {
     len = -1; // don't pass bad pkts on
     fprintf(stderr,"%%%% Bad pkt in conn_to_socket_pkt_handler: pkt %#x opcode %s in state %s, highest %#x\n",
