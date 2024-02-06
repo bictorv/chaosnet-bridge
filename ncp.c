@@ -1200,6 +1200,13 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
       set_ch_ackno(ch, data[0] | (data[1] << 8));
       len = 0;
       break;
+    case CHOP_UNC:
+      // yes, this is cheating
+      set_ch_packetno(ch, data[0] | (data[1] << 8));
+      set_ch_ackno(ch, data[2] | (data[3] << 8));
+      len -= 4;
+      data += 4;
+      // fall through
     default:
       if (opcode >= CHOP_DAT)
 	htons_buf((u_short *)data, (u_short *)datao, len);
@@ -2425,12 +2432,19 @@ add_input_pkt(struct conn *c, struct chaos_header *pkt)
   int pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
 
   if (pklen % 2) pklen++;
+
+  // lock read queue
+  PTLOCKN(cs->read_mutex,"read_mutex");
+  // Only add uncontrolled pkts if they fit in the window, to avoid being flooded
+  if (packet_uncontrolled(pkt) && (pkqueue_length(cs->read_pkts) >= cs->local_winsize)) {
+    PTUNLOCKN(cs->read_mutex,"read_mutex");
+    return;
+  }
+    
   struct chaos_header *saved = (struct chaos_header *)malloc(pklen);
   // save a copy since the pkt comes from cbridge
   memcpy(saved, pkt, pklen);
 
-  // lock it
-  PTLOCKN(cs->read_mutex,"read_mutex");
   // add pkt
   pkqueue_add(saved, cs->read_pkts);
   if (!packet_uncontrolled(pkt))
@@ -2864,8 +2878,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
   int n_from_ooo = 0;
 
   if (packet_uncontrolled(pkt)) {
-    // uncontrolled pkts always fit the window
-    // @@@@ well, keep a lid on it?
+    // uncontrolled pkts are added if they fit the window (handled by add_input_pkt)
     if (ncp_debug) printf("Receive uncontrolled pkt (%s)\n", ch_opcode_name(ch_opcode(pkt)));
     add_input_pkt(conn, pkt);
     return;
@@ -3148,12 +3161,12 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
     // All other than CLS, FWD, ANS, OPN fall through here (ignored)
     break;
   case CS_Open:
-    // In the Open state, only EOF, LOS, CLS and the DAT pkts are OK
+    // In the Open state, only EOF, LOS, CLS and the DAT pkts are OK. And UNC.
     if (ch_opcode(ch) == CHOP_OPN) {
       // maybe the STS went missing, so resend it - doesn't hurt
       send_sts_pkt(conn);
       break;
-    } else if ((ch_opcode(ch) != CHOP_EOF) && (ch_opcode(ch) != CHOP_LOS) 
+    } else if ((ch_opcode(ch) != CHOP_EOF) && (ch_opcode(ch) != CHOP_LOS) && (ch_opcode(ch) != CHOP_UNC)
 	&& (ch_opcode(ch) != CHOP_CLS) && (ch_opcode(ch) < CHOP_DAT)) {
       // note error (we handle STS SNS above)
       if (ncp_debug) printf("%%%% %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
@@ -3171,7 +3184,7 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       printf("%%%% p_t_c_stream_h %s pkt received in %s state!\n", ch_opcode_name(ch_opcode(ch)), conn_state_name(conn));
     break;
   case CS_Foreign:
-    // @@@@ completely untested - should probably accept CLS/EOF too
+    // @@@@ UNC is all there is in Foreign state, but this state is not implemented yet.
     if (ch_opcode(ch) == CHOP_UNC) {
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
@@ -4001,6 +4014,16 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
 			      ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn));
     ntohs_buf((u_short *)data, (u_short *)buf, ch_nbytes(pkt));
     len = ch_nbytes(pkt);
+  } else if ((cs->state == CS_Open) && (opc == CHOP_UNC) && (conn->conn_type == CT_Packet)) {
+    // UNC packet data includes packetno and ackno
+    buf[0] = ch_packetno(pkt) & 0xff;
+    buf[1] = ch_packetno(pkt) >> 8;
+    buf[2] = ch_ackno(pkt) & 0xff;
+    buf[3] = ch_ackno(pkt) >> 8;
+    ntohs_buf((u_short *)data, (u_short *)(buf+4), ch_nbytes(pkt));
+    len = ch_nbytes(pkt) + 4;
+    if (ncp_debug) printf("NCP %s: got %s for conn type %s, len %d+4 = %d\n",
+			  __func__, ch_opcode_name(ch_opcode(pkt)), conn_type_name(conn), ch_nbytes(pkt), len);
   } else {
     len = -1; // don't pass bad pkts on
     fprintf(stderr,"%%%% Bad pkt in conn_to_socket_pkt_handler: pkt %#x opcode %s in state %s, highest %#x\n",
