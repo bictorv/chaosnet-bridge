@@ -348,7 +348,7 @@ def telnet(host,contact="TELNET", options=None, tcp=False):
                             line = b"\x04"
                         sock.send_data(line)
                 except ChaosError as e:
-                    if debug or True:
+                    if debug:
                         print("\r\nChaosError: {}\r".format(e), file=sys.stderr)
                 except (BrokenPipeError,AttributeError) as e:
                     if debug:
