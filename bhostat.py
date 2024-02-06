@@ -1,6 +1,6 @@
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # Tool for exploring Chaosnet using various (simple) protocols.
-# Uses the stream API of the NCP of cbridge, the bridge program for various Chaosnet implementations.
+# Demonstrates the high-level python library for Chaosnet.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-# TODO: rename this to "simple.py", semi-ironically
+# TODO: rename this to "simple.py", semi-ironically. Or just "hostat.py", less ironic.
 
 import sys, time, socket
 import string, re
@@ -71,7 +71,7 @@ def host_name(addr, timeout=2):
         # name = "{}".format(addr)
     # return host_names[addr]
 
-#### Application protocols
+#### Application protocols (@@@@ perhaps move to chaosnet.py?)
 
 # Oxymoron ("simple" means "datagram" in Chaosnet lingo), but here it means:
 # given a host and contact, copy its output until EOF
@@ -220,7 +220,7 @@ class ChaosLoadName(SimpleProtocol):
                 hname = "{:o}".format(src)
         except:
             hname = src
-        # Parse the second line
+        # Parse the second line of LOAD
         nmatch = re.match(r"Users: (\d+)", str(data.split(b"\r\n")[1],"ascii"))
         if nmatch:
             n = int(nmatch.group(1))
@@ -237,6 +237,8 @@ class ChaosLoadName(SimpleProtocol):
                     print(msg, file=sys.stderr)
                 return False
             return True
+        elif debug:
+            print("Can't parse LOAD output from {}: {!r}".format(src,data), file=sys.stderr)
     def nonprinter(self,datas):
         if len(datas) > 0:
             hnames = []
@@ -363,22 +365,23 @@ contact_handlers = { 'status': Status,
                          'lastcn': ChaosLastSeen,
                          'routing': ChaosDumpRoutingTable,
                          'dump-routing-table': ChaosDumpRoutingTable }
-special_contact_handlers = dict(#lastcn=ChaosLastSeen,
-                                dns=ChaosDNS)
+special_contact_handlers = dict(dns=ChaosDNS)
 
 if __name__ == '__main__':
     import argparse
     service_names = ", ".join(contact_handlers.keys()).upper()+", "+", ".join(special_contact_handlers.keys()).upper()
     parser = argparse.ArgumentParser(description='Chaosnet simple protocol client',
                                          epilog="If the service is unknown and a host is given, "+\
-                                         "tries to contact the service at the host and prints its output.")
+                                         "tries to contact the service at the host and prints its output. "+\
+                                         "If no service arg is given, but the first subnet arg is the name of a known service, "+\
+                                         "and another subnet arg exists, the first subnet arg is used as service arg.")
     parser.add_argument("subnets", metavar="SUBNET/HOST", nargs='+', #type=int, 
-                            help="Hosts to contact or Subnets to broadcast on, -1 for all subnets, or 0 for the local subnet")
+                            help="Hosts to contact or Subnets (octal) to broadcast on, -1 for all subnets, or 0 for the local subnet")
     parser.add_argument("-t","--timeout", type=int, default=5,
                             help="Timeout in seconds")
     parser.add_argument("-r","--retrans", type=int, default=500,
                             help="Retransmission interval in milliseconds")
-    parser.add_argument("-s","--service", default="STATUS",
+    parser.add_argument("-s","--service", # default="STATUS",
                             help="Service to ask for ("+service_names+"), default: STATUS")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
@@ -407,10 +410,17 @@ if __name__ == '__main__':
     elif 0 in args.subnets and len(args.subnets) != 1:
         # "local" supersedes all other
         args.subnets = [0]
-    # Parse "subnet" args as numbers (if they can be)
+    # Parse "subnet" args as octal numbers (if they can be)
     args.subnets = list(map(lambda x: int(x,8) if isinstance(x,str) and (x.isdigit() or x =="-1") else x, args.subnets))
 
-    # @@@@ if no service explicitly given, but first "subnet" is a service (and more given), use that?
+    # if no service explicitly given, but first "subnet" is a service (and more given), use that
+    # Example: "bhostat.py finger 0"
+    if args.service is None and len(args.subnets) > 1 and args.subnets[0] in contact_handlers:
+        args.service = args.subnets[0]
+        args.subnets = args.subnets[1:]
+    # maybe if only a service is given, use "local" as subnet? But just a host name for STATUS is useful.
+    elif args.service is None:
+        args.service = "STATUS"
     try:
         if args.service.lower() in contact_handlers:
             c = contact_handlers[args.service.lower()]
@@ -429,6 +439,7 @@ if __name__ == '__main__':
                 exit(0)
         elif len(args.subnets) == 1 and (isinstance(args.subnets[0],str) or args.subnets[0] > 0xff):
             # Hack: try connecting to the service at the host
+            # Example: "bhostat.py -s bye up"
             # @@@@ Could parse the service, split at spaces and put things in contact args.
             # (To make it work with broadcast destination (and open the first OPN-sender) requires cbridge work.)
             s = SimpleStreamProtocol(args.subnets[0],args.service)
