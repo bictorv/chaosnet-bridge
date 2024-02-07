@@ -17,7 +17,7 @@
 import socket, sys, subprocess, time, re
 import functools
 
-from chaosnet import PacketConn
+from chaosnet import PacketConn, ChaosError
 
 # -d
 debug = False
@@ -84,7 +84,7 @@ if __name__ == '__main__':
                     print("Updated n,l: {} {}".format(nusers,load), file=sys.stderr)
             if nusers is not None:
                 c.send_ans(bytes("Fair Share: {}%\r\nUsers: {}.".format(max(0,fairshare(load, nusers)), nusers),"ascii"))
-        except (BrokenPipeError, socket.error) as msg:
+        except (BrokenPipeError, socket.error, ChaosError) as msg:
             if debug:
                 print("Error: {}".format(msg), file=sys.stderr)
             time.sleep(10)
