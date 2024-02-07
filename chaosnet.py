@@ -537,7 +537,7 @@ import dns.resolver
 
 # Default DNS resolver for Chaosnet
 dns_resolver_name = 'DNS.Chaosnet.NET'
-dns_resolver_address = None
+dns_resolver_address = socket.gethostbyname(dns_resolver_name)
 
 def set_dns_resolver_address(adorname):
     global dns_resolver_address
