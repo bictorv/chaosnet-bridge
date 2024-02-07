@@ -25,12 +25,20 @@
 # keeping track of that either by a screen copy or by hashing screen segments.
 # This would only require fixes on the server side (for CADR there are 191 segments).
 
+# TODO:
+# - Make pixelarray updates more efficient.
+# - Try pygame.transform.smoothscale_by() to scale the window up/down?
+#   Cf https://github.com/mitrefireline/simfire/blob/94dc737c4a2bf2eb62e244fae6ad4680bb17a800/simfire/game/game.py#L382
+
 import sys, time, functools, math
 
 # see https://www.pygame.org/docs/
+import os
+# Hide the greeting from "import pygame"
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 
-from chaosnet import PacketConn, ChaosError, Opcode
+from chaosnet import PacketConn, ChaosError, Opcode, dns_name_of_address
 
 # pygame.PixelArray
 # https://www.pygame.org/docs/ref/pixelarray.html#pygame.PixelArray
@@ -55,6 +63,12 @@ def spy_process_packet(c, width=None, height=None, pix=None):
             print("width {} height {}".format(width,height))
     if pix == None:
         # Create a window, and get a handle into it
+        if c.remote:
+            ttl = "SPY on {}".format(dns_name_of_address(int(c.remote,8), onlyfirst=True, timeout=2) or c.remote)
+        else:
+            ttl = "SPY"
+        # Do this before set_mode
+        pygame.display.set_caption(ttl)
         pix = pygame.PixelArray(pygame.display.set_mode(size=(width,height)))
     # The index into the screen for this packet
     idx = data[4] | (data[5]<<8)
@@ -95,6 +109,7 @@ if __name__ == '__main__':
        print(args, file=sys.stderr)
 
     try:
+        pygame.init()
         c = PacketConn()
         c.set_debug(debug)
         c.connect(args.host, "SPY")
