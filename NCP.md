@@ -238,7 +238,7 @@ The data part of `RFC`, `OPN`, `ANS`, `FWD`, and `UNC` packets are non-standard:
 - for OPN (received), it includes the remote host (see above)
 - for ANS (received), it includes the remote host (see above)
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
-- for UNC, it includes the packetno (2 bytes) and ackno (2 bytes) fields, which are not used for their normal purposes, but by the protocol using UNC. See [Using Foreign Protocols in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet), and for example the "screen SPY" protocol for LispM.
+- for UNC, it includes the packetno (2 bytes) and ackno (2 bytes) fields, which are not used for their normal purposes, but by the protocol using UNC. See [Using Foreign Protocols in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet), and for example the "screen SPY" protocol for LispM (cf `spy.py` in this repo).
 
 #### NOTE further
 If an `EOF` packet sent from the user program to the NCP has the data "wait" (four bytes), the NCP will send the EOF packet (without data) on the Chaosnet, await the packet to be acked, and send a special `ACK` packet (opcode 0177) to the user program when either the EOF packet is acked, or the `eofwait` timeout occurs. 
@@ -246,6 +246,8 @@ If an `EOF` packet sent from the user program to the NCP has the data "wait" (fo
 This is sometimes necessary for complex protocols, such as [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file).
 
 Note, again, that the data part of EOF is always empty when sent over Chaosnet, and that the ACK packet is never sent over Chaosnet - only between the NCP and the user program.
+
+Note also that `UNC` packets may be lost or out-of-order.
 
 # Internals
 
