@@ -24,13 +24,15 @@
 # has changed or not. It would be better to send only parts which have changed,
 # keeping track of that either by a screen copy or by hashing screen segments.
 # This would only require fixes on the server side (for CADR there are 191 segments).
+# But since UNC pkts are sometimes lost, we need to sometimes send un-updated
+# segments anyway, say 25% of the time or something like that. Experiment!
 
 # TODO:
-# - Make pixelarray updates more efficient.
+# - Fix the LISPM code to do as above. But it's probably slow anyway - see this as a demo.
 # - Try pygame.transform.smoothscale_by() to scale the window up/down?
 #   Cf https://github.com/mitrefireline/simfire/blob/94dc737c4a2bf2eb62e244fae6ad4680bb17a800/simfire/game/game.py#L382
 
-import sys, time, functools, math
+import sys, time, functools, array
 
 # see https://www.pygame.org/docs/
 import os
@@ -43,10 +45,16 @@ from chaosnet import PacketConn, ChaosError, Opcode, dns_name_of_address
 # pygame.PixelArray
 # https://www.pygame.org/docs/ref/pixelarray.html#pygame.PixelArray
 
+# Parameters
 debug = False
+atatime = 'row'
 
 # How many words fit in a packet where 2 bytes are index?
 number_of_16b_words = int((488-2)/2)
+
+# Use an array (though it's not faster than using lists and .append).
+# The size of the element is needed here, from .itemsize
+pvals = array.array('L',(number_of_16b_words*16*array.array('L').itemsize)*bytes([0]))
 
 # Get a packet, handle it.
 # If width is not given, get it from the packet.
@@ -78,19 +86,32 @@ def spy_process_packet(c, width=None, height=None, pix=None):
     spix = idx*number_of_16b_words*16 
     epix = spix+number_of_16b_words*16
     # convert b/w pixels to 0/255 values
-    pvals = []                            # use an array of 243 instead?
-    for b in data[6:]:
+    for b in range(len(data[6:])):
         for i in range(8):
-            pvals.append(0xFFFFFF if b&(1<<i)==0 else 0)
+            pvals[b*8+i] = (0xFFFFFF if data[b+6]&(1<<i)==0 else 0)
     if debug:
-        print("start row {}, start col {}".format(spix % width, math.floor((spix / width)%height)))
-    # @@@@ Do this more efficently, assign slices.
-    for p in range(len(pvals)):
-        try:
-            pix[(spix + p) % width, math.floor((spix + p)/width)%height] = pvals[p]
-        except IndexError as m:
-            print("{} at {},{}, pos {}".format(m,(spix + p) % width, math.floor((spix + p)/width)%height,p), file=sys.stderr)
-            raise
+        print("start row {}, start col {}".format(spix % width, int((spix / width)%height)))
+    # Put them in the pixelarray. This experiment seems rather useless, it's all slow
+    if atatime == 'row':
+        # A screen row at a time
+        firstrowend = width-(spix%width)   # first pixel might be in the middle of a row
+        plen = len(pvals)
+        if firstrowend > 0:
+            pix[spix%width : spix%width+firstrowend, int(spix/width)%height] = pvals[:firstrowend]
+        for p in range(firstrowend,plen,width):
+            rowlen = min(width,plen-p)    # last row might not have full width (because first pixel...)
+            pix[(spix + p)%width : (spix + p)%width+rowlen, int((spix + p)/width)%height] = pvals[p:p+rowlen]
+    elif atatime == 16:
+        # 16b at a time (safe, since we have n 16b words)
+        for p in range(0,len(pvals),16):
+            pix[(spix + p)%width : (spix+p)%width+16, int((spix + p)/width)%height] = pvals[p:p+16]
+    elif atatime == 1:
+        # Pixel at a time (slower, but not much?)
+        for p in range(len(pvals)):
+            pix[(spix + p) % width, int((spix + p)/width)%height] = pvals[p]
+    else:
+        print("Don't know how to do {} pixels at a time?".format(atatime), file=sys.stderr)
+        exit(1)
     # Now update the window
     pygame.display.flip()
     return pix,width,height
@@ -102,11 +123,14 @@ if __name__ == '__main__':
                             help='Turn on debug printouts')
     parser.add_argument("-n",'--numpkts',type=int,
                             help='Only process the first N packets')
+    parser.add_argument("-a",'--atatime', default="row",
+                            help='Number of pixels to update at a time: "row", 16 or 1')
     parser.add_argument("host", help='The host to spy on')
     args = parser.parse_args()
     if args.debug:
        debug = True
        print(args, file=sys.stderr)
+    atatime = args.atatime if args.atatime == 'row' else int(args.atatime)
 
     try:
         pygame.init()
@@ -123,7 +147,7 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         pass
     c.close()
-    print("Closed connection, waiting to let you see the window.")
+    print("Closed connection (after {} pkts received), waiting to let you see the window.".format(n))
     try:
         time.sleep(60)
     except KeyboardInterrupt:
