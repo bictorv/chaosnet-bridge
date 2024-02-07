@@ -177,6 +177,8 @@ class PacketConn(NCPConn):
         self.send_packet(Opcode.CLS, msg)
     def send_ans(self, msg):
         self.send_packet(Opcode.ANS, msg)
+    def send_unc(self, msg):
+        self.send_packet(Opcode.UNC, msg)
     def send_opn(self):
         self.send_packet(Opcode.OPN)
     def send_eof(self, wait=False):
@@ -204,6 +206,9 @@ class PacketConn(NCPConn):
         if opc == Opcode.ANS:
             # Includes 2 bytes of source!
             assert length <= 490
+        elif opc == Opcode.UNC:
+            # Includes 4 bytes (packetno, ackno fields)
+            assert length <= 492
         else:
             assert(length <= 488)
         if debug:
@@ -532,7 +537,7 @@ import dns.resolver
 
 # Default DNS resolver for Chaosnet
 dns_resolver_name = 'DNS.Chaosnet.NET'
-dns_resolver_address = None
+dns_resolver_address = socket.gethostbyname(dns_resolver_name)
 
 def set_dns_resolver_address(adorname):
     global dns_resolver_address
