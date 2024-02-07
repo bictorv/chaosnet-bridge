@@ -61,5 +61,8 @@ cbridge.conf
 hostat
 finger
 
+# Python cache
+__pycache__/**
+
 # Xcode project (not yet)
 Chaosnet Bridge/**
