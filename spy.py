@@ -40,7 +40,7 @@ import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 
-from chaosnet import PacketConn, ChaosError, Opcode, dns_name_of_address
+from chaosnet import PacketConn, ChaosError, UnexpectedOpcode, Opcode, dns_name_of_address
 
 # pygame.PixelArray
 # https://www.pygame.org/docs/ref/pixelarray.html#pygame.PixelArray
@@ -61,6 +61,8 @@ pvals = array.array('L',(number_of_16b_words*16*array.array('L').itemsize)*bytes
 # If pixelarray is not given, create a window and get it from there.
 def spy_process_packet(c, width=None, height=None, pix=None):
     opc,data = c.get_packet()
+    if opc == Opcode.CLS:
+        raise ChaosError(str(data,"ascii"))
     if opc != Opcode.UNC:
         raise UnexpectedOpcode("Bad opcode {}, expected UNC".format(Opcode(opc).name))
     if width == None:
@@ -132,23 +134,32 @@ if __name__ == '__main__':
        print(args, file=sys.stderr)
     atatime = args.atatime if args.atatime == 'row' else int(args.atatime)
 
+    start = None
+    n = 0
     try:
         pygame.init()
         c = PacketConn()
         c.set_debug(debug)
         c.connect(args.host, "SPY")
         w,h,pa = None, None, None
-        n = 0
         while args.numpkts is None or n < args.numpkts:
             pa,w,h = spy_process_packet(c, width=w, height=h, pix=pa)
             n = n+1
+            if start is None:
+                start = time.time()
     except ChaosError as m:
         print(m, file=sys.stderr)
     except KeyboardInterrupt:
         pass
-    c.close()
-    print("Closed connection (after {} pkts received), waiting to let you see the window.".format(n))
+    end = time.time()
     try:
-        time.sleep(60)
-    except KeyboardInterrupt:
+        c.close()
+    except:
+        # Ignore errors
         pass
+    if n > 0:
+        print("Closed connection. {} pkts received in {:.1f} s, {:.1f} pkts/s. Waiting to let you see the window.".format(n, end-start, n/(end-start)))
+        try:
+            time.sleep(60)
+        except KeyboardInterrupt:
+            pass
