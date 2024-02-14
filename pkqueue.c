@@ -185,12 +185,13 @@ pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)
     for (pl = NULL, l = q->first; (l != NULL) && (l->pkt != NULL) && (pktnum_less(ch_packetno(l->pkt), ch_packetno(pkt))); l = l->next) 
       // previous
       pl = l;
-    if (pl == NULL) {
+    // avoid re-inserting an old pkt
+    if (pl == NULL && !pktnum_equal(ch_packetno(q->first->pkt), ch_packetno(pkt))) {
       // insert first
       nl->next = q->first;
       q->first = nl;
       q->pkq_len++;
-    } else {
+    } else if (pl != NULL && (l == NULL || !pktnum_equal(ch_packetno(l->pkt), ch_packetno(pkt)))) {
       // insert after previous
       // @@@@ assert(pl->next == l)
       nl->next = l;

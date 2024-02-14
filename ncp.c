@@ -2471,9 +2471,12 @@ add_ooo_pkt(struct conn *c, struct chaos_header *pkt)
   // lock it
   PTLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
   // add pkt
+  int pre_len = pkqueue_length(cs->received_pkts_ooo);
   pkqueue_insert_by_packetno(saved, cs->received_pkts_ooo);
-  cs->received_pkts_ooo_width = 1+pktnum_diff(ch_packetno(pkqueue_peek_last(cs->received_pkts_ooo)), 
-					      ch_packetno(pkqueue_peek_first(cs->received_pkts_ooo)));
+  if (pre_len != pkqueue_length(cs->received_pkts_ooo))
+    // only update if it was actually inserted
+    cs->received_pkts_ooo_width = 1+pktnum_diff(ch_packetno(pkqueue_peek_last(cs->received_pkts_ooo)), 
+						ch_packetno(pkqueue_peek_first(cs->received_pkts_ooo)));
   PTUNLOCKN(cs->received_ooo_mutex,"received_ooo_mutex");
 }
 
@@ -2948,6 +2951,9 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
       // it wasn't the next pkt expected, so put it in the right place in received_pkts_ooo
       if (ncp_debug) printf(" pkt %#x is OOO (highest is %#x)\n", ch_packetno(pkt), cs->pktnum_received_highest);
       add_ooo_pkt(conn, pkt);
+      if (ncp_debug > 1) {
+	print_pkqueue(cs->received_pkts_ooo);
+      }
     }
     // AIM 628 sec 3.8: if the number of packets which should have been
     // acknowledged but have not been is more than 1/3 the window
