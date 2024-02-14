@@ -83,7 +83,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
 
 def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
     try:
-        data = conn.get_line()             #get a line
+        data = conn.get_message(1)             #get a packet
         while data:
             if debug:
                 print("Got data {}".format(data), file=sys.stderr)
