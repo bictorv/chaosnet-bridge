@@ -307,3 +307,26 @@ set_pkqueue_elem_transmitted(struct pkt_elem *e, struct timespec *ts)
   e->transmitted.tv_sec = ts->tv_sec;
   e->transmitted.tv_nsec = ts->tv_nsec;
 }
+
+// Unlink a pkt_elem, given the previous elem on the queue (which may be NULL).
+// Return the previous (with updated next link), or the first (if prev was NULL).
+struct pkt_elem * 
+pkqueue_unlink_pkt_elem(struct pkt_elem *elem, struct pkt_elem *prev, struct pkqueue *queue) 
+{
+  struct pkt_elem *next = elem->next;
+  struct chaos_header *pkt = elem->pkt;
+  if (prev != NULL) {
+    prev->next = next;	// skip over this
+    elem = prev;		// back up so the for loop finds the next one
+  } else {
+    // This was the first pkt on the queue, update it
+    queue->first = next;
+    if (queue->last == elem) // maybe there was only this one pkt in the queue
+      queue->last = next;
+    // back up - this might result in one pkt being skipped, but it will be handled next time...
+    elem = pkqueue_first_elem(queue);
+  }
+  if (pkt != NULL)
+    free(pkt);
+  return elem;
+}

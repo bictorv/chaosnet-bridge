@@ -2302,6 +2302,12 @@ ncp_user_server(void *v)
 	  u_int clen = sizeof(caddr);
 	  struct sockaddr *sa = (struct sockaddr *)&caddr;
 	  if ((fd = accept(fds[i], sa, &clen)) < 0) {
+	    if (errno == EMFILE) {
+	      // "Too many open files"
+	      if (ncp_debug) printf("NCP user server: Too many open files, sleeping and retrying.\n");
+	      sleep(1);		// Back off (see if something closes down?)
+	      continue;		// Try again.
+	    }
 	    perror("?? accept(simplesock)");
 	    // @@@@ what could go wrong? lots
 	    exit(1);
@@ -2611,7 +2617,7 @@ retransmit_controlled_packets(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   struct chaos_header *pkt;
-  struct pkt_elem *q;
+  struct pkt_elem *q, *prev = NULL;
   int nsent = 0, ntoonew = 0;
   int npkts = 0;
   int pklen;
@@ -2631,7 +2637,7 @@ retransmit_controlled_packets(struct conn *conn)
       print_conn("Retransmit:", conn, 1);
     }
     timespec_get(&now, TIME_UTC);
-    for (q = pkqueue_first_elem(cs->send_pkts); q != NULL; q = pkqueue_next_elem(q)) {
+    for (q = pkqueue_first_elem(cs->send_pkts); q != NULL; prev = q, q = pkqueue_next_elem(q)) {
       pkt = pkqueue_elem_pkt(q); 
       pklen = ch_nbytes(pkt)+CHAOS_HEADERSIZE;
       if (pklen % 2) pklen++;
@@ -2648,6 +2654,9 @@ retransmit_controlled_packets(struct conn *conn)
 	  if (ncp_debug) printf("%%%% Retrans %s %#x with acked %#x rcpt %#x in state %s\n",
 				ch_opcode_name(ch_opcode(pkt)), ch_packetno(pkt), 
 				cs->pktnum_sent_acked, cs->pktnum_sent_receipt, state_name(cs->state));
+	  // This should never be sent, so unlink it and free the pkt data
+	  q = pkqueue_unlink_pkt_elem(q, prev, cs->send_pkts);
+	  continue;
 	}
 	if (((ch_opcode(pkt) == CHOP_RFC) || (ch_opcode(pkt) == CHOP_BRD))
 	    && (conn->rfc_timeout > 0)
@@ -2965,6 +2974,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
       if (ncp_debug) printf(" 1/3 window un-acked (%d), acked %#x, sending STS\n", unacked, cs->pktnum_acked);
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
+#if 1
     } else if (n_from_ooo > (cs->local_winsize/3)) { // @@@@ perhaps not every ooo, just when they are "many"?
       // Experimental: send an STS if we picked packets from the ooo list.
       // This could help minimize unnecessary retransmissions, e.g. if one pkt was missing out of a windowful in ooo.
@@ -2972,6 +2982,7 @@ receive_data_for_conn(int opcode, struct conn *conn, struct chaos_header *pkt)
 			    n_from_ooo, unacked, cs->pktnum_acked);
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
       send_sts_pkt(conn);
+#endif
     } else {
       PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
     }
@@ -3902,19 +3913,21 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
     memcpy(&obuf[olen], buf, len);
     len += olen;
   }
-  if (
+  int slen = 
 #ifdef MSG_NOSIGNAL
-      send(conn->conn_sock, obuf, len, MSG_NOSIGNAL)
+    send(conn->conn_sock, obuf, len, MSG_NOSIGNAL);
 #else
-      write(conn->conn_sock, obuf, len)
+    write(conn->conn_sock, obuf, len);
 #endif
-      < 0) {
+  if (slen < 0) {
     if ((errno == ECONNRESET) || (errno == EPIPE) || (errno == EBADF)) {
       socket_closed_for_conn(conn);
     } else {
       perror("?? write(send_to_user_socket)");
       exit(1);
     }
+  } else if (slen != len) {
+    fprintf(stderr,"%s: sent %d bytes on socket instead of expected %d\n", __func__, slen, len);
   }
 }
 

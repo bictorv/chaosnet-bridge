@@ -47,3 +47,4 @@ struct chaos_header *pkqueue_elem_pkt(struct pkt_elem *e);
 struct timespec *pkqueue_elem_transmitted(struct pkt_elem *e);
 void set_pkqueue_elem_transmitted(struct pkt_elem *e, struct timespec *ts);
 int pkqueue_length(struct pkqueue *q);
+struct pkt_elem *pkqueue_unlink_pkt_elem(struct pkt_elem *elem, struct pkt_elem *prev, struct pkqueue *queue);
