@@ -118,11 +118,11 @@ function chaos.dissector(tvb, pinfo, tree)
    local pktno = bendian and tvb(12, 2):uint() or tvb(12, 2):le_uint()
    local ackno = bendian and tvb(14, 2):uint() or tvb(14, 2):le_uint()
    -- add the brief info
-   pinfo.cols.info:set("<"..src..","..srcidx.."> => <"..dest..","..destidx..">"..opdesc)
+   pinfo.cols.info:set("<"..src..","..string.format("%#04x",srcidx).."> => <"..dest..","..string.format("%#04x",destidx).."> "..string.format("%#04x",pktno)..opdesc)
    chaos_tree:add(tvb(2, 2), "Fwd count: " .. forward_count .. ", Data length: " .. data_count)
-   chaos_tree:add(tvb(4, 4), "Dest address " .. dest .. ", index " .. destidx .."("..string.format("%#x",destidx)..")")
-   chaos_tree:add(tvb(8, 4), "Source address " .. src .. ", index " .. srcidx .."("..string.format("%#x",srcidx)..")")
-   chaos_tree:add(tvb(12, 4), "Packet nr: " .. pktno .. " ("..string.format("%#x",pktno).. "), Ack nr: " .. ackno.. " ("..string.format("%#x",ackno).. ")")
+   chaos_tree:add(tvb(4, 4), "Dest address " .. dest .. ", index " .. string.format("%#04x",destidx))
+   chaos_tree:add(tvb(8, 4), "Source address " .. src .. ", index " .. string.format("%#04x",srcidx))
+   chaos_tree:add(tvb(12, 4), "Packet nr: " .. string.format("%#04x",pktno).. ", Ack nr: " .. string.format("%#04x",ackno))
 
    -- Data.
    if opcode == 8 then		-- RUT, complex content
