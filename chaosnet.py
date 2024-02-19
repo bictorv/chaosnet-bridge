@@ -289,24 +289,16 @@ class PacketConn(NCPConn):
             elif opc == Opcode.LOS:
                 raise LOSError("LOS: {}".format(str(data,"ascii")))
             elif opc == Opcode.EOF:
-                raise EOFError("{} got EOF: {}".format(self,data))
+                # raise EOFError("{} got EOF: {}".format(self,data))
+                return None
             # @@@@ handle ANS too?
             elif opc != Opcode.DAT:
                 raise UnexpectedOpcode("Unexpected opcode {}".format(opc))
                 return None
             else:
-                last = None
-                while True:
-                    data = self.get_bytes(488)
-                    if len(data) == 0:
-                        if last not in [0o215,0o212,0o15,0o12]:
-                            # finish with a fresh line
-                            print("",file=outstream)
-                        return None
-                    # Translate to Unix
-                    out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
-                    last = out[-1]
-                    print("{!s}".format(out), file=outstream)
+                # Translate to Unix
+                out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                print("{!s}".format(out), file=outstream, end='' if out[-1] not in [0o215,0o212,0o15,0o12] else None)
 
 # For simple broadcast protocols
 # Iterator gives source address and data for each ANS
