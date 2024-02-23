@@ -1121,11 +1121,13 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
   //   The packet number field contains sequential numbers in controlled
   //   packets; in uncontrolled packets it contains the same number as
   //   the next controlled packet will contain.
-  set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
-  if (!opcode_uncontrolled(opcode))
-    // controlled packets count
-    cs->pktnum_made_highest = pktnum_1plus(cs->pktnum_made_highest);
-
+  // Except if we're really retransmitting an OPN, which we already incremented these for.
+  if ((cs->state != CS_Open_Sent) || (opcode != CHOP_OPN)) {
+    set_ch_packetno(ch, pktnum_1plus(cs->pktnum_made_highest));
+    if (!opcode_uncontrolled(opcode))
+      // controlled packets count
+      cs->pktnum_made_highest = pktnum_1plus(cs->pktnum_made_highest);
+  }
   switch (opcode) {
   case CHOP_BRD:
     // For BRD, add bitmask - allocate max size for simplicity
@@ -2656,6 +2658,7 @@ retransmit_controlled_packets(struct conn *conn)
 				cs->pktnum_sent_acked, cs->pktnum_sent_receipt, state_name(cs->state));
 	  // This should never be sent, so unlink it and free the pkt data
 	  q = pkqueue_unlink_pkt_elem(q, prev, cs->send_pkts);
+	  npkts--;
 	  continue;
 	}
 	if (((ch_opcode(pkt) == CHOP_RFC) || (ch_opcode(pkt) == CHOP_BRD))
