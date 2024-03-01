@@ -226,7 +226,7 @@ class PacketConn(NCPConn):
         if op == Opcode.RFC or op == Opcode.BRD: # BRD is supposed to be translated to RFC!
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
-            self.args = hostandargs[1:]
+            self.args = hostandargs[1] if len(hostandargs) > 1 else ""
             return self.remote,self.args
         elif op == Opcode.LOS:
             raise LOSError("LOS: {}".format(str(data,"ascii")))
@@ -383,7 +383,7 @@ class StreamConn(NCPConn):
         if op == b"RFC":
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
-            self.args = hostandargs[1:]
+            self.args = hostandargs[1] if len(hostandargs) > 1 else ""
             return self.remote,self.args
         elif op == b"LOS":
             raise LOSError("LOS: {}".format(str(data,"ascii")))

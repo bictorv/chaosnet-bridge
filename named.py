@@ -31,9 +31,9 @@ packetp = False
 def give_finger_response(conn, args):
     # Run finger and capture the output
     pargs = [finger_program,'-s']+\
-        list(filter(lambda x: x is not None,
-                        map(lambda a: b'-l' if a == b'/W' else a if not a.startswith(b'/') else None,
-                                args)))
+        list(filter(lambda x: x is not None and x != "",
+                        map(lambda a: '-l' if a == '/W' or a == '/w' else a if not a.startswith('/') else None,
+                                map(lambda a: a.strip(' '), args))))
     if debug:
         print("Running {!s}".format(pargs),file=sys.stderr)
     r = subprocess.run(pargs, stdout=subprocess.PIPE,stderr=subprocess.STDOUT, text=True)
