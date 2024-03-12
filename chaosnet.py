@@ -520,7 +520,7 @@ class BroadcastSimple:
                 # Save this if it wasn't printed now (e.g. Free lispm)
                 nonprinted.append([src,data])
         # At the end, maybe print those not printed earlier
-        if len(nonprinted) > 0 and nonprinter is not None:
+        if nonprinter is not None:
             nonprinter(nonprinted)
 
 ################ DNS
@@ -543,6 +543,7 @@ def set_dns_resolver_address(adorname):
 def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
     if type(addrstring) is int:
         name = "{:o}.CH-ADDR.NET.".format(addrstring)
+        addrstring = "{:o}".format(addrstring)
     else:
         name = "{}.CH-ADDR.NET.".format(addrstring)
     try:
