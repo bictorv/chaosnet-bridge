@@ -1079,7 +1079,8 @@ find_matching_listener(struct chaos_header *ch, u_char *contact, int removep, in
 
   if (dolock) PTLOCKN(listener_lock,"listener_lock");
   for (ll = registered_listeners; ll != NULL; ll = ll->lsn_next) {
-    if (strcmp((char *)contact, (char *)ll->lsn_contact) == 0) {
+    // Be case insensitive - it's supposed to be upper case
+    if (strcasecmp((char *)contact, (char *)ll->lsn_contact) == 0) {
       if (space) // undo
 	*space = ' ';
       val = ll->lsn_conn;
