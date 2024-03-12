@@ -51,7 +51,7 @@ def host_name(addr, timeout=2):
         if debug:
             print("Error while getting STATUS of {}: {}".format(addr,msg), file=sys.stderr)
         # host_names[addr] = "????"
-        return "????"
+        return addr
     if src:
         name = str(data[:32].rstrip(b'\x00'), "ascii")
         # host_names[addr] = name
@@ -197,6 +197,8 @@ class ChaosFinger(SimpleProtocol):
                 hname = host_name("{:o}".format(src))
                 f = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
                 print("{:17s} {:s}{:s}".format(hname,f[1]," (idle {:s})".format(f[2]) if f[2] != "" else ""))
+        else:
+            print("\nNo free lisp machines.")
 
 # The LOAD protocol
 class ChaosLoad(SimpleProtocol):
@@ -271,9 +273,9 @@ class ChaosLastSeen(SimpleProtocol):
     contact = "LASTCN"
     def header(self):
         if not no_host_names:
-            return("{:<20} {:20} {:>8} {:10}  {}".format("Host","Seen","#in","Via","FC","Age"))
+            return("{:<20} {:20} {:>8} {:10} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
         else:
-            return("{:<20} {:>8} {:>8} {:>8}  {}".format("Host","Seen","#in","Via","FC","Age"))
+            return("{:<20} {:>8} {:>8} {:>8} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
     def printer(self, src, data):
         hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) if not(no_host_names) else "{:o}".format(src)
         cn = dict()
@@ -296,9 +298,9 @@ class ChaosLastSeen(SimpleProtocol):
             e = cn[addr]
             a = timedelta(seconds=e['age'])
             if not no_host_names:
-                print("{:<20} {:<20} {:>8} {:<10} {:>4}  {}".format(first,"{} ({:o})".format(host_name(addr),addr),e['input'],host_name(e['via']),e['fc'],a))
+                print("{:<20} {:<20} {:>8} {:<10} {:>2} {}".format(first,"{} ({:o})".format(host_name(addr),addr),e['input'],host_name(e['via']),e['fc'],a))
             else:
-                print("{:<20} {:>8o} {:>8} {:>8o} {:>4}  {}".format(first,addr,e['input'],e['via'],e['fc'],a))
+                print("{:<20} {:>8o} {:>8} {:>8o} {:>2} {}".format(first,addr,e['input'],e['via'],e['fc'],a))
             first = ""                
 
 # @@@@ rewrite like above
@@ -415,8 +417,8 @@ if __name__ == '__main__':
 
     # if no service explicitly given, but first "subnet" is a service (and more given), use that
     # Example: "bhostat.py finger 0"
-    if args.service is None and len(args.subnets) > 1 and args.subnets[0] in contact_handlers:
-        args.service = args.subnets[0]
+    if args.service is None and len(args.subnets) > 1 and (args.subnets[0] in contact_handlers or args.subnets[0].lower() == "hostat"):
+        args.service = args.subnets[0] if args.subnets[0].lower() != "hostat" else "status"
         args.subnets = args.subnets[1:]
     # maybe if only a service is given, use "local" as subnet? But just a host name for STATUS is useful.
     elif args.service is None:
