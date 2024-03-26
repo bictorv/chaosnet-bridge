@@ -51,7 +51,8 @@ def host_name(addr, timeout=2):
         if debug:
             print("Error while getting STATUS of {}: {}".format(addr,msg), file=sys.stderr)
         # host_names[addr] = "????"
-        return addr
+        # return addr
+        src = None
     if src:
         name = str(data[:32].rstrip(b'\x00'), "ascii")
         # host_names[addr] = name
