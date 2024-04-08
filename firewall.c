@@ -554,7 +554,10 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
     if (ch_opcode(pkt) != CHOP_BRD)
       send_fwd_response(pkt, rule->rule_action->args.fwd_args->forward_addr, rule->rule_action->args.fwd_args->forward_contact);
     return -1;
+  default:
+    fprintf(stderr,"unrecognized rule action %d\n", rule->rule_action->action);
   }
+  return 0;
 }
 
 // Handle a packet.
@@ -569,14 +572,11 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
     fprintf(stderr,"%%%% Firewall: not an RFC/BRD pkt: %s\n", ch_opcode_name(opc));
     return 0;
   }
-  char *contact_start = NULL;
+  char contact[CH_PK_MAXLEN];
+  get_packet_string(pkt, (u_char *)contact, sizeof(contact));
   int contact_maxlen = ch_nbytes(pkt);
-  if (ch_opcode(pkt) == CHOP_RFC)
-    contact_start = (char *)&pkt[CHAOS_HEADERSIZE];
-  else if (ch_opcode(pkt) == CHOP_BRD) {
-    // skip over broadcast bitmask
-    // @@@@ check reasonable values first
-    contact_start = (char *)&pkt[CHAOS_HEADERSIZE + ch_ackno(pkt)];
+  if (ch_opcode(pkt) == CHOP_BRD) {
+    // @@@@ check reasonable values too
     contact_maxlen -= ch_ackno(pkt);
   }
 
@@ -584,19 +584,20 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
   u_short destaddr = ch_destaddr(pkt);
 
   if (debug_firewall) {
-    u_char contact[CH_PK_MAXLEN];
-    get_packet_string(pkt, contact, sizeof(contact));
     printf("Checking %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
 	   ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	   ch_destaddr(pkt), ch_destindex(pkt));
   }
 
   for (int i = 0; i < n_firewall_rules; i++) {
+    if (debug_firewall) printf("Checking rule %d: type %s contact %s len %d cstart %s\n", i, 
+			       fw_rules[i]->contact_type == rule_contact_all ? "all" : "string",
+			       fw_rules[i]->contact, fw_rules[i]->contact_length, contact);
     if ((fw_rules[i]->contact_type == rule_contact_all) ||
 	((fw_rules[i]->contact_type == rule_contact_string) &&
-	 (strncasecmp(contact_start, fw_rules[i]->contact, fw_rules[i]->contact_length) == 0) &&
+	 (strncasecmp(contact, fw_rules[i]->contact, fw_rules[i]->contact_length) == 0) &&
 	 // RFC contact is "contact" precisely or "contact args", not "contactless"
-	 (fw_rules[i]->contact_length == contact_maxlen || contact_start[fw_rules[i]->contact_length] == ' '))) {
+	 (fw_rules[i]->contact_length == contact_maxlen || contact[fw_rules[i]->contact_length] == ' '))) {
       struct contact_rule **rules = fw_rules[i]->rules;
       for (int r = 0; r < fw_rules[i]->n_rules; r++) { // foreach rule
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
@@ -610,7 +611,13 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	if (debug_firewall) printf("Contact matched (%s) but no rule matched, proceed\n", fw_rules[i]->contact);
 	return 0;			// Contact matched, but no rule matched, so proceed
       }
-    }      
+    }
+#if 0
+    else if (debug_firewall) 
+      printf(" rule did not match (comp %d clen %d maxlen %d)\n", 
+	     strncasecmp(contact, fw_rules[i]->contact, fw_rules[i]->contact_length),
+	     fw_rules[i]->contact_length, contact_maxlen);
+#endif
   }
   if (debug_firewall) printf("No contact matched, proceed\n");
   return 0;			// No contact matched, so proceed
