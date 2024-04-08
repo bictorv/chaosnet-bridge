@@ -66,7 +66,6 @@
 // detect unexpected traffic
 // - e.g. source addr 3150 from link with addr 3160 (which has another link)
 // - or traffic from a defined subnet arriving on a different link
-// firewall??
 
 // add parameters for various constants (arp age limit, reparsing interval...)
 
@@ -175,6 +174,10 @@ void packet_to_conn_handler(u_char *pkt, int len);
 void print_ncp_stats(void);
 int parse_private_hosts_file(char *f);
 void print_private_hosts_config(void);
+
+// Firewall
+int parse_firewall_config_line(void);
+int firewall_handle_rfc_or_brd(struct chaos_header *pkt);
 
 time_t boottime;
 
@@ -1025,6 +1028,14 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
   }
 
   peek_routing(data, dlen, cost, src_linktype); /* check for RUT */
+
+  if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
+    if (firewall_handle_rfc_or_brd(ch) < 0) {
+      if (debug) fprintf(stderr,"Firewall says to drop packet from %#o to %#o.\n",
+			 ch_srcaddr(ch), ch_destaddr(ch));
+      return;			// Firewall says "no"
+    }
+  }
 
   // To me?
   if (is_mychaddr(dchad) || (dchad == 0) || (rt != NULL && rt->rt_myaddr == dchad)) {
@@ -1898,7 +1909,9 @@ parse_config_line(char *line)
   else if (strcasecmp(tok, "private") == 0) {
     return parse_private_config();
   }
-  else {
+  else if (strcasecmp(tok,"firewall") == 0) {
+    return parse_firewall_config_line();
+  } else {
     fprintf(stderr,"config keyword %s unknown\n", tok);
     return -1;
   }
