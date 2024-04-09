@@ -178,6 +178,7 @@ void print_private_hosts_config(void);
 // Firewall
 int parse_firewall_config_line(void);
 int firewall_handle_rfc_or_brd(struct chaos_header *pkt);
+void print_firewall_rules(void);
 
 time_t boottime;
 
@@ -2067,6 +2068,7 @@ print_stats(int sig)
   print_host_stats();
 
   print_ncp_stats();
+  print_firewall_rules();	// to get #matches
 }
 
 void
