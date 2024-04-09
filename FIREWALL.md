@@ -2,6 +2,8 @@
 
 A simple firewall is implemented, where you can define how to handle RFC and BRD packets.
 
+It can be used e.g. to restrict access to services running on your cbridge using [the NCP interface](NCP.md), or if your cbridge is in a "gateway position", to filter packets passing through it (i.e. not necessarily with the cbridge as destination).
+
 ## Configuration
 
 `firewall ` [ `enabled` no/yes ] [ `debug` off/on ] [ `log` off/on ] [ `rules` *filename* ]
@@ -23,7 +25,12 @@ The syntax for firewall rules is the following:
 | --- | --- |
 |*contact* | a contact name in doublequotes, e.g. `"FILE"` |
 |`all`| matches all contact names. |
-|*addrspec*| can be `any`, `host` *addrlist*, `subnet` *subnetlist*, or `myself`. The address/subnet lists are lists of octal numbers separated by commas but no space around the commas. `myself` matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md).|
+|*addrspec*| can be any of the below, where the address/subnet lists are lists of octal numbers separated by commas but no space around the commas. |
+|`any` | matches any address (including broadcast)  |
+|`host` *addrlist* | matches those addresses in the list |
+|`subnet` *subnetlist* | matches addresses on those subnets in the list |
+|`myself`| matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md).|
+|`broadcast`| matches the broadcast address (0). Only makes sense as a "to" address, and only applies to BRD packets.|
 
 The *action* can be
 | action | description |
@@ -31,12 +38,13 @@ The *action* can be
 |`allow`| Allow the packet to be processed. This is the default.|
 |`drop`|Drop the packet without further processing.|
 |`reject` [*reason*]| Responds to the sender with a `CLS` packet with the optional *reason* (a double-quoted string) as data (default: "Connection rejected by firewall").|
-|`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* | is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.)|
+|`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* | is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.) **Note** that supplying a new contact name is not yet handled by cbridge (that's a bug). |
 
 ### Note:
   - Explicit responses (`CLS` and `FWD`) are not sent for `BRD` attempts, since it would be against the spec.
   - Responses are sent using the destination addr and index as the source, so "on behalf of" the destination even though it might not be the cbridge itself.
-  - The rules are processed in the order given, until a match is found.
+  - The rules are processed in the order given, until a match is found. (*Explain efficiency*)
+  - Specifying `broadcast` might block/match much more than you wanted, depending on the placement of your cbridge.
 
 ## Examples
 

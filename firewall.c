@@ -27,6 +27,7 @@ typedef enum rule_addr_type {	// A rule address can have this type:
   rule_addr_host,		// a specific host addr
   rule_addr_subnet,		// a specific subnet
   rule_addr_myself,		// "myself" meaning any of the addresses of this cbridge
+  rule_addr_broadcast,		// as destination
 } rule_addr_t;
 struct rule_addr {		// A rule address has
   rule_addr_t type;		// a type (above)
@@ -124,6 +125,8 @@ parse_addr_spec()
       type = rule_addr_any;
     else if (strcasecmp(tok,"myself") == 0)
       type = rule_addr_myself;
+    else if (strcasecmp(tok,"broadcast") == 0)
+      type = rule_addr_broadcast;
     else {
       fprintf(stderr,"Firewall: bad address keyword '%s', expected subnet/host/any/myself\n", tok);
       return NULL;
@@ -244,6 +247,10 @@ parse_firewall_line(char *line)
 	rule->rule_sources = parse_addr_spec();
 	if (rule->rule_sources == NULL)
 	  return -1;
+	else if (rule->rule_sources->type == rule_addr_broadcast) {
+	  fprintf(stderr,"Firewall: using 'from broadcast' is nonsense.\n");
+	  return -1;
+	}
       } else if (strcasecmp(tok,"to") == 0) {
 	if (rule->rule_dests != NULL) {
 	  fprintf(stderr,"Firewall: only specify one 'to'\n");
@@ -456,6 +463,7 @@ print_firewall_addrs(struct rule_addr *addr)
   switch (addr->type) {
   case rule_addr_any: printf("any"); return;
   case rule_addr_myself: printf("myself"); return;
+  case rule_addr_broadcast: printf("broadcast"); return;
   case rule_addr_host: printf("host "); break;
   case rule_addr_subnet: printf("subnet "); break;
   }
@@ -498,6 +506,8 @@ addr_match(struct rule_addr *addr, u_short pkaddr)
 	return 1;
   } else if (addr->type == rule_addr_myself)
     return is_mychaddr(pkaddr);
+  else if (addr->type == rule_addr_broadcast)
+    return (pkaddr == 0);
   return 0;
 }
 
@@ -571,16 +581,20 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
     if (ch_opcode(pkt) != CHOP_BRD)
       send_cls_response(pkt, rule->rule_action->args.reject_reason);
     return -1;
-  case rule_action_forward:
+  case rule_action_forward: {
+    char *c = rule->rule_action->args.fwd_args->forward_contact;
+    if (c == NULL)
+      c = (char *)contact;
     if (log_firewall)
       printf("forward %s \"%s\" from <%#o,%#x> to <%#o,%#x>: %#o \"%s\"\n",
 	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	     ch_destaddr(pkt), ch_destindex(pkt), 
-	     rule->rule_action->args.fwd_args->forward_addr, rule->rule_action->args.fwd_args->forward_contact);
+	     rule->rule_action->args.fwd_args->forward_addr, c);
     // send FWD using the pkt dest as source (but not for BRD)
     if (ch_opcode(pkt) != CHOP_BRD)
-      send_fwd_response(pkt, rule->rule_action->args.fwd_args->forward_addr, rule->rule_action->args.fwd_args->forward_contact);
+      send_fwd_response(pkt, rule->rule_action->args.fwd_args->forward_addr, c);
     return -1;
+  }
   default:
     fprintf(stderr,"unrecognized rule action %d\n", rule->rule_action->action);
   }
@@ -631,8 +645,7 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	// If we e.g. reject one because it implicitly matches e.g. "myself",
 	// it is completely dropped and won't reach anyone else.
 	// Maybe we need another firewall hook in handle_pkt_for_me, just for BRD pkts?
-	// @@@@ This also means to block BRD, you need to explicitly use "host 0", and allow it in address parsing,
-	// or use "to any"
+	// @@@@ This also means to block BRD, you need to explicitly use "to broadcast" or "to any".
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
 	    addr_match(rules[r]->rule_dests, destaddr)) {
 	  rules[r]->rule_match_count++;
@@ -642,7 +655,7 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
       }
       if (!fw_has_rule_for_all) {
 	// This shortcut should only be taken if there is no "all" rule.
-	// If there is none, there is no possibility of another match, but if there is an "any" rule, it might match.
+	// If there is no "all" rule, there is no possibility of another match, but if there is an "all" rule, it might match.
 	if (debug_firewall) printf("Contact matched (%s) but no rule matched, proceed\n", fw_rules[i]->contact);
 	return 0;			// Contact matched, but no rule matched, so proceed
       }
