@@ -437,7 +437,7 @@ int parse_firewall_config_line()
 	   debug_firewall ? "on" : "off", log_firewall ? "on" : "off", fw_has_rule_for_all ? "yes" : "no");
     print_firewall_rules();
   }
-  // @@@@ validate config
+  // @@@@ validate config more?
   if (n_firewall_rules == 0 && firewall_enabled == 1) {
     printf("%%%% Warning: firewall was enabled, but no rules given. Disabling.\n");
     firewall_enabled = 0;
@@ -562,19 +562,19 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
   switch (rule->rule_action->action) {
   case rule_action_allow:
     if (log_firewall)
-      printf("allow %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+      printf("Firewall: allow %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
 	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	     ch_destaddr(pkt), ch_destindex(pkt));
     return 0;
   case rule_action_drop:
     if (log_firewall)
-      printf("drop %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+      printf("Firewall: drop %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
 	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	     ch_destaddr(pkt), ch_destindex(pkt));
     return -1;
   case rule_action_reject:
     if (log_firewall)
-      printf("reject %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+      printf("Firewall: reject %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
 	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	     ch_destaddr(pkt), ch_destindex(pkt));
     // send CLS using the pkt dest as source (but not for BRD)
@@ -586,7 +586,7 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
     if (c == NULL)
       c = (char *)contact;
     if (log_firewall)
-      printf("forward %s \"%s\" from <%#o,%#x> to <%#o,%#x>: %#o \"%s\"\n",
+      printf("Firewall: forward %s \"%s\" from <%#o,%#x> to <%#o,%#x>: %#o \"%s\"\n",
 	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
 	     ch_destaddr(pkt), ch_destindex(pkt), 
 	     rule->rule_action->args.fwd_args->forward_addr, c);
@@ -595,8 +595,8 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
       send_fwd_response(pkt, rule->rule_action->args.fwd_args->forward_addr, c);
     return -1;
   }
-  default:
-    fprintf(stderr,"unrecognized rule action %d\n", rule->rule_action->action);
+  default:			// "Never happens", he said.
+    fprintf(stderr,"Firewall: unrecognized rule action %d\n", rule->rule_action->action);
   }
   return 0;
 }
@@ -617,8 +617,13 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
   get_packet_string(pkt, (u_char *)contact, sizeof(contact));
   int contact_maxlen = ch_nbytes(pkt);
   if (ch_opcode(pkt) == CHOP_BRD) {
-    // @@@@ check reasonable values too
-    contact_maxlen -= ch_ackno(pkt);
+    // check reasonable values too, since this code runs early
+    if (ch_ackno(pkt) > 0 && ch_ackno(pkt) <= 32 && (ch_ackno(pkt) % 4) == 0 && ch_nbytes(pkt) > ch_ackno(pkt))
+      contact_maxlen -= ch_ackno(pkt);
+    else {
+      if (debug_firewall) printf("Firewall: dropping malformed BRD (ackno %#x, len %d)\n", ch_ackno(pkt), ch_nbytes(pkt));
+      return -1;
+    }
   }
 
   u_short srcaddr = ch_srcaddr(pkt);
@@ -636,6 +641,7 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 			       fw_rules[i]->contact, fw_rules[i]->contact_length, contact);
     if ((fw_rules[i]->contact_type == rule_contact_all) ||
 	((fw_rules[i]->contact_type == rule_contact_string) &&
+	 (fw_rules[i]->contact_length <= contact_maxlen) &&
 	 (strncasecmp(contact, fw_rules[i]->contact, fw_rules[i]->contact_length) == 0) &&
 	 // RFC contact is "contact" precisely or "contact args", not "contactless"
 	 (fw_rules[i]->contact_length == contact_maxlen || contact[fw_rules[i]->contact_length] == ' '))) {
