@@ -69,7 +69,7 @@ struct firewall_rule {
 
 static u_int n_firewall_rules = 0;
 static struct firewall_rule **fw_rules = NULL;
-static int fw_has_rule_for_any = 0;
+static int fw_has_rule_for_all = 0;
 
 static int 
 num_occurrences(char c, char *s)
@@ -120,10 +120,9 @@ parse_addr_spec()
       type = rule_addr_subnet;
     else if (strcasecmp(tok,"host") == 0) 
       type = rule_addr_host;
-    else if (strcasecmp(tok,"any") == 0) {
+    else if (strcasecmp(tok,"any") == 0)
       type = rule_addr_any;
-      fw_has_rule_for_any = 1;
-    } else if (strcasecmp(tok,"myself") == 0)
+    else if (strcasecmp(tok,"myself") == 0)
       type = rule_addr_myself;
     else {
       fprintf(stderr,"Firewall: bad address keyword '%s', expected subnet/host/any/myself\n", tok);
@@ -221,9 +220,10 @@ parse_firewall_line(char *line)
     return 0;			// Empty line
 
   // First is contact name in doublequotes, or all
-  if (strcasecmp(tok, "all") == 0)
+  if (strcasecmp(tok, "all") == 0) {
     contact_type = rule_contact_all;
-  else {
+    fw_has_rule_for_all = 1;
+  } else {
     contact_type = rule_contact_string;
     contact_name = parse_quoted_string(tok);
     if (contact_name == NULL) {
@@ -426,8 +426,8 @@ int parse_firewall_config_line()
     }
   }
   if (debug_firewall) {
-    printf("firewall %s: debug %s log %s, \"any\" rule used: %s\n", firewall_enabled ? "enabled" : "disabled",
-	   debug_firewall ? "on" : "off", log_firewall ? "on" : "off", fw_has_rule_for_any ? "yes" : "no");
+    printf("firewall %s: debug %s log %s, \"all\" rule used: %s\n", firewall_enabled ? "enabled" : "disabled",
+	   debug_firewall ? "on" : "off", log_firewall ? "on" : "off", fw_has_rule_for_all ? "yes" : "no");
     print_firewall_rules();
   }
   // @@@@ validate config
@@ -628,6 +628,11 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
       struct contact_rule **rules = fw_rules[i]->rules;
       for (int r = 0; r < fw_rules[i]->n_rules; r++) { // foreach rule
 	// @@@@ consider broadcast destination - what should apply?
+	// If we e.g. reject one because it implicitly matches e.g. "myself",
+	// it is completely dropped and won't reach anyone else.
+	// Maybe we need another firewall hook in handle_pkt_for_me, just for BRD pkts?
+	// @@@@ This also means to block BRD, you need to explicitly use "host 0", and allow it in address parsing,
+	// or use "to any"
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
 	    addr_match(rules[r]->rule_dests, destaddr)) {
 	  rules[r]->rule_match_count++;
@@ -635,8 +640,8 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	  return do_action(rules[r], pkt);
 	}
       }
-      if (!fw_has_rule_for_any) {
-	// This shortcut should only be taken if there is no "any" rule.
+      if (!fw_has_rule_for_all) {
+	// This shortcut should only be taken if there is no "all" rule.
 	// If there is none, there is no possibility of another match, but if there is an "any" rule, it might match.
 	if (debug_firewall) printf("Contact matched (%s) but no rule matched, proceed\n", fw_rules[i]->contact);
 	return 0;			// Contact matched, but no rule matched, so proceed
