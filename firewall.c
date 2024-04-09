@@ -69,6 +69,7 @@ struct firewall_rule {
 
 static u_int n_firewall_rules = 0;
 static struct firewall_rule **fw_rules = NULL;
+static int fw_has_rule_for_any = 0;
 
 static int 
 num_occurrences(char c, char *s)
@@ -119,9 +120,10 @@ parse_addr_spec()
       type = rule_addr_subnet;
     else if (strcasecmp(tok,"host") == 0) 
       type = rule_addr_host;
-    else if (strcasecmp(tok,"any") == 0)
+    else if (strcasecmp(tok,"any") == 0) {
       type = rule_addr_any;
-    else if (strcasecmp(tok,"myself") == 0)
+      fw_has_rule_for_any = 1;
+    } else if (strcasecmp(tok,"myself") == 0)
       type = rule_addr_myself;
     else {
       fprintf(stderr,"Firewall: bad address keyword '%s', expected subnet/host/any/myself\n", tok);
@@ -234,25 +236,49 @@ parse_firewall_line(char *line)
     tok = strtok(NULL, " \t\r\n");
     if (tok != NULL) {
       if (strcasecmp(tok,"from") == 0) {
+	if (rule->rule_sources != NULL) {
+	  fprintf(stderr,"Firewall: only specify one 'from'\n");
+	  return -1;
+	}
 	// parse an addr spec
 	rule->rule_sources = parse_addr_spec();
 	if (rule->rule_sources == NULL)
 	  return -1;
       } else if (strcasecmp(tok,"to") == 0) {
+	if (rule->rule_dests != NULL) {
+	  fprintf(stderr,"Firewall: only specify one 'to'\n");
+	  return -1;
+	}
 	rule->rule_dests = parse_addr_spec();
 	if (rule->rule_dests == NULL)
 	  return -1;
       } else if (strcasecmp(tok, "allow") == 0) {
+	if (rule_action->action != 0) {
+	  fprintf(stderr,"Firewall: only one action per rule is allowed.\n");
+	  return -1;
+	}
 	rule_action->action = rule_action_allow;
       } else if (strcasecmp(tok, "drop") == 0) {
+	if (rule_action->action != 0) {
+	  fprintf(stderr,"Firewall: only one action per rule is allowed.\n");
+	  return -1;
+	}
 	rule_action->action = rule_action_drop;
       } else if (strcasecmp(tok,"forward") == 0) {
+	if (rule_action->action != 0) {
+	  fprintf(stderr,"Firewall: only one action per rule is allowed.\n");
+	  return -1;
+	}
 	rule_action->action = rule_action_forward;
 	// parse parameters
 	rule_action->args.fwd_args = parse_forward_args();
 	if (rule_action->args.fwd_args == NULL)
 	  return -1;
       } else if (strcasecmp(tok,"reject") == 0) {
+	if (rule_action->action != 0) {
+	  fprintf(stderr,"Firewall: only one action per rule is allowed.\n");
+	  return -1;
+	}
 	rule_action->action = rule_action_reject;
 	// parse quoted string
 	tok = strtok(NULL," \t\r\n");
@@ -400,8 +426,8 @@ int parse_firewall_config_line()
     }
   }
   if (debug_firewall) {
-    printf("firewall %s: debug %s log %s\n", firewall_enabled ? "enabled" : "disabled",
-	   debug_firewall ? "on" : "off", log_firewall ? "on" : "off");
+    printf("firewall %s: debug %s log %s, \"any\" rule used: %s\n", firewall_enabled ? "enabled" : "disabled",
+	   debug_firewall ? "on" : "off", log_firewall ? "on" : "off", fw_has_rule_for_any ? "yes" : "no");
     print_firewall_rules();
   }
   // @@@@ validate config
@@ -441,14 +467,15 @@ print_firewall_addrs(struct rule_addr *addr)
 }
 void print_firewall_rules(void)
 {
-  printf("Firewall has rues for %d contacts:\n", n_firewall_rules);
+  printf("Firewall has rules for %d contact%s\n", n_firewall_rules, 
+	 n_firewall_rules == 0 ? "s." : n_firewall_rules == 1 ? ":" : "s:");
   for (int c = 0; c < n_firewall_rules; c++) {
     if (fw_rules[c]->contact_type == rule_contact_string)
       printf("%2d: \"%s\"\n", c, fw_rules[c]->contact);
     else
       printf("%2d: *\n", c);
     for (int r = 0; r < fw_rules[c]->n_rules; r++) {
-      printf("   %2d: from ", r); print_firewall_addrs(fw_rules[c]->rules[r]->rule_sources);
+      printf("   from "); print_firewall_addrs(fw_rules[c]->rules[r]->rule_sources);
       printf(" to "); print_firewall_addrs(fw_rules[c]->rules[r]->rule_dests);
       printf(" "); print_firewall_action(fw_rules[c]->rules[r]->rule_action);
       printf(" [matched %d times]\n", fw_rules[c]->rules[r]->rule_match_count);
@@ -590,7 +617,7 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
   }
 
   for (int i = 0; i < n_firewall_rules; i++) {
-    if (debug_firewall) printf("Checking rule %d: type %s contact %s len %d cstart %s\n", i, 
+    if (debug_firewall) printf("Checking rule %d: type %s contact %s len %d pkt contact %s\n", i, 
 			       fw_rules[i]->contact_type == rule_contact_all ? "all" : "string",
 			       fw_rules[i]->contact, fw_rules[i]->contact_length, contact);
     if ((fw_rules[i]->contact_type == rule_contact_all) ||
@@ -600,6 +627,7 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	 (fw_rules[i]->contact_length == contact_maxlen || contact[fw_rules[i]->contact_length] == ' '))) {
       struct contact_rule **rules = fw_rules[i]->rules;
       for (int r = 0; r < fw_rules[i]->n_rules; r++) { // foreach rule
+	// @@@@ consider broadcast destination - what should apply?
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
 	    addr_match(rules[r]->rule_dests, destaddr)) {
 	  rules[r]->rule_match_count++;
@@ -607,7 +635,9 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	  return do_action(rules[r], pkt);
 	}
       }
-      if (fw_rules[i]->contact_type != rule_contact_all) {
+      if (!fw_has_rule_for_any) {
+	// This shortcut should only be taken if there is no "any" rule.
+	// If there is none, there is no possibility of another match, but if there is an "any" rule, it might match.
 	if (debug_firewall) printf("Contact matched (%s) but no rule matched, proceed\n", fw_rules[i]->contact);
 	return 0;			// Contact matched, but no rule matched, so proceed
       }
