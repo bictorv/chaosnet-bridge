@@ -16,6 +16,7 @@
 
 #include "cbridge.h"
 #include "firewall.h"
+#include <ctype.h>
 
 static int firewall_enabled = 0;
 static int debug_firewall = 0;
@@ -152,7 +153,7 @@ parse_addr_spec()
     return NULL;
 }
 static char *
-parse_quoted_string(char *tok) 
+parse_quoted_string(char *tok, int upcase) 
 {
   if (tok[0] != '"' || strlen(tok) < 2)
     return NULL;		// Not a quoted string
@@ -171,6 +172,13 @@ parse_quoted_string(char *tok)
   if (tok != NULL && tok[slen-1] == '"') {
     tok[slen-1] = '\0';		// Zap final "
     strcat(sval, tok);
+    if (upcase) {
+      char *sp = sval;
+      while (*sp != '\0') {
+	if (islower(*sp)) *sp = toupper(*sp);
+	sp++;
+      }
+    }
     return sval;
   } else {
     return NULL;
@@ -189,7 +197,7 @@ parse_forward_args()
     }
     tok = strtok(NULL," \t\r\n");
     if (tok != NULL)
-      new_contact = parse_quoted_string(tok);
+      new_contact = parse_quoted_string(tok, 1);
     struct forward_args *fa = malloc(sizeof(struct forward_args));
     if (fa == NULL) abort();
     fa->forward_addr = fwd;
@@ -230,7 +238,7 @@ parse_firewall_line(char *line)
     fw_has_rule_for_all = 1;
   } else {
     contact_type = rule_contact_string;
-    contact_name = parse_quoted_string(tok);
+    contact_name = parse_quoted_string(tok, 1);
     if (contact_name == NULL) {
       fprintf(stderr,"firewall config parse error: not a quoted string: %s\n", tok);
       return -1;
@@ -292,7 +300,7 @@ parse_firewall_line(char *line)
 	// parse quoted string
 	tok = strtok(NULL," \t\r\n");
 	if (tok != NULL)
-	  rule_action->args.reject_reason = parse_quoted_string(tok);
+	  rule_action->args.reject_reason = parse_quoted_string(tok, 0);
 	if (rule_action->args.reject_reason == NULL)
 	  rule_action->args.reject_reason = "Connection rejected by firewall"; // "No server for this contact name";
       } else {
