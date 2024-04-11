@@ -88,14 +88,20 @@ is parsed into something like
 || from subnet 7,11 allow |
 || to subnet 7 reject "Please don't disturb"
 
-so the contact name in an incoming packet need only be matched once against the ruleset. This also means that as soon as the address rules for a contact name run out, no more processing is needed since the contact name can't match another rule. That is, *unless* you also have a firewall rule for the `all` contact name token, which means processing will need to go on in case another rule matches. So if speed is important, try to avoid `all`. [Yes, there is a way to keep that equally efficient by injecting the address rule for `all` in all contact name address rules, but preserving the order seems a hassle.]
+so the contact name in an incoming packet need only be matched once against the ruleset. This also means that as soon as the address rules for a contact name run out without matches, no more processing is needed since the contact name can't match another rule. That is, *unless* you also have a firewall rule for the `all` contact name token, which means processing will need to go on in case another rule matches. So if speed is important, try to avoid `all`. [Yes, there is a way to keep that equally efficient by injecting the address rule for `all` in all contact name address rules, but preserving the order and handling explicit contacts appearing after `all` seems a bit of a hassle. Maybe one day.]
 
+(This also means the ruleset example above is equivalent and parsed to the same structure as the following reordering:)
+
+    "RTAPE" from subnet 7 allow
+	"EVAL" from subnet 7,11 allow
+	"RTAPE" to subnet 7 reject
+	"EVAL" to subnet 7 reject "Please don't disturb"
 
 ## Examples
 
 In `cbridge.conf`, specify
 
-`firewall enabled on debug off log on rules cbridge-rules.conf`
+`firewall enabled yes debug off log on rules cbridge-rules.conf`
 
 and then in `cbridge-rules.conf`, use
 
