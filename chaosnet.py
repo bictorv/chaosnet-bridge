@@ -463,6 +463,7 @@ class Simple:
         nonprinted = []
         for hname in hnames:
             self.conn = PacketConn()
+            self.hname = hname
             try:
                 if debug:
                     print("Simple connect to {} {} {}".format(hname,contact,args), file=sys.stderr)
@@ -496,6 +497,12 @@ class Simple:
                 print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
             raise LOSError("LOS: {}".format(str(data,"ascii")))
             return None, None
+        elif opc == Opcode.FWD:
+            dest = data[0] + data[1]*256
+            if debug:
+                print("FWD received: use host {:o} instead {}".format(dest,data[2:]), file=sys.stderr)
+            # This should be a separate exception so it can be handled, and FWD should be detected in other places too.
+            raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} instead".format(self.hname, dest))
         else:
             raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
 
