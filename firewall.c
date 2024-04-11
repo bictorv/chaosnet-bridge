@@ -461,22 +461,30 @@ print_firewall_action(struct rule_action *a)
     printf("forward %o \"%s\"", a->args.fwd_args->forward_addr, a->args.fwd_args->forward_contact);
   }
 }
+static char *
+addr_type_name(rule_addr_t type)
+{
+  switch (type) {
+  case rule_addr_any: return "any"; 
+  case rule_addr_myself: return "myself";
+  case rule_addr_broadcast: return "broadcast";
+  case rule_addr_host: return "host";
+  case rule_addr_subnet: return "subnet";
+  case rule_addr_none: return "none";
+  }
+  return "?";
+}
 static void 
 print_firewall_addrs(struct rule_addr *addr)
 {
-  switch (addr->type) {
-  case rule_addr_any: printf("any"); return;
-  case rule_addr_myself: printf("myself"); return;
-  case rule_addr_broadcast: printf("broadcast"); return;
-  case rule_addr_none: printf("none"); return;
-
-  case rule_addr_host: printf("host "); break;
-  case rule_addr_subnet: printf("subnet "); break;
-  }
-  if (addr->n_addrs > 0) {
-    for (int i = 0; i < addr->n_addrs-1; i++) 
-      printf("%o,", addr->addrs[i]);
-    printf("%o", addr->addrs[addr->n_addrs-1]);
+  printf("%s",addr_type_name(addr->type));
+  if (addr->type == rule_addr_host || addr->type == rule_addr_subnet) {
+    printf(" ");
+    if (addr->n_addrs > 0) {
+      for (int i = 0; i < addr->n_addrs-1; i++) 
+	printf("%o,", addr->addrs[i]);
+      printf("%o", addr->addrs[addr->n_addrs-1]);
+    }
   }
 }
 void print_firewall_rules(void)
@@ -502,6 +510,9 @@ static int
 addr_match_broadcast_dest(struct rule_addr *addr, u_short pkaddr, rule_addr_t broadcast_match) 
 {
   if (addr->type == rule_addr_any) return 1;
+  // Only in some cases, match broadcast destinations against anything
+  if ((pkaddr == 0) && (broadcast_match != rule_addr_none) && (addr->type == broadcast_match))
+    return 1;
   if (addr->type == rule_addr_host) {
     for (int i = 0; i < addr->n_addrs; i++)
       if (addr->addrs[i] == pkaddr)
@@ -514,9 +525,6 @@ addr_match_broadcast_dest(struct rule_addr *addr, u_short pkaddr, rule_addr_t br
     return is_mychaddr(pkaddr);
   else if (addr->type == rule_addr_broadcast)
     return (pkaddr == 0);
-  // Only in some cases, match broadcast destinations against anything
-  else if ((pkaddr == 0) && (broadcast_match != rule_addr_none) && (addr->type == broadcast_match))
-    return 1;
   return 0;
 }
 // Match a rule address with an actual address.
@@ -633,7 +641,7 @@ firewall_handle_pkt_for_me(struct chaos_header *pkt)
   return firewall_handle_rfc_or_brd(pkt, rule_addr_myself);
 }
 static int 
-firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match_class)
+firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match_type)
 {
   if (firewall_enabled == 0) return 0;
 
@@ -659,9 +667,9 @@ firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match
   u_short destaddr = ch_destaddr(pkt);
 
   if (debug_firewall) {
-    printf("Checking %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+    printf("Checking %s \"%s\" from <%#o,%#x> to <%#o,%#x> (brd match type %s)\n",
 	   ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
-	   ch_destaddr(pkt), ch_destindex(pkt));
+	   ch_destaddr(pkt), ch_destindex(pkt), addr_type_name(broadcast_match_type));
   }
 
   for (int i = 0; i < n_firewall_rules; i++) {
@@ -676,10 +684,10 @@ firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match
 	 (fw_rules[i]->contact_length == contact_maxlen || contact[fw_rules[i]->contact_length] == ' '))) {
       struct contact_rule **rules = fw_rules[i]->rules;
       for (int r = 0; r < fw_rules[i]->n_rules; r++) { // foreach rule
-	// Note the use of broadcast_match_class, to allow broadcast destaddr (0) to match
-	// anything in that class. Use e.g. rule_addr_myself in handle_pkt_for_me.
+	// Note the use of broadcast_match_type, to allow broadcast destaddr (0) to match
+	// anything in that type. Use e.g. rule_addr_myself in handle_pkt_for_me.
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
-	    addr_match_broadcast_dest(rules[r]->rule_dests, destaddr, broadcast_match_class)) {
+	    addr_match_broadcast_dest(rules[r]->rule_dests, destaddr, broadcast_match_type)) {
 	  rules[r]->rule_match_count++;
 	  // do the action
 	  return do_action(rules[r], pkt);
