@@ -1,21 +1,21 @@
 # Firewall for Chaosnet
 
-A simple firewall is implemented, where you can define how to handle RFC and BRD packets.
+A simple firewall is implemented in cbridge, where you can define how to handle connection requests (RFC and BRD packets).
 
-It can be used e.g. to restrict access to services running on your cbridge using [the NCP interface](NCP.md), or if your cbridge is in a "gateway position", to filter packets passing through it (i.e. not necessarily with the cbridge as destination).
+It can be used e.g. to restrict access to services running on your cbridge using [the NCP interface](NCP.md), or if your cbridge is in a "gateway position", to filter packets passing through it (i.e. not necessarily with the cbridge as final destination).
 
 ## Motivation
 
-The Chaosnet application protocols were mostly developed in a time when network users were all trustworthy, and since Chaosnet was a local area network it was easier to keep track of who had access. There was probably a bit of social control, hacker ethics etc, in play.
+The Chaosnet application protocols were mostly developed in a time when network users were all trustworthy, and since Chaosnet was a local area network it was easier to keep track of who had access. There was probably a bit of social control, [hacker ethics](https://en.wikipedia.org/wiki/Hacker_ethic) etc, in play.
 
-With the Global Chaosnet this doesn't necessarily hold anymore.
+With the [Global Chaosnet](https://chaosnet.net) this doesn't necessarily hold anymore, but retrofitting access control in many ancient programs would be a daunting task.
 
 ## Use cases
 
 The firewall could be useful e.g. if
-  - you run local `FILE` or `RTAPE` servers but don't want to give the whole Chaosnet access to them
+  - you run local `FILE` or `RTAPE` servers but don't want to give the whole Chaosnet read&write access to their contents
   - you run Lisp Machines on your network, which e.g may have servers for `EVAL`, `BAND-TRANSFER`, `REMOTE-DISK` etc which you want to protect
-  - you run a `TCP` (gateway server)[https://github.com/Chaosnet/chaosnet-tools] but want to avoid opening up the Chaosnet to Evil Internet Hackers
+  - you run a `TCP` [gateway server](https://github.com/Chaosnet/chaosnet-tools) but want to avoid opening up the Chaosnet to *Evil Automated Internet Hackers*
   - you at the same time have servers for less sensitive protocols such as `NAME`, `SUPDUP`, `TELNET`, `TIME`, `UPTIME` etc, which you want to keep open and public
 
 (See the [Computer History Wiki](https://gunkies.org/wiki/List_of_Chaos_application_protocols) or the [Chaosnet wiki](https://chaosnet.net/protocol#application_layer) for descriptions of the application protocols.)
@@ -79,6 +79,8 @@ To optimize processing a little, rules are collected by contact name, so
 	
 is parsed into something like
 
+| contact | address rules |
+| --- | --- |
 | "RTAPE" | |
 || from subnet 7 allow |
 || to subnet 7 reject |
