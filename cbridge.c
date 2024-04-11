@@ -55,11 +55,6 @@
 // CHUDP version 2, using network order (big-endian). Also fix klh10/CH11 for this.
 // Can this be modular enough to keep within the chudp "module"? Needs per-link config.
 
-// HOSTAB server?
-// - No clients except LMI but would be simpler for CADR than porting DNS?
-// - requires stream protocol (cf MIT AIM 628 sec 5.10)
-// Can now be done externally using NCP.
-
 // validate conf (subnets vs bridges etc)
 // - multiple links/routes to same chaddr
 // - make sure thois host has a subnet-specific chaos addr on all defined links
@@ -94,6 +89,7 @@
 
 #include "cbridge.h"
 #include "chudp.h"		/* chudp pkt format etc */
+#include "firewall.h"
 
 int verbose, debug, stats, tls_debug = 0;
 
@@ -174,11 +170,6 @@ void packet_to_conn_handler(u_char *pkt, int len);
 void print_ncp_stats(void);
 int parse_private_hosts_file(char *f);
 void print_private_hosts_config(void);
-
-// Firewall
-int parse_firewall_config_line(void);
-int firewall_handle_rfc_or_brd(struct chaos_header *pkt);
-void print_firewall_rules(void);
 
 time_t boottime;
 
@@ -529,7 +520,7 @@ peek_routing(u_char *pkt, int pklen, int cost, u_short linktype)
     return;
   }
   if ((ch_opcode(cha) == 0) || ((ch_opcode(cha) > CHOP_BRD) && (ch_opcode(cha) < CHOP_DAT))) {
-    fprintf(stderr,"BAD PACKET (wrong byte order?)\n");
+    fprintf(stderr,"BAD PACKET opcode %#o (wrong byte order?)\n", ch_opcode(cha));
     htons_buf((u_short *)pkt,(u_short *)pkt,pklen);
     ch_dumpkt(pkt,pklen);
     ntohs_buf((u_short *)pkt,(u_short *)pkt,pklen);
@@ -1030,8 +1021,9 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
 
   peek_routing(data, dlen, cost, src_linktype); /* check for RUT */
 
+  // Allow firewall to do its job
   if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
-    if (firewall_handle_rfc_or_brd(ch) < 0) {
+    if (firewall_handle_forward(ch) < 0) {
       if (debug) fprintf(stderr,"Firewall says to drop packet from %#o to %#o.\n",
 			 ch_srcaddr(ch), ch_destaddr(ch));
       return;			// Firewall says "no"
@@ -1044,9 +1036,16 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
       fprintf(stderr,"Broadcast pkt received from %#o hw %#o rt %s type %s to %#o, trying to handle it\n",
 	      schad, ntohs(tr->ch_hw_srcaddr), src != NULL ? rt_linkname(src->rt_link) : "(null)", rt_linkname(src_linktype),
 	      dchad);
-    handle_pkt_for_me(ch, data, dlen, dchad);
-    if (dchad != 0) // check for BRD below
-      return;			/* after checking for RUT */
+    // Let firewall have a more precise say for BRD pkts to me
+    if ((ch_opcode(ch) == CHOP_BRD) && (firewall_handle_pkt_for_me(ch) < 0)) {
+      if (debug) fprintf(stderr,"Firewall says to drop packet from %#o to me (%#o).\n",
+			 ch_srcaddr(ch), ch_destaddr(ch));
+      // don't drop it, the broadcast case below needs it
+    } else
+      // OK, take care of it
+      handle_pkt_for_me(ch, data, dlen, dchad);
+    if (dchad != 0) // check for BRD below, but other packets are now done
+      return;			/* after checking for RUT (above) */
   }
 
   if (dchad == 0) {		/* broadcast */

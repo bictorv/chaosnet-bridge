@@ -15,12 +15,11 @@
 */
 
 #include "cbridge.h"
+#include "firewall.h"
 
 static int firewall_enabled = 0;
 static int debug_firewall = 0;
 static int log_firewall = 0;
-
-void print_firewall_rules(void);
 
 typedef enum rule_addr_type {	// A rule address can have this type:
   rule_addr_any=1, 		// "any" matching any addr
@@ -28,6 +27,7 @@ typedef enum rule_addr_type {	// A rule address can have this type:
   rule_addr_subnet,		// a specific subnet
   rule_addr_myself,		// "myself" meaning any of the addresses of this cbridge
   rule_addr_broadcast,		// as destination
+  rule_addr_none,		// used in addr_match_broadcast_dest
 } rule_addr_t;
 struct rule_addr {		// A rule address has
   rule_addr_t type;		// a type (above)
@@ -71,6 +71,8 @@ struct firewall_rule {
 static u_int n_firewall_rules = 0;
 static struct firewall_rule **fw_rules = NULL;
 static int fw_has_rule_for_all = 0;
+
+static int firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match_class);
 
 static int 
 num_occurrences(char c, char *s)
@@ -315,8 +317,10 @@ parse_firewall_line(char *line)
   // Remind people.
   if (contact_type == rule_contact_string && strcasecmp(contact_name, "STATUS") == 0 &&
       rule_action->action != rule_action_allow) 
-    fprintf(stderr,"%%%% Warning: disallowing STATUS is against the spec.\n");
-
+    fprintf(stderr,"%%%% Warning: disallowing STATUS is against the spec (Amber Section 5.1).\n");
+  // @@@@ Should ideally check if there is a preceding "allow" rule.
+  if (contact_type == rule_contact_all && rule_action->action != rule_action_allow)
+    fprintf(stderr,"%%%% Warning: by disallowing \"all\" contacts, STATUS might be disallowed, which is against the spec (Amber Section 5.1).\n");
 
   // Find the contact name in fw_rules, add the rule to it
   if (fw_rules == NULL) {
@@ -464,6 +468,8 @@ print_firewall_addrs(struct rule_addr *addr)
   case rule_addr_any: printf("any"); return;
   case rule_addr_myself: printf("myself"); return;
   case rule_addr_broadcast: printf("broadcast"); return;
+  case rule_addr_none: printf("none"); return;
+
   case rule_addr_host: printf("host "); break;
   case rule_addr_subnet: printf("subnet "); break;
   }
@@ -493,7 +499,7 @@ void print_firewall_rules(void)
 
 // Match a rule address with an actual address.
 static int 
-addr_match(struct rule_addr *addr, u_short pkaddr) 
+addr_match_broadcast_dest(struct rule_addr *addr, u_short pkaddr, rule_addr_t broadcast_match) 
 {
   if (addr->type == rule_addr_any) return 1;
   if (addr->type == rule_addr_host) {
@@ -508,7 +514,16 @@ addr_match(struct rule_addr *addr, u_short pkaddr)
     return is_mychaddr(pkaddr);
   else if (addr->type == rule_addr_broadcast)
     return (pkaddr == 0);
+  // Only in some cases, match broadcast destinations against anything
+  else if ((pkaddr == 0) && (broadcast_match != rule_addr_none) && (addr->type == broadcast_match))
+    return 1;
   return 0;
+}
+// Match a rule address with an actual address.
+static int 
+addr_match(struct rule_addr *addr, u_short pkaddr) 
+{
+  return addr_match_broadcast_dest(addr, pkaddr, rule_addr_none);
 }
 
 // (There are too many functions like this one, e.g. in ncp.c)
@@ -604,7 +619,21 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
 // Handle a packet.
 // Return 0 for "not handled or accept" (so proceed as usual), or
 // -1 for "handled, don't proceeed" for drop/forward/reject (response has already been sent)
-int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
+// Note the use of broadcast_match_class, to allow broadcast destaddr (0) to match
+// anything in that class. Use e.g. rule_addr_myself in handle_pkt_for_me, and rule_addr_none
+// in the general forwarding code (forward_chaos_pkt).
+int 
+firewall_handle_forward(struct chaos_header *pkt)
+{
+  return firewall_handle_rfc_or_brd(pkt, rule_addr_none);
+}
+int 
+firewall_handle_pkt_for_me(struct chaos_header *pkt)
+{
+  return firewall_handle_rfc_or_brd(pkt, rule_addr_myself);
+}
+static int 
+firewall_handle_rfc_or_brd(struct chaos_header *pkt, rule_addr_t broadcast_match_class)
 {
   if (firewall_enabled == 0) return 0;
 
@@ -647,13 +676,10 @@ int firewall_handle_rfc_or_brd(struct chaos_header *pkt)
 	 (fw_rules[i]->contact_length == contact_maxlen || contact[fw_rules[i]->contact_length] == ' '))) {
       struct contact_rule **rules = fw_rules[i]->rules;
       for (int r = 0; r < fw_rules[i]->n_rules; r++) { // foreach rule
-	// @@@@ consider broadcast destination - what should apply?
-	// If we e.g. reject one because it implicitly matches e.g. "myself",
-	// it is completely dropped and won't reach anyone else.
-	// Maybe we need another firewall hook in handle_pkt_for_me, just for BRD pkts?
-	// @@@@ This also means to block BRD, you need to explicitly use "to broadcast" or "to any".
+	// Note the use of broadcast_match_class, to allow broadcast destaddr (0) to match
+	// anything in that class. Use e.g. rule_addr_myself in handle_pkt_for_me.
 	if (addr_match(rules[r]->rule_sources, srcaddr) && 
-	    addr_match(rules[r]->rule_dests, destaddr)) {
+	    addr_match_broadcast_dest(rules[r]->rule_dests, destaddr, broadcast_match_class)) {
 	  rules[r]->rule_match_count++;
 	  // do the action
 	  return do_action(rules[r], pkt);

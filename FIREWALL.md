@@ -21,15 +21,15 @@ The syntax for firewall rules is the following:
 
 <*contact*|`all`> [`from` *addrspec* (default `any`)] [`to` *addrspec* (default `myself`)] *action*
 
-| thing | description |
+where *contact* is a contact name in doublequotes, e.g. `"FILE"`, and `all` matches all contact names.
+*addrspec* can be any of the below, where the address/subnet lists are lists of octal numbers separated by commas (but no space around the commas).
+
+| *addrspec* | description |
 | --- | --- |
-|*contact* | a contact name in doublequotes, e.g. `"FILE"` |
-|`all`| matches all contact names. |
-|*addrspec*| can be any of the below, where the address/subnet lists are lists of octal numbers separated by commas but no space around the commas. |
 |`any` | matches any address (including broadcast)  |
 |`host` *addrlist* | matches those addresses in the list |
 |`subnet` *subnetlist* | matches addresses on those subnets in the list |
-|`myself`| matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md).|
+|`myself`| matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md). Use this rather than listing them explicitly in a `host` spec. |
 |`broadcast`| matches the broadcast address (0). Only makes sense as a "to" address, and only applies to BRD packets.|
 
 The *action* can be
@@ -41,10 +41,14 @@ The *action* can be
 |`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.) **Note** that supplying a new contact name is not yet handled by cbridge (that's a bug). |
 
 ### Note:
-  - Explicit responses (`CLS` and `FWD`) are not sent for `BRD` attempts, since it would be against the spec.
+  - Explicit responses (`CLS` and `FWD`) are not sent for `BRD` attempts, since it would be pointless.
   - Responses are sent using the destination addr and index as the source, so "on behalf of" the destination even though it might not be the cbridge itself.
   - The rules are processed in the order given, until a match is found. (*Explain efficiency*)
-  - Specifying `broadcast` might block/match much more than you wanted, depending on the placement of your cbridge.
+
+Broadcast (BRD) packets are delivered to all hosts (on the subnets in the BRD mask, see [MIT AIM 628 Section 4.5](https://chaosnet.net/amber.html#Broadcast)), and could therefore be considered to match (basically) all `to` specifications in firewall rules. This would, however, make it difficult to be precise in filtering them: the `to` specification wouldn't matter. So in the general case of forwarding packets, BRD packets only match rules with `to broadcast` and `to any` specifications, exceptwhile for packets to `myself`, BRD packets are considered to match `myself` specifications. (Similar handling should be done in other "endpoint delivery" cases.)
+
+**Give an example, perhaps a table, to make this more understandable?**
+
 
 ## Examples
 
