@@ -585,21 +585,21 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
   switch (rule->rule_action->action) {
   case rule_action_allow:
     if (log_firewall)
-      printf("Firewall: allow %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
-	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
-	     ch_destaddr(pkt), ch_destindex(pkt));
+      fprintf(stderr,"Firewall: allow %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+	      ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
+	      ch_destaddr(pkt), ch_destindex(pkt));
     return 0;
   case rule_action_drop:
     if (log_firewall)
-      printf("Firewall: drop %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
-	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
-	     ch_destaddr(pkt), ch_destindex(pkt));
+      fprintf(stderr,"Firewall: drop %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+	      ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
+	      ch_destaddr(pkt), ch_destindex(pkt));
     return -1;
   case rule_action_reject:
     if (log_firewall)
-      printf("Firewall: reject %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
-	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
-	     ch_destaddr(pkt), ch_destindex(pkt));
+      fprintf(stderr,"Firewall: reject %s \"%s\" from <%#o,%#x> to <%#o,%#x>\n",
+	      ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
+	      ch_destaddr(pkt), ch_destindex(pkt));
     // send CLS using the pkt dest as source (but not for BRD)
     if (ch_opcode(pkt) != CHOP_BRD)
       send_cls_response(pkt, rule->rule_action->args.reject_reason);
@@ -609,10 +609,10 @@ do_action(struct contact_rule *rule, struct chaos_header *pkt)
     if (c == NULL)
       c = (char *)contact;
     if (log_firewall)
-      printf("Firewall: forward %s \"%s\" from <%#o,%#x> to <%#o,%#x>: %#o \"%s\"\n",
-	     ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
-	     ch_destaddr(pkt), ch_destindex(pkt), 
-	     rule->rule_action->args.fwd_args->forward_addr, c);
+      fprintf(stderr,"Firewall: forward %s \"%s\" from <%#o,%#x> to <%#o,%#x>: %#o \"%s\"\n",
+	      ch_opcode_name(ch_opcode(pkt)), contact, ch_srcaddr(pkt), ch_srcindex(pkt),
+	      ch_destaddr(pkt), ch_destindex(pkt), 
+	      rule->rule_action->args.fwd_args->forward_addr, c);
     // send FWD using the pkt dest as source (but not for BRD)
     if (ch_opcode(pkt) != CHOP_BRD)
       send_fwd_response(pkt, rule->rule_action->args.fwd_args->forward_addr, c);
