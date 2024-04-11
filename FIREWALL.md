@@ -53,7 +53,7 @@ The *action* can be
 | --- | --- |
 |`allow`| Allow the packet to be processed. This is the default.|
 |`drop`|Drop the packet without further processing.|
-|`reject` [*reason*]| Responds to the sender with a `CLS` packet with the optional *reason* (a double-quoted string) as data (default: "Connection rejected by firewall").|
+|`reject` [*reason*]| Responds to the sender with a `CLS` packet with the optional *reason* (a double-quoted string) as data (default: "Connection rejected by firewall"). Note that there is no way of escaping " in the string. |
 |`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.) **Note** that supplying a new contact name is not yet handled by cbridge (that's a bug). |
 
 ### Note:
@@ -73,8 +73,8 @@ On the other hand, most of the protocols which are useful with BRD are so-called
 To optimize processing a little, rules are collected by contact name, so 
 
     "RTAPE" from subnet 7 allow
-	"RTAPE" to subnet 7 reject
-	"EVAL" from subnet 7,11 allow
+	"RTAPE" to subnet 7 to any reject
+	"EVAL" from subnet 7,11 to any allow
 	"EVAL" to subnet 7 reject "Please don't disturb"
 	
 is parsed into something like
@@ -82,19 +82,19 @@ is parsed into something like
 | contact | address rules |
 | --- | --- |
 | "RTAPE" | |
-|| from subnet 7 allow |
-|| to subnet 7 reject |
+|| from subnet 7 *to myself* allow |
+|| *from any* to subnet 7 reject *"Connection rejected by firewall"*|
 | "EVAL" ||
-|| from subnet 7,11 allow |
-|| to subnet 7 reject "Please don't disturb"
+|| from subnet 7,11 to any allow |
+|| *from any* to subnet 7 reject "Please don't disturb"
 
-so the contact name in an incoming packet need only be matched once against the ruleset. This also means that as soon as the address rules for a contact name run out without matches, no more processing is needed since the contact name can't match another rule. That is, *unless* you also have a firewall rule for the `all` contact name token, which means processing will need to go on in case another rule matches. So if speed is important, try to avoid `all`. [Yes, there is a way to keep that equally efficient by injecting the address rule for `all` in all contact name address rules, but preserving the order and handling explicit contacts appearing after `all` seems a bit of a hassle. Maybe one day.]
+(where the italics are defaults spelled out). So the contact name in an incoming packet need only be matched once against the ruleset. This also means that as soon as the address rules for a contact name run out without matches, no more processing is needed since the contact name can't match another rule. That is, *unless* you also have a firewall rule for the `all` contact name token, which means processing will need to go on in case another rule matches. So if speed is important, try to avoid `all`. [Yes, there is a way to keep that equally efficient by injecting the address rule for `all` in all contact name address rules, but preserving the order and handling explicit contacts appearing after `all` seems a bit of a hassle. Maybe one day.]
 
 (This also means the ruleset example above is equivalent and parsed to the same structure as the following reordering:)
 
-    "RTAPE" from subnet 7 allow
-	"EVAL" from subnet 7,11 allow
-	"RTAPE" to subnet 7 reject
+    "RTAPE" from subnet 7 to myself allow
+	"EVAL" from subnet 7,11 to any allow
+	"RTAPE" from any to subnet 7 reject
 	"EVAL" to subnet 7 reject "Please don't disturb"
 
 ## Examples
@@ -105,12 +105,12 @@ In `cbridge.conf`, specify
 
 and then in `cbridge-rules.conf`, use
 
-	; Allow access to the remote tape servers from my local subnet
+	; Allow access to the remote tape server from my local subnet
 	"RTAPE" from subnet 7 allow
 	; Reject all other connection attempts
 	"RTAPE" to subnet 7 reject
 	; For the EVAL servers on my LISPMs, allow local but also AMS and EJS subnets
-	"EVAL" from subnet 7,11,13 allow
+	"EVAL" from subnet 7,11,13 to any allow
 	"EVAL" to subnet 7 reject
 	; Allow friendly ITSes to use MLDEV on my ITS
 	"MLDEV" from host 5460,3443,3150 to host 3405 allow
@@ -118,3 +118,9 @@ and then in `cbridge-rules.conf`, use
 	"MLDEV" to host 3405 reject "Who are you?"
 	; Subnet 47 is full of evil hackers - drop their connection attempts!
 	all from subnet 47 drop
+
+## Discussion
+
+  - Is the default `to myself` useful, or should it be `to any`?
+  - `"NOTIFY" to myself drop` is now protected against broadcasts to `NOTIFY`, but to protect other destinations you need to use `to broadcast` which would filter *all* other destinations. How bad is this?
+  - In "modern systems", firewalls are/can often be configured per network interface, but not here. How desirable would that be?
