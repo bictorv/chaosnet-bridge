@@ -1024,7 +1024,8 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
   // Allow firewall to do its job
   if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD)) {
     if (firewall_handle_forward(ch) < 0) {
-      if (debug || verbose) fprintf(stderr,"Firewall says to drop packet from %#o to %#o.\n",
+      if (debug || verbose) fprintf(stderr,"Firewall says to drop %s packet from %#o to %#o.\n",
+				    ch_opcode_name(ch_opcode(ch)),
 				    ch_srcaddr(ch), ch_destaddr(ch));
       return;			// Firewall says "no"
     }
@@ -1038,7 +1039,8 @@ forward_chaos_pkt(struct chroute *src, u_char cost, u_char *data, int dlen, u_ch
 	      dchad);
     // Let firewall have a more precise say for BRD pkts to me
     if ((ch_opcode(ch) == CHOP_BRD) && (firewall_handle_pkt_for_me(ch) < 0)) {
-      if (debug || verbose) fprintf(stderr,"Firewall says to drop packet from %#o to me (%#o).\n",
+      if (debug || verbose) fprintf(stderr,"Firewall says to drop %s packet from %#o to me (%#o).\n",
+				    ch_opcode_name(ch_opcode(ch)),
 				    ch_srcaddr(ch), ch_destaddr(ch));
       // don't drop it, the broadcast case below needs it
     } else

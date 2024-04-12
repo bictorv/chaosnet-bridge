@@ -458,15 +458,28 @@ int parse_firewall_config_line()
   return 0;
 }
 
+static char *
+action_name(rule_action_t a)
+{
+  switch (a) {
+  case rule_action_allow: return "allow";
+  case rule_action_drop: return "drop";
+  case rule_action_reject: return "reject";
+  case rule_action_forward: return "forward";
+  }
+}
 static void
 print_firewall_action(struct rule_action *a)
 {
+  printf("%s", action_name(a->action));
   switch (a->action) {
-  case rule_action_allow: printf("allow"); return;
-  case rule_action_drop: printf("drop"); return;
-  case rule_action_reject: printf("reject \"%s\"", a->args.reject_reason); return;
+  case rule_action_reject: 
+    printf(" \"%s\"", a->args.reject_reason); 
+    break;
   case rule_action_forward: 
-    printf("forward %o \"%s\"", a->args.fwd_args->forward_addr, a->args.fwd_args->forward_contact);
+    printf(" %o \"%s\"", a->args.fwd_args->forward_addr, a->args.fwd_args->forward_contact);
+  default:
+    ;
   }
 }
 static char *
