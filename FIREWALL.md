@@ -54,7 +54,7 @@ The *action* can be
 |`allow`| Allow the packet to be processed. This is the default.|
 |`drop`|Drop the packet without further processing.|
 |`reject` [*reason*]| Responds to the sender with a `CLS` packet with the optional *reason* (a double-quoted string) as data (default: "Connection rejected by firewall"). Note that there is no way of escaping " in the string. |
-|`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.) **Note** that supplying a new contact name is not yet handled by cbridge (that's a bug). |
+|`forward` *dest* [*contact*]| Responds to the sender with a `FWD` packet, where *dest* is the octal address to refer to, and *contact* is the (optional) new contact name. (Default: the original contact name used.) |
 
 ### Note:
   - Explicit responses (`CLS` and `FWD`) are not sent for `BRD` attempts, since it would be pointless.
