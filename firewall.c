@@ -470,6 +470,7 @@ action_name(rule_action_t a)
   case rule_action_reject: return "reject";
   case rule_action_forward: return "forward";
   }
+  return "??";
 }
 static void
 print_firewall_action(struct rule_action *a)

@@ -46,7 +46,7 @@ where *contact* is a contact name in doublequotes, e.g. `"FILE"`, and `all` matc
 |`host` *addrlist* | matches those addresses in the list |
 |`subnet` *subnetlist* | matches addresses on those subnets in the list |
 |`myself`| matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md). Use this rather than listing them explicitly in a `host` spec. |
-|`localnet` | matches any of the subnets of the cbridge's own addresses **EXCEPT** subnet 6, which is the "hub network" of the Global Chaosnet, thus never local. |
+|`localnet` | matches any of the subnets of the cbridge's own addresses (**EXCEPT** subnet 6, which is the "hub network" of the Global Chaosnet, thus never local). Use this for convenience to e.g. protect local services such as RTAPE without having to explicitly enumerate your local subnet(s). |
 |`broadcast`| matches the broadcast address (0). Only makes sense as a "to" address, and only applies to BRD packets.|
 
 The *action* can be
@@ -120,6 +120,8 @@ and then in `cbridge-rules.conf`, use
 	"MLDEV" to host 3405 reject "Who are you?"
 	; Subnet 47 is full of evil hackers - drop their connection attempts!
 	all from subnet 47 drop
+
+Notice the use of `localnet` in protecting RTAPE and EVAL.
 
 ## Discussion
 
