@@ -46,6 +46,7 @@ where *contact* is a contact name in doublequotes, e.g. `"FILE"`, and `all` matc
 |`host` *addrlist* | matches those addresses in the list |
 |`subnet` *subnetlist* | matches addresses on those subnets in the list |
 |`myself`| matches any of the cbridge's own addresses (cf. `myaddr` in [the configuration documentation](CONFIGURATION.md). Use this rather than listing them explicitly in a `host` spec. |
+|`localnet` | matches any of the subnets of the cbridge's own addresses **EXCEPT** subnet 6, which is the "hub network" of the Global Chaosnet, thus never local. |
 |`broadcast`| matches the broadcast address (0). Only makes sense as a "to" address, and only applies to BRD packets.|
 
 The *action* can be
@@ -106,12 +107,13 @@ In `cbridge.conf`, specify
 and then in `cbridge-rules.conf`, use
 
 	; Allow access to the remote tape server from my local subnet
-	"RTAPE" from subnet 7 allow
+	"RTAPE" from localnet allow
 	; Reject all other connection attempts
-	"RTAPE" to subnet 7 reject
+	"RTAPE" to localnet reject
 	; For the EVAL servers on my LISPMs, allow local but also AMS and EJS subnets
-	"EVAL" from subnet 7,11,13 to any allow
-	"EVAL" to subnet 7 reject
+	"EVAL" from localnet to any allow
+	"EVAL" from subnet 11,13 to any allow
+	"EVAL" to localnet reject
 	; Allow friendly ITSes to use MLDEV on my ITS
 	"MLDEV" from host 5460,3443,3150 to host 3405 allow
 	; Reject others

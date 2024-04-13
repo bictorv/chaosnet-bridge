@@ -27,13 +27,14 @@ typedef enum rule_addr_type {	// A rule address can have this type:
   rule_addr_host,		// a specific host addr
   rule_addr_subnet,		// a specific subnet
   rule_addr_myself,		// "myself" meaning any of the addresses of this cbridge
+  rule_addr_localnet,		// local subnets (excluding #6)
   rule_addr_broadcast,		// as destination
   rule_addr_none,		// used in addr_match_broadcast_dest
 } rule_addr_t;
 struct rule_addr {		// A rule address has
   rule_addr_t type;		// a type (above)
   u_int n_addrs;
-  u_short *addrs; // and an array of addresses (except for "any" and "myself")
+  u_short *addrs; // and an array of addresses (for "host" and "subnet")
 };
 typedef enum rule_action_type {	// What to do when the rule matched
   rule_action_allow=1,		// Just allow it
@@ -128,10 +129,12 @@ parse_addr_spec()
       type = rule_addr_any;
     else if (strcasecmp(tok,"myself") == 0)
       type = rule_addr_myself;
+    else if ((strcasecmp(tok,"localnet") == 0) || (strcasecmp(tok,"localnets") == 0))
+      type = rule_addr_localnet;
     else if (strcasecmp(tok,"broadcast") == 0)
       type = rule_addr_broadcast;
     else {
-      fprintf(stderr,"Firewall: bad address keyword '%s', expected subnet/host/any/myself\n", tok);
+      fprintf(stderr,"Firewall: bad address keyword '%s'\n", tok);
       return NULL;
     }
     rule = malloc(sizeof(struct rule_addr));
@@ -491,6 +494,7 @@ addr_type_name(rule_addr_t type)
   case rule_addr_broadcast: return "broadcast";
   case rule_addr_host: return "host";
   case rule_addr_subnet: return "subnet";
+  case rule_addr_localnet: return "localnet";
   case rule_addr_none: return "none";
   }
   return "?";
@@ -526,6 +530,18 @@ void print_firewall_rules(void)
   }
 }
 
+static int 
+is_localnet(u_short addr)
+{
+  u_short sn = addr>>8;
+  if (sn == 6)			// subnet 6 is the "hub network" of the Global Chaosnet, 
+    return 0;			// so it never is "local".
+  for (int i = 0; i < nchaddr; i++)
+    if (sn == (mychaddr[i] >> 8))
+      return 1;
+  return 0;
+}
+
 // Match a rule address with an actual address.
 static int 
 addr_match_broadcast_dest(struct rule_addr *addr, u_short pkaddr, rule_addr_t broadcast_match) 
@@ -544,6 +560,8 @@ addr_match_broadcast_dest(struct rule_addr *addr, u_short pkaddr, rule_addr_t br
 	return 1;
   } else if (addr->type == rule_addr_myself)
     return is_mychaddr(pkaddr);
+  else if (addr->type == rule_addr_localnet)
+    return is_localnet(pkaddr);
   else if (addr->type == rule_addr_broadcast)
     return (pkaddr == 0);
   return 0;
