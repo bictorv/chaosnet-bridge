@@ -165,8 +165,8 @@ where *reason* is a single line of text, which results in the NCP sending a corr
 
 where *len* is the length in bytes (max 488) of the following *data* (which may include any bytes). This results in the NCP sending an ANS packet to the remote host, with the supplied data, and then closing the socket.
 
-#### `FWD `*addr*
-where *addr* is an octal address, results in a FWD packet to the remote host, indicating it should instead send its RFC to that address.
+#### `FWD `*addr* *newcontact*
+where *addr* is an octal address and *newcontact* is the new contact to refer to, results in a FWD packet to the remote host, indicating it should instead send its RFC to that address and contact.
 
 To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
 
@@ -199,7 +199,7 @@ followed by the *n* bytes of data of the packet, where *n* is the length indicat
 | UNC | *data* | binary, where the first 4 bytes are stored in the packetno and ackno fields of the header (each 2 bytes) |
 | DAT, DWD | *data*  | binary (not interpreted by NCP) |
 | EOF | none | or when sending, optionally the ascii string "wait" (four bytes) |
-| FWD | *addr* | LSB, MSB of forwarding address |
+| FWD | *addr* *contact* | where *addr* is 2 bytes (LSB, MSB) of forwarding address immediately followed by the new contact name to refer to |
 | ACK | none | received from NCP as response to "EOF wait", when th EOF is acked or an eofwait timeout happens |
 
 
@@ -214,11 +214,13 @@ Setting up the connection is similar to `chaos_stream`:
         - as response for RFC for Simple protocol
 	- receive `OPN` with data being the remote host (name or address)
         - as response to RFC for Stream protocol
+	- receive `FWD` with new host address and contact
 	- receive `LOS` or `CLS` with data being *reason*
 1. If you received an `RFC`:
 	- send an `OPN` (without data) or an `ANS` (with data)
 1. If you sent or received an `OPN`:
 	- send and receive `DAT`, `DWD`, `UNC` packets
+1. If you received a `FWD`: send a new `RFC` to the host address using the new contact name, starting at the top here
 1. To be sure all data is acked before closing (for non-Simple conns)
 	- send an `EOF` packet last
 
@@ -237,7 +239,7 @@ The data part of `RFC`, `OPN`, `ANS`, `FWD`, and `UNC` packets are non-standard:
 - for RFC, it includes the remote host and (optional) options (see above).
 - for OPN (received), it includes the remote host (see above)
 - for ANS (received), it includes the remote host (see above)
-- for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet).
+- for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet) immediately followed by the new contact name (ascii).
 - for UNC, it includes the packetno (2 bytes) and ackno (2 bytes) fields, which are not used for their normal purposes, but by the protocol using UNC. See [Using Foreign Protocols in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet), and for example the "screen SPY" protocol for LispM (cf `spy.py` in this repo).
 
 #### NOTE further

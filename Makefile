@@ -29,7 +29,7 @@ CFLAGS+=-Wall
 
 all: cbridge hostat finger
 
-OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o
+OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o firewall.o
 
 # YMMV, but sometimes openssl etc are in /opt/local.
 # -lssl and -lcrypto are needed only for TLS.
@@ -68,6 +68,9 @@ ncp.o: ncp.c ncp.h cbridge.h pkqueue.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 pkqueue.o: pkqueue.c pkqueue.h cbridge-chaos.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+firewall.o: firewall.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 hostat: hostat.c cbridge-chaos.h

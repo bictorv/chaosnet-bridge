@@ -1201,7 +1201,9 @@ send_basic_pkt_with_data(struct conn *c, int opcode, u_char *data, int len)
     case CHOP_FWD:
       // yes, this is cheating
       set_ch_ackno(ch, data[0] | (data[1] << 8));
-      len = 0;
+      // get the contact name in place
+      memmove(data, data+2, len-2);
+      len -= 2;
       break;
     case CHOP_UNC:
       // yes, this is cheating
@@ -1366,14 +1368,16 @@ send_ans_pkt(struct conn *c, u_char *ans, int len)
 }
 
 static void
-send_fwd_pkt(struct conn *c, u_short addr)
+send_fwd_pkt(struct conn *c, u_short addr, char *newcontact)
 {
   // this is abusing the args to send_basic_pkt_with_data...
-  u_char buf[2];
+  u_char buf[CH_PK_MAX_DATALEN];
   buf[0] = addr & 0xff;
   buf[1] = addr >> 8;
-  if (ncp_debug) printf("NCP sending FWD to %#o\n", addr);
-  send_basic_pkt_with_data(c, CHOP_FWD, buf, 2);
+  // copy new contact name too
+  memcpy(buf+2, newcontact, strlen(newcontact));
+  if (ncp_debug) printf("NCP sending FWD to %#o \"%s\"\n", addr, newcontact);
+  send_basic_pkt_with_data(c, CHOP_FWD, buf, 2+strlen(newcontact));
   // FWD is uncontrolled, so just terminate
   socket_closed_for_simple_conn(c);
 }
@@ -2326,18 +2330,37 @@ ncp_user_server(void *v)
   }
 }
 
+// @@@@ should get new contact name too
 static void
-forward_conn_transparently(struct conn *conn, u_short fw) 
+forward_conn_transparently(struct conn *conn, u_short fw, char *newcontact) 
 {
   struct conn_state *cs = conn->conn_state;
   PTLOCKN(conn->conn_lock,"conn_lock");
-  if (ncp_debug) printf("NCP transparent FWD to %#o\n", fw);
+  if (ncp_debug) printf("NCP transparent FWD to %#o %s\n", fw, newcontact);
   PTLOCKN(cs->send_mutex,"send_mutex");
   struct pkt_elem *pk;
+  // change destination on packets in the send queue
   for (pk = pkqueue_first_elem(cs->send_pkts); pk != NULL; pk = pkqueue_next_elem(pk)) {
     struct chaos_header *p = pkqueue_elem_pkt(pk);
     if (ch_destaddr(p) == conn->conn_rhost) {
       set_ch_destaddr(p,fw);
+      if (ch_opcode(p) == CHOP_RFC) {
+	// Zap contact of RFCs in the queue
+	int pklen = strlen(newcontact);
+	char *cp = (char *)p+CHAOS_HEADERSIZE;
+	char buf[CH_PK_MAX_DATALEN];
+	// get old contact and any args
+	get_packet_string(p, (u_char *)buf, sizeof(buf));
+	char *args = index(buf, ' '); // Any args?
+	memcpy(cp, newcontact, pklen); // first copy new contact name in place
+	if (args != NULL) {				 // then any args
+	  strncpy(cp+strlen(newcontact), args, args-buf);
+	  pklen += args-buf;
+	}
+	set_ch_nbytes(p, pklen);
+	// swap it
+	htons_buf((u_short*)cp, (u_short *)cp, pklen);
+      }
     } else if (ncp_debug) 
       printf("NCP FWD to %#x found unexpected destaddr %#x expected %#x\n",
 	     fw, ch_destaddr(p), conn->conn_rhost);
@@ -3141,10 +3164,12 @@ packet_to_conn_stream_handler(struct conn *conn, struct chaos_header *ch)
       receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
     case CHOP_FWD:
-      if (conn->follow_forward && (cs->state != CS_BRD_Sent))
+      if (conn->follow_forward && (cs->state != CS_BRD_Sent)) {
 	// can't do this for broadcast in a reasonable way?
-	forward_conn_transparently(conn, ch_ackno(ch));
-      else 
+	char buf[CH_PK_MAX_DATALEN];
+	get_packet_string(ch, (u_char *)buf, sizeof(buf)); // get new contact
+	forward_conn_transparently(conn, ch_ackno(ch), buf);
+      } else 
 	receive_data_for_conn(ch_opcode(ch), conn, ch);
       break;
     case CHOP_ANS:
@@ -3629,9 +3654,18 @@ socket_to_conn_stream_handler(struct conn *conn)
     else if (strncasecmp((char *)buf,"FWD ", 4) == 0) {
       u_short haddr;
       char *eol = index((char *)&buf[4],'\r');
+      char *space = index((char *)&buf[4], ' '); // separator between addr and contact
       if (eol == NULL) eol = index((char *)&buf[4], '\n');
       if (eol != NULL) *eol = '\0';
       if (ncp_debug) printf("Stream cmd \"%s\"\n", buf);
+      if (space != NULL) {
+	*space = '\0'; 		// zap space
+	space++;		// use ptr for contact name
+      }
+      if (space == NULL || strlen(space) == 0) {
+	user_socket_los(conn, "Missing FWD contact name");
+	return -1;
+      }
       if ((sscanf((char *)&buf[4],"%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
 #if CHAOS_DNS
 	haddr = dns_closest_address_or_los(conn, &buf[4]);
@@ -3641,7 +3675,7 @@ socket_to_conn_stream_handler(struct conn *conn)
 	return -1;
 #endif
       }
-      send_fwd_pkt(conn, haddr);
+      send_fwd_pkt(conn, haddr, space);
       return 0;
     }
     else if  ((strncasecmp((char *)buf,"ANS ", 4) == 0) 
@@ -3788,13 +3822,14 @@ socket_to_conn_packet_handler(struct conn *conn)
       return 0;
     }
     else if (opc == CHOP_FWD) {
-      if (len == 2) {
+      if (len > 2) {
 	u_short haddr = buf[4] | (buf[5]<<8);
-	send_fwd_pkt(conn, haddr);
+	u_char *contact = buf+6;
+	send_fwd_pkt(conn, haddr, (char *)contact);
 	// done
 	return 0;
       } else {
-	user_socket_los(conn, "Bad FWD length %d, expected 2", len);
+	user_socket_los(conn, "Bad FWD length %d, expected >2", len);
 	return -1;
       }
     }
@@ -3903,11 +3938,14 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       strcat((char *)&obuf[len+4], "\r\n");
       len += 4+2;
       break;
-    case CHOP_FWD:
+    case CHOP_FWD: {
+      char buf[CH_PK_MAX_DATALEN];
+      get_packet_string(pkt, (u_char *)buf, sizeof(buf));
       // Use the octal host address, easier to handle for a program
-      sprintf((char *)obuf, "FWD %#o", ch_ackno(pkt));
+      sprintf((char *)obuf, "FWD %#o %s", ch_ackno(pkt), buf);
       len = strlen((char *)obuf);
       break;
+    }
     default:
       memcpy(obuf, buf, len);
     }
@@ -3998,9 +4036,10 @@ conn_to_socket_pkt_handler(struct conn *conn, struct chaos_header *pkt)
     set_conn_state(conn, cs->state, CS_Answered, 1);
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent)) && (ch_opcode(pkt) == CHOP_FWD)) {
     trace_conn("Forwarded", conn);
+    get_packet_string(pkt, (u_char *)buf+2, sizeof(buf)-2);
     buf[0] = ch_ackno(pkt) & 0xff;
     buf[1] = ch_ackno(pkt) >> 8;
-    len = 2;
+    len = 2+strlen(buf+2);
   } else if (((cs->state == CS_RFC_Sent) || (cs->state == CS_BRD_Sent) || (cs->state == CS_Open))
 	     && (opc == CHOP_OPN)) {
     // Remote address in octal

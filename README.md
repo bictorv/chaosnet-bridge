@@ -15,6 +15,7 @@ It also implements the transport layer of Chaosnet (using any of the above link 
 - [EXAMPLES](EXAMPLES.md) for some example configurations.
 - [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
 - [NCP](NCP.md) for how to connect a user program to Chaosnet.
+- [FIREWALL](FIREWALL.md) for how to configure the built-in firewall. 
 - [HISTORY](HISTORY.md) for some historic notes.
 - [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 

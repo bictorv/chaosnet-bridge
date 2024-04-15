@@ -61,6 +61,10 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 
 	Provide a list of private, non-routed subnets, where *list* is a list of comma-separated octal subnets, and *hostsfile* an optional hosts file defining hostname-address mapping for private subnets (including the standard private subnet 376).  The hosts file format is similar to a standard `/etc/hosts` file: lines beginning with `#` are ignored, other lines start with an octal address followed by whitespace and a list of whitespace-separated host names.
 
+- `firewall ` [ `enabled` no/yes ] [ `debug` off/on ] [ `log` off/on ] [ `rules` *filename* ]
+
+	Configures the firewall - see [FIREWALL](FIREWALL.md) for more info.
+
 ### LINKDEF:
 You can define links of two types: for whole subnets, and for individual hosts.
 
