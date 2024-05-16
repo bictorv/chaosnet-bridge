@@ -195,7 +195,7 @@ The easiest way would be to configure a cbridge on your desktop with the followi
 	
 Note that `pidp` is assumed to be the host name of your PiDP-10 system - update as appopriate.
 
-You also need to add the following to the cbridge.conf on the PiDP-10 (nothing needs to be added for the ITS system/emulator):
+You also need to add the following to the cbridge.conf on the PiDP-10, where `desktop` is assumed to be the host name of your desktop. (Nothing needs to be added for the ITS system/emulator):
 
 	; Here is the link to the desktop cbridge
 	link chudp desktop:42042 host 177003 myaddr 177001
