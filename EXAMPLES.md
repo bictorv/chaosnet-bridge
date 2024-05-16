@@ -188,12 +188,12 @@ The easiest way would be to configure a cbridge on your desktop with the followi
     ncp enabled yes
     ; Use a copy of the same hosts file for local hosts
     private hosts chaos-hosts
-    ; Here is the link to the ITS system
-    link chudp pidp:44042 host 177002 myaddr 177003
-    ; and here is the link to the PiDP cbridge
+    ; Here is the link to the PiDP cbridge
     link chudp pidp:44041 host 177001 myaddr 177003
+    ; And here is an explicit route to the ITS system
+    route host 177002 bridge 177001 myaddr 177003
 	
-Note that `pidp` is assumed to be the host name of your PiDP-10 system - update as appopriate.
+Note that `pidp` is assumed to be the host name of your PiDP-10 system - update as appopriate. Note that the `route` line must be after all `link` lines.
 
 You also need to add the following to the cbridge.conf on the PiDP-10, where `desktop` is assumed to be the host name of your desktop. (Nothing needs to be added for the ITS system/emulator):
 
