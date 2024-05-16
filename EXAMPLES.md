@@ -158,3 +158,50 @@ The effect is that any Chaosnet packets sent to an address on subnet NN is forwa
 Addresses on Chaos subnet 2 range from 1001 to 1377 octal. The address 1066 has host byte 66 (octal) = 54 (decimal), and is mapped to 10.11.12.54. Note that address 1377, which has host byte 255, can not be mapped to the IPv4 address 10.11.12.255, since that is the broadcast address on net 10.11.12.0.
 
 For IPv6 addresses, the same mapping is used: the last byte of the IPv6 address is set to the host byte. Note that IPv6 subnet mappings are unfortunately less useful, since the chaosnet bridge doesn't support IPv6 broadcast yet.
+
+## Example: PiDP-10 with extension
+
+The [PiDP-10](https://github.com/obsolescence/pidp10/) system comes with a cbridge setup for an ITS system (under simh/pdp10), using the [private non-routed subnet](README.md#private-non-routed-subnet) for addresses. It looks something like this:
+
+- The ITS system is at address 177002, using CHUDP on port 44042 to communicate with the cbridge at localhost:44041
+- The cbridge is at address 177001, using CHUDP on port 44041 to communicate with the ITS system at localhost:44042
+
+So both the ITS (emulator) and the cbridge run on the same system (a raspberry pi).
+
+The typical cbridge.conf file on your PiDP-10 looks like this:
+
+	chaddr 177001
+	chudp 44041
+	ncp enabled yes
+	private hosts /opt/pidp10/bin/chaos-hosts
+	link chudp localhost:44042 host 177002 myaddr 177001
+
+Suppose you have another  system, like a desktop, you want to connect to the ITS system (for using `supdup`, `mlftp` or other fancy tools). 
+
+The easiest way would be to configure a cbridge on your desktop with the following configuration:
+
+    ; Desktop system Chaosnet address
+    chaddr 177003
+    ; Standard port for CHUDP
+    chudp 42042
+    ; Enable NCP so you can use the nice tools
+    ncp enabled yes
+    ; Use a copy of the same hosts file for local hosts
+    private hosts chaos-hosts
+    ; Here is the link to the ITS system
+    link chudp pidp:44042 host 177002 myaddr 177003
+    ; and here is the link to the PiDP cbridge
+    link chudp pidp:44041 host 177001 myaddr 177003
+	
+Note that `pidp` is assumed to be the host name of your PiDP-10 system - update as appopriate.
+
+You also need to add the following to the cbridge.conf on the PiDP-10, where `desktop` is assumed to be the host name of your desktop. (Nothing needs to be added for the ITS system/emulator):
+
+	; Here is the link to the desktop cbridge
+	link chudp desktop:42042 host 177003 myaddr 177001
+
+And finally, you most likely want to add a line to your `chaos-hosts` file on both the PiDP-10 and your desktop:
+
+    177003 desktop
+
+(Many thanks to [Steven Falco](https://gitlab.com/stevenfalco/incompatible-timesharing-system-notes) for figuring out and testing the details!)
