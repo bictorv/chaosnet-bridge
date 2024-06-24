@@ -403,4 +403,8 @@ if __name__ == '__main__':
         debug = True
         print(args, file=sys.stderr)
 
-    telnet(args.host, args.contact, options=cargs, tcp=args.tcp)
+    try:
+        telnet(args.host, args.contact, options=cargs, tcp=args.tcp)
+    except ChaosError as m:
+        print("Chaosnet error: {}".format(m), file=sys.stderr)
+        sys.exit(1)
