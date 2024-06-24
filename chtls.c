@@ -520,6 +520,11 @@ static void
 close_tlsdest(struct tls_dest *td)
 {
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
+  if ((td->tls_sock != 0) && td->tls_serverp) {
+      char ip6[INET6_ADDRSTRLEN];
+      fprintf(stderr,"TLS client %s connection closing: IP %s\n", 
+	      td->tls_name, ip46_ntoa(&td->tls_sa.tls_saddr, ip6, sizeof(ip6)));
+  }
   if (td->tls_serverp) {
     // forget remote sockaddr
     memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
@@ -1373,8 +1378,8 @@ tls_server(void *v)
 	  u_long serial = ASN1_INTEGER_get(serialp);
 	  char ip[INET6_ADDRSTRLEN];
 	  // @@@@ only do this once per client/serial
-	  fprintf(stderr,"TLS client connecting: serial %6lX at IP %s, CN %s\n", serial, 
-		  ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
+	  fprintf(stderr,"TLS client %s connecting: serial %lX at IP %s\n", client_cn, serial, 
+		  ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
 	}
 	// create tlsdest, fill in stuff
 	add_server_tlsdest(client_cn, tsock, ssl, (struct sockaddr *)&caddr, clen, client_chaddr);
