@@ -80,8 +80,8 @@ class SimpleStreamProtocol:
     def __init__(self,host,contact,options=None,args=[]):
         self.conn = StreamConn()
         self.conn.connect(host,contact,options=options,args=args)
-    def copy_until_eof(self, outstream=sys.stderr):
-        self.conn.copy_until_eof(outstream=outstream)
+    def copy_until_eof(self):
+        self.conn.copy_until_eof()
 
 # Implement methods for header, printer (of each ANS received) and nonprinter (to print e.g. free lispms)
 # If the printer methods returns False, the data is assumed non-printed and passed to the nonprinter at the end.
@@ -161,11 +161,11 @@ class Status(SimpleProtocol):
 class ChaosTime(SimpleProtocol):
     contact = "TIME"
     def printer(self,src,data):
-        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
         # cf RFC 868
         t = unpack("I",data[0:4])[0]-2208988800
+        dt = t-time.time()
+        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
         if verbose:
-            dt = t-time.time()
             print("{:16} {} (delta {}{})".format(hname,datetime.fromtimestamp(t),"+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))))
         else:
             print("{:16} {}".format(hname,datetime.fromtimestamp(t)))

@@ -280,7 +280,7 @@ class PacketConn(NCPConn):
                 print("read less than expected: {} < {}, going for more".format(len(data),dlen), file=sys.stderr)
             return data + self.get_message(dlen-len(data))
 
-    def copy_until_eof(self, outstream=sys.stdout):
+    def copy_until_eof(self):
         while True:
             opc, data = self.get_packet()
             if opc == Opcode.CLS:
@@ -298,7 +298,7 @@ class PacketConn(NCPConn):
             else:
                 # Translate to Unix
                 out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
-                print("{!s}".format(out), file=outstream, end='' if out[-1] not in [0o215,0o212,0o15,0o12] else None)
+                print("{!s}".format(out), end='' if out[-1] not in [0o215,0o212,0o15,0o12] else None)
 
 # For simple broadcast protocols
 # Iterator gives source address and data for each ANS
@@ -429,7 +429,7 @@ class StreamConn(NCPConn):
             data += d2
         return data
 
-    def copy_until_eof(self, outstream=sys.stdout):
+    def copy_until_eof(self):
         cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
         last = None
         while True:
@@ -437,15 +437,15 @@ class StreamConn(NCPConn):
             if len(data) == 0:
                 if last not in [0o215,0o212,0o15,0o12]:
                     # finish with a fresh line
-                    print("",file=outstream)
+                    print("")
                 return None
             for c in data:
                 last = c
                 # translate
                 if c in cmap:
-                    print(chr(cmap[c]),end='',file=outstream)
+                    print(chr(cmap[c]),end='')
                 else:
-                    print(chr(c),end='',file=outstream)
+                    print(chr(c),end='')
 
 # Generic simple protocol
 class Simple:
@@ -499,10 +499,8 @@ class Simple:
             return None, None
         elif opc == Opcode.FWD:
             dest = data[0] + data[1]*256
-            if debug:
-                print("FWD received: use host {:o} instead {}".format(dest,data[2:]), file=sys.stderr)
             # This should be a separate exception so it can be handled, and FWD should be detected in other places too.
-            raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} instead".format(self.hname, dest))
+            raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} contact {}".format(self.hname, dest, str(data[2:],"ascii")))
         else:
             raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
 
