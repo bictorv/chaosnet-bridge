@@ -1551,7 +1551,7 @@ cancel_conn_threads(struct conn *conn)
 {
   struct conn_state *cs = conn->conn_state;
   char *tn = conn_thread_name(conn);
-  int x, y;
+  int x = 0, y = 0;
   void *jv;
 
   if (ncp_debug) printf("cancelling threads for %p (this is %s)\n", conn, tn);
@@ -1576,7 +1576,8 @@ cancel_conn_threads(struct conn *conn)
     if (ncp_debug) printf("%%%% Conn %p thread %p (%s) waiting for %p and %p to join\n",
 			  conn, (void *)pthread_self(), conn_thread_name(conn), 
 			  (void *)conn->conn_to_net_thread, (void *)conn->conn_from_sock_thread);
-    if ((x = pthread_join(conn->conn_to_net_thread,(void *) &jv)) < 0) {
+    if ((conn->conn_to_net_thread != 0) && // CT_Simple conns don't have this
+	(x = pthread_join(conn->conn_to_net_thread,(void *) &jv)) < 0) {
       if (ncp_debug) fprintf(stderr,"pthread_join (c_t_n): %s\n", strerror(x));
     }
     if ((y = pthread_join(conn->conn_from_sock_thread,(void *) &jv)) < 0) {
@@ -2699,6 +2700,7 @@ retransmit_controlled_packets(struct conn *conn)
 	  else
 	    user_socket_los(conn, "Connection timed out (after %d s), no host responding",
 			    conn->rfc_timeout);
+	  return;
 	}
 	if (!packet_uncontrolled(pkt)
 	    // don't retransmit OPN when we're already open
@@ -2814,6 +2816,7 @@ probe_connection(struct conn *conn)
     // close and die
     user_socket_los(conn, "Host %#o down - no reception for %ld seconds", conn->conn_rhost,
 		    now.tv_sec - cs->time_last_received);
+    return;
   } else if ((cs->state != CS_Open) && (cs->state != CS_Finishing)) {
     // don't send SNS unless conn is open
   } else if ((cs->time_last_received != 0) 
@@ -4178,6 +4181,8 @@ start_conn(struct conn *conn)
       perror("?? pthread_create(conn_to_packet_stream_handler)");
       exit(1);
     }
+  } else {
+    conn->conn_to_net_thread = 0; // Make sure to initialize this for CT_Simple conns
   }
 }
 
