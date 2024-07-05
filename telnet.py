@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2022-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet client for TELNET protocol (not SUPDUP, just to keep it simple for now)
 # Demonstrates the high-level python library for Chaosnet.

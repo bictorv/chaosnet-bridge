@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server for FINGER protocol, mainly used by Lisp Machines.
 # (NOT what is otherwise known as finger, but a different protocol on Chaosnet.)

@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2023-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server for HOSTAB protocol.
 # As an extension, the request can also be a Chaosnet address (octal), which is looked up

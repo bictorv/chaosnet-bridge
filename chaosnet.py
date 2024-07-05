@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2023-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet support for python.
 # Demonstrates the APIs for the NCP of cbridge: both the simpler stream protocol and the packet protocol.

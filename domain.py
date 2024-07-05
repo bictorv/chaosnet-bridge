@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2020-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server/forwarder for DOMAIN protocol
 # Uses the stream API of the NCP of cbridge, the bridge program for various Chaosnet implementations.

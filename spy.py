@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2024 Björn Victor (bjorn@victor.se)
 # Chaosnet client for SPY protocol, to see the screen of a LISPM.
 # Demonstrates the high-level python library for Chaosnet,
