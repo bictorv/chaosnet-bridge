@@ -462,7 +462,7 @@ chudp_input(void *v)
     if ((udp6sock = chudp_connect(chudp_port, AF_INET6)) < 0)
       pthread_exit(NULL);
     else {
-      if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udp6sock) < 0) {
+      if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udp6sock) != 0) {
 	perror("pthread_create(chudp_sock_input, v6)");
 	pthread_exit(NULL);
       }
@@ -471,9 +471,17 @@ chudp_input(void *v)
   if ((udpsock = chudp_connect(chudp_port, AF_INET)) < 0)
     pthread_exit(NULL);
 
-  if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udpsock) < 0) {
+  if (pthread_create(&subthreads[ti++], NULL, &chudp_sock_input, &udpsock) != 0) {
     perror("pthread_create(chudp_sock_input, v4)");
     pthread_exit(NULL);
+  }
+  // Make sure the system reclaims resources automatically, we don't pthread_join them.
+  for (int i = 0; i < ti; i++) {
+    int e = pthread_detach(subthreads[i]);
+    if (e != 0) {
+      fprintf(stderr,"pthread_detach (chudp thread %d): %s\n", i, strerror(e));
+      exit(1);
+    }
   }
   while (1) {
     sleep(5);
