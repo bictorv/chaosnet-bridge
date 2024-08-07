@@ -1721,10 +1721,10 @@ validate_crl_file()
     return -1;
   }
   X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
+  fclose(f);
   if (crl == NULL) {
     perror("PEM_read_X509_CRL");
     ERR_print_errors_fp(stderr);
-    fclose(f);
     return -1;
   }
   return validate_crl_date(crl,NULL);
@@ -1740,6 +1740,7 @@ validate_cert_vs_crl(X509 *cert, char *fname)
     return -1;
   }
   X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
+  fclose(f);
   if (crl == NULL) {
     perror("PEM_read_X509_CRL");
     ERR_print_errors_fp(stderr);
