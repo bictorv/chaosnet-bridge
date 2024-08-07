@@ -326,6 +326,7 @@ pkqueue_unlink_pkt_elem(struct pkt_elem *elem, struct pkt_elem *prev, struct pkq
     // back up - this might result in one pkt being skipped, but it will be handled next time...
     elem = pkqueue_first_elem(queue);
   }
+  queue->pkq_len--;
   if (pkt != NULL)
     free(pkt);
   return elem;
