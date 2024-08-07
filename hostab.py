@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2024 Björn Victor (bjorn@victor.se)
 # A client program for the HOSTAB protocol.
 

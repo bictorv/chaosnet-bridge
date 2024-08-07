@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet client for NAME protocol (what is otherwise known as finger, which is a different protocol on Chaosnet)
 # Demonstrates the high-level python library for Chaosnet.

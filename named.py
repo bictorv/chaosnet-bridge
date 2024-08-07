@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server for NAME protocol (what is otherwise known as finger, which is a different protocol on Chaosnet)
 # Demonstrates the APIs for the NCP of cbridge: both the simpler stream protocol and the packet protocol.

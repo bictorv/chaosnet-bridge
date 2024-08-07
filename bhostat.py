@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # Tool for exploring Chaosnet using various (simple) protocols.
 # Demonstrates the high-level python library for Chaosnet.
