@@ -2258,7 +2258,7 @@ main(int argc, char *argv[])
 
   // Now start the different threads
   pthread_t threads[256];	/* random medium constant */
-  int ti = 0;
+  int ti = 0, e = 0;
 
   // Block SIGINFO/SIGUSR1 in all threads, enable it in main thread below
   sigset_t ss;
@@ -2267,28 +2267,28 @@ main(int argc, char *argv[])
   sigaddset(&ss, SIGINFO);
 #endif
   sigaddset(&ss, SIGUSR1);
-  if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
-    perror("pthread_sigmask(SIG_BLOCK)");
+  if ((e = pthread_sigmask(SIG_BLOCK, &ss, NULL)) != 0)
+    fprintf(stderr,"pthread_sigmask(SIG_BLOCK): %s", strerror(e));
 
   if (do_unix) {
     if (verbose) fprintf(stderr, "Starting thread for UNIX socket\n");
-    if (pthread_create(&threads[ti++], NULL, &unix_input, NULL) < 0) {
-      perror("pthread_create(unix_input)");
+    if ((e = pthread_create(&threads[ti++], NULL, &unix_input, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(unix_input): %s", strerror(e));
       exit(1);
     }
   }
   if (do_udp) {
     if (verbose) fprintf(stderr, "Starting thread for UDP sockets\n");
-    if (pthread_create(&threads[ti++], NULL, &chudp_input, &do_udp6) < 0) {
-      perror("pthread_create(chudp_input)");
+    if ((e = pthread_create(&threads[ti++], NULL, &chudp_input, &do_udp6)) != 0) {
+      fprintf(stderr,"pthread_create(chudp_input): %s", strerror(e));
       exit(1);
     }
   }
 #if CHAOS_ETHERP
   if (do_ether) {
     if (verbose) fprintf(stderr,"Starting thread for Ethernet\n");
-    if (pthread_create(&threads[ti++], NULL, &ether_input, NULL) < 0) {
-      perror("pthread_create(ether_input)");
+    if ((e = pthread_create(&threads[ti++], NULL, &ether_input, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(ether_input): %s", strerror(e));
       exit(1);
     }
   }
@@ -2296,8 +2296,8 @@ main(int argc, char *argv[])
 #if CHAOS_IP
   if (do_chip) {
     if (verbose) fprintf(stderr,"Starting thread for Chaos-over-IP\n");
-    if (pthread_create(&threads[ti++], NULL, &chip_input, NULL) < 0) {
-      perror("pthread_create(chip_input)");
+    if ((e = pthread_create(&threads[ti++], NULL, &chip_input, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(chip_input): %s", strerror(e));
       exit(1);
     }
   }
@@ -2311,23 +2311,23 @@ main(int argc, char *argv[])
 
   if (do_tls_server) {
     if (verbose) fprintf(stderr,"Starting thread for TLS server\n");
-    if (pthread_create(&threads[ti++], NULL, &tls_server, NULL) < 0) {
-      perror("pthread_create(tls_server)");
+    if ((e = pthread_create(&threads[ti++], NULL, &tls_server, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(tls_server): %s", strerror(e));
       exit(1);
     }
   }
   if (do_tls || do_tls_server) {
     if (verbose) fprintf(stderr,"Starting thread for TLS input\n");
-    if (pthread_create(&threads[ti++], NULL, &tls_input, NULL) < 0) {
-      perror("pthread_create(tls_input)");
+    if ((e = pthread_create(&threads[ti++], NULL, &tls_input, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(tls_input): %s", strerror(e));
       exit(1);
     }
     int i;
     for (i = 0; i < tlsdest_len; i++) {
       if (!tlsdest[i].tls_serverp) {
 	if (verbose) fprintf(stderr,"Starting thread for TLS client connector %d\n", i);
-	if (pthread_create(&threads[ti++], NULL, &tls_connector, &tlsdest[i]) < 0) {
-	  perror("pthread_create(tls_connector)");
+	if ((e = pthread_create(&threads[ti++], NULL, &tls_connector, &tlsdest[i])) != 0) {
+	  fprintf(stderr,"pthread_create(tls_connector %d): %s", i, strerror(e));
 	  exit(1);
 	}
       }
@@ -2337,8 +2337,8 @@ main(int argc, char *argv[])
 #if CHAOS_DNS
   if (do_dns_forwarding) {
     if (verbose) fprintf(stderr,"Starting thread for DNS forwarder\n");
-    if (pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL) < 0) {
-      perror("pthread_create(dns_forwarder_thread)");
+    if ((e = pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(dns_forwarder_thread): %s", strerror(e));
       exit(1);
     }
   }
@@ -2348,8 +2348,8 @@ main(int argc, char *argv[])
     // Only do this if we're directly on more than one net, or using host links -
     // otherwise we're not really a bridge, just an NCP interface.
     if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
-    if (pthread_create(&threads[ti++], NULL, &rut_sender, NULL) < 0) {
-      perror("pthread_create(rut_sender)");
+    if ((e = pthread_create(&threads[ti++], NULL, &rut_sender, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(rut_sender): %s", strerror(e));
       exit(1);
     }
   } else {
@@ -2359,8 +2359,8 @@ main(int argc, char *argv[])
   }
 
   if (verbose) fprintf(stderr,"Starting route cost updating thread\n");
-  if (pthread_create(&threads[ti++], NULL, &route_cost_updater, NULL) < 0) {
-    perror("pthread_create(route_cost_updater)");
+  if ((e = pthread_create(&threads[ti++], NULL, &route_cost_updater, NULL)) != 0) {
+    fprintf(stderr,"pthread_create(route_cost_updater): %s", strerror(e));
     exit(1);
   }
   if (do_udp || do_udp6
@@ -2369,23 +2369,31 @@ main(int argc, char *argv[])
 #endif
       ) {
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
-    if (pthread_create(&threads[ti++], NULL, &reparse_link_host_names_thread, NULL) < 0) {
-      perror("pthread_create(reparse_link_host_names_thread)");
+    if ((e = pthread_create(&threads[ti++], NULL, &reparse_link_host_names_thread, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(reparse_link_host_names_thread): %s", strerror(e));
       exit(1);
     }
   }
 
   if (ncp_enabled) {
     if (verbose) fprintf(stderr,"Starting NCP\n");
-    if (pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL) < 0) {
-      perror("pthread_create(ncp_user_server)");
+    if ((e = pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL)) != 0) {
+      fprintf(stderr,"pthread_create(ncp_user_server): %s", strerror(e));
+      exit(1);
+    }
+  }
+
+  // Make sure the system reclaims resources automatically, we don't pthread_join them.
+  for (int i = 0; i < ti; i++) {
+    if ((e = pthread_detach(threads[i])) != 0) {
+      fprintf(stderr,"pthread_detach (thread %d): %s\n", i, strerror(e));
       exit(1);
     }
   }
 
   // Now unblock SIGINFO/SIGUSR1 in this thread
-  if (pthread_sigmask(SIG_UNBLOCK, &ss, NULL) < 0)
-    perror("pthread_sigmask(SIG_BLOCK emptyset)");
+  if ((e = pthread_sigmask(SIG_UNBLOCK, &ss, NULL)) != 0)
+    fprintf(stderr,"pthread_sigmask(SIG_BLOCK emptyset): %s", strerror(e));
 
   // and set up a handler
   struct sigaction sa;

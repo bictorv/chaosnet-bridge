@@ -3407,9 +3407,25 @@ static void asynch_packet_to_conn(u_char *pkt, int len)
 
   // Start the thread!
   pthread_t thr;
-  if (pthread_create(&thr, NULL, &asynch_packet_to_conn_handler, ptc) < 0) {
-    perror("pthread_create(asynch_packet_to_conn_handler)");
+  int e = 0;
+  // and make sure it is detached from the start
+  pthread_attr_t attr;
+  if ((e = pthread_attr_init(&attr)) != 0) {
+    fprintf(stderr,"pthread_attr_init: %s", strerror(e));
+    exit(1);
+  }
+  if ((e = pthread_attr_setdetachstate(&attr, 1)) != 0) {
+    fprintf(stderr,"pthread_attr_setdetachstate: %s", strerror(e));
+    exit(1);
+  }
+
+  if ((e = pthread_create(&thr, &attr, &asynch_packet_to_conn_handler, ptc)) != 0) {
+    fprintf(stderr,"pthread_create(asynch_packet_to_conn_handler): %s", strerror(e));
     abort();
+  }
+  if ((e = pthread_attr_destroy(&attr)) != 0) {
+    fprintf(stderr,"pthread_attr_destroy: %s", strerror(e));
+    exit(1);
   }
   if (ncp_debug) fprintf(stderr,"NCP: Started asynch pkt thread %p for %p, len %d\n", (void *)thr, data, len);
   // and be done
@@ -4165,21 +4181,41 @@ conn_to_socket_handler(void *arg)
 static void 
 start_conn(struct conn *conn)
 {
-  if (pthread_create(&conn->conn_to_sock_thread, NULL, &conn_to_socket_handler, conn) < 0) {
-    perror("?? pthread_create(conn user read handler)");
+  int e = 0;
+  pthread_attr_t attr;
+  if ((e = pthread_attr_init(&attr)) != 0) {
+    fprintf(stderr,"pthread_attr_init: %s", strerror(e));
     exit(1);
   }
-  if (pthread_create(&conn->conn_from_sock_thread, NULL, &socket_to_conn_handler, conn) < 0) {
-    perror("?? pthread_create(conn user write handler)");
+  if ((e = pthread_attr_setdetachstate(&attr, 1)) != 0) {
+    fprintf(stderr,"pthread_attr_setdetachstate: %s", strerror(e));
     exit(1);
+  }
+  if ((e = pthread_create(&conn->conn_to_sock_thread, &attr, &conn_to_socket_handler, conn)) != 0) {
+    fprintf(stderr,"pthread_create(conn_to_sock_thread): %s", strerror(e));
+    exit(1);
+  } else if (ncp_debug) {
+    fprintf(stderr,"conn %p created conn_to_sock_thread %p\n", conn, (void *)conn->conn_to_sock_thread);
+  }
+  if ((e = pthread_create(&conn->conn_from_sock_thread, &attr, &socket_to_conn_handler, conn)) != 0) {
+    fprintf(stderr,"pthread_create(conn_from_sock_thread): %s", strerror(e));
+    exit(1);
+  } else if (ncp_debug) {
+    fprintf(stderr,"conn %p created conn_from_sock_thread %p\n", conn, (void *)conn->conn_from_sock_thread);
   }
   if (conn->conn_type != CT_Simple) {
-    if (pthread_create(&conn->conn_to_net_thread, NULL, &conn_to_packet_stream_handler, conn) < 0) {
-      perror("?? pthread_create(conn_to_packet_stream_handler)");
+    if ((e = pthread_create(&conn->conn_to_net_thread, &attr, &conn_to_packet_stream_handler, conn)) != 0) {
+      fprintf(stderr,"pthread_create(conn_to_net_thread): %s", strerror(e));
       exit(1);
+    } else if (ncp_debug) {
+      fprintf(stderr,"conn %p created conn_to_net_thread %p\n", conn, (void *)conn->conn_to_net_thread);
     }
   } else {
     conn->conn_to_net_thread = 0; // Make sure to initialize this for CT_Simple conns
+  }
+  if ((e = pthread_attr_destroy(&attr)) != 0) {
+    fprintf(stderr,"pthread_attr_destroy: %s", strerror(e));
+    exit(1);
   }
 }
 
