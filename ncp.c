@@ -2471,9 +2471,6 @@ add_input_pkt(struct conn *c, struct chaos_header *pkt)
   // Only add uncontrolled pkts if they fit in the window, to avoid being flooded
   if (packet_uncontrolled(pkt) && (pkqueue_length(cs->read_pkts) >= cs->local_winsize)) {
     PTUNLOCKN(cs->read_mutex,"read_mutex");
-    PTLOCKN(linktab_lock,"linktab_lock");
-    linktab[ch_srcaddr(pkt)>>8].pkt_lost++; // count it as lost on reading
-    PTUNLOCKN(linktab_lock,"linktab_lock");
     return;
   }
     
