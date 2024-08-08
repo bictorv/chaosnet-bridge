@@ -54,7 +54,8 @@ def host_name(addr, timeout=2):
         # return addr
         src = None
     if src:
-        name = str(data[:32].rstrip(b'\x00'), "ascii")
+        # BGDFAX pads with spaces (instead of nulls)
+        name = str(data[:32].rstrip(b'\x00 '), "ascii")
         # host_names[addr] = name
         return name
     else:
@@ -114,7 +115,8 @@ class Status(SimpleProtocol):
         return ("{:<25s}{:>6s} "+"{:>8} "*8).format("Name","Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected")
     def printer(self,src,data):
         # First is the name of the node
-        hname = str(data[:32].rstrip(b'\x00'),'ascii')
+        # BGDFAX pads with spaces (instead of nulls)
+        hname = str(data[:32].rstrip(b'\x00 '),'ascii')
         fstart = 32
         dlen = len(data)
         statuses = dict()
