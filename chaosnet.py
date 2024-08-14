@@ -17,7 +17,7 @@
 # TODO:
 # - let debug be connection-local and initable
 
-import socket, sys, time
+import socket, sys, time, re
 from enum import IntEnum, auto
 
 # The directories of these need to match the "socketdir" ncp setting in cbridge.
@@ -580,7 +580,7 @@ def get_dns_host_info(name, timeout=5, rclass="CH"):
     # If it's an address given, look up the name first
     if isinstance(name,int):
         name = dns_name_of_address(name, timeout=timeout) or name
-    elif isinstance(name,str) and name.isdigit():
+    elif isinstance(name,str) and re.match("^[0-7]+$",name):
         name = dns_name_of_address(int(name,8), timeout=timeout) or name
     try:
         h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.from_text(rclass)),
@@ -600,7 +600,7 @@ def dns_addr_of_name(name, timeout=5, rclass="CH"):
     # If it's an address given, look up the name first, to collect all its addresses
     if isinstance(name,int):
         name = dns_name_of_address(name, timeout=timeout) or name
-    elif isinstance(name,str) and name.isdigit():
+    elif isinstance(name,str) and re.match("^[0-7]+$",name):
         name = dns_name_of_address(int(name,8), timeout=timeout) or name
     addrs = []
     try:
@@ -627,7 +627,7 @@ def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, defaul
     if isinstance(nameoraddr,int):
         name = dns_name_of_address(nameoraddr,timeout=timeout)
         isnum = nameoraddr
-    elif isinstance(nameoraddr,str) and nameoraddr.isdigit():
+    elif isinstance(nameoraddr,str) and re.match("^[0-7]+$",nameoraddr):
         name = dns_name_of_address(int(nameoraddr,8),timeout=timeout)
         isnum = int(nameoraddr,8)
     else:

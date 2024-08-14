@@ -279,7 +279,7 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 - [ ] Implement a new CONFIG stream command for interacting with the configuration and state. Avoids the 488 byte problem, and would not allow remote access meaning a more limited security issue (only local).
 - [ ] Implement a fabulous web-based Chaosnet display using STATUS, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
 - [x] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection). Done, see [here](domain.py).
-- [x] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This should now be easy, using `chaos_packet`, and perhaps useful for CADR systems (easy to implement client end there). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
+- [x] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This is useful for CADR systems (using the `:CHAOS-HOST-TABLE-SERVER-HOSTS` site option). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
 - [x] Port the old FILE server from MIT to use this (see https://tumbleweed.nu/r/chaos/dir?ci=tip&name=chcbridge).
 - [ ] Implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server (and client) in a modern programming language.  A sketch of a client for FILE is now done, in Python.
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Using `chaos_packet` it should be straight-forward.
