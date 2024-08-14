@@ -16,6 +16,7 @@
 #    limitations under the License.
 
 import sys, socket, threading, re, time
+from functools import reduce
 
 from chaosnet import PacketConn, ChaosError, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
 
@@ -24,24 +25,87 @@ eol = b"\215"
 
 keynames = dict(os='SYSTEM-TYPE', cpu='MACHINE-TYPE')
 
+# Parse private hosts file. 
+# Lines not starting with # should be an initial octal address (on subnet 376)
+# followed by whitespace-separated names for that address.
+def parse_private_hosts_file(fname):
+    with open(fname) as f:
+        return reduce(parse_private_hosts_line, f.readlines(), dict())
+def parse_private_hosts_line(alist, l):
+    if not l.startswith("#"):
+        try:
+            astring,nstring = l.split(maxsplit=1)
+        except ValueError:
+            print("Bad line {!r} in private hosts file".format(l.strip()), file=sys.stderr)
+            return alist
+        if re.match("^[0-7]+$",astring):
+            try:
+                addr = int(astring,8)
+                if (addr & 0xff) == 0 or (addr >> 8) == 0 or addr > 0xffff or addr < 0xff:
+                    print("Error: invalid Chaosnet address {:o}, line {!r}".format(addr,l.strip()),
+                              file=sys.stderr)
+                    return alist
+                elif (addr >> 8) != 0o376:
+                    print("Warning: address {:o} is not on the globally private subnet 376 but on subnet {:o}".format(addr,addr>>8),
+                              file=sys.stderr)
+                names = nstring.upper().split()   # traditions
+                # @@@@ should check that each of names start with a letter?
+                alist[addr] = names
+            except ValueError:
+                print("Bad address string {!r} in private hosts file, line {!r}".format(astring,l.strip()),
+                          file=sys.stderr)
+        else:
+            print("Bad line {!r} in private hosts file".format(l.strip()), file=sys.stderr)
+    return alist
+
+privhosts = dict()
+def private_host_lookup(name):
+    for addr,names in privhosts.items():
+        if name in names:
+            return addr,names
+def private_addr_lookup(addr):
+    if addr in privhosts.keys():
+        return privhosts[addr]
+
 def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
     gotip = False
     name = name.upper()                   #Traditions
     # First get Chaosnet info - this usually has os and cpu
     info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain)
+    if len(privhosts) > 0:
+        # Check for private hosts info, and add it after DNS data (if any)
+        if re.match("^[0-7]+$",name):
+            a = int(name,8)
+            names = private_addr_lookup(a)
+            if names is not None:
+                if info is None:
+                    info = dict()
+                info['addrs'] = (info['addrs'] if 'addrs' in info.keys() else []) + [a]
+                info['name'] = (info['name'] if 'name' in info.keys() else []) + names
+        else:
+            addrnames = private_host_lookup(name)
+            if addrnames is not None:
+                addr,names = addrnames
+                if info is None:
+                    info = dict()
+                info['addrs'] = (info['addrs'] if 'addrs' in info.keys() else []) + [addr]
+                info['name'] = (info['name'] if 'name' in info.keys() else []) + names
+        if info is not None and 'addrs' in info.keys():
+            # Remove any duplicate addrs, while keeping order
+            info['addrs'] = list(dict.fromkeys(info['addrs']))
     if info is None:
         # Try Internet class
         info = dns_info_for(name, timeout=2, dns_address=dns_address, default_domain=default_domain, rclass="IN")
         if info is not None:
             if info['addrs']:
                 gotip = True
-        else:
+        elif not name.isdigit():
             # Last resort: try gethostbyname_ex - the given DNS server might not serve the IN class to us
             try:
                 hname,aliases,ips = socket.gethostbyname_ex(name)
                 gotip = True
                 info = dict()
-                if hname.lower() != name:
+                if hname.upper() != name:
                     info['name'] = [hname,name]
                 else:
                     info['name'] = [hname]
@@ -78,6 +142,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
                 if debug:
                     print("gethostbyname: {}".format(msg), file=sys.stderr)
     else:
+        
         resp = ["ERROR No such host"]
     return resp
 
@@ -105,6 +170,7 @@ def hostab_server(conn, timeout=2,dns_address=None,default_domain=None):
         finally:
             return
 
+debug = False
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Chaosnet HOSTAB server")
@@ -118,16 +184,20 @@ if __name__ == '__main__':
                             help='DNS timeout in seconds, default 2')
     parser.add_argument("-m",'--maxthreads',default=10,type=int,
                             help='Max number of active threads/connections, default 10')
+    # Another option would be to parse cbridge.conf and look for it
+    parser.add_argument("-p",'--private-hosts',
+                            help='File for private hosts (cf subnet 376)')
     
     args = parser.parse_args()
 
     dns_resolver_address = set_dns_resolver_address(args.dns_server)
 
-    debug = False
     if args.debug:
         debug = True
         print(args, file=sys.stderr)
         print("DNS addr {}".format(dns_resolver_address))
+    if args.private_hosts:
+        privhosts = parse_private_hosts_file(args.private_hosts)
 
     while True:
         try:
