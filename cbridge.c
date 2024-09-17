@@ -814,7 +814,7 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
   // Find proper mychaddr entry if none given
   if (rt->rt_myaddr <= 0) {
     // Should not happen, add_to_routing_table now tries to fill it in.
-    tr->ch_hw_srcaddr = htons(mychaddr_on_net(ntohs(tr->ch_hw_destaddr)));
+    tr->ch_hw_srcaddr = tr->ch_hw_destaddr > 0 ? htons(mychaddr_on_net(ntohs(tr->ch_hw_destaddr))) : htons(mychaddr[0]);
   } else
     tr->ch_hw_srcaddr = htons(rt->rt_myaddr);
 
