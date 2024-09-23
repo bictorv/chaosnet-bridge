@@ -206,6 +206,7 @@ static void cleanup_openssl()
 }
 #endif
 
+// Returns the CN string of the cert - note that this is an internal pointer so make a copy if you need it
 static u_char *
 tls_get_cert_cn(X509 *cert)
 {
@@ -914,6 +915,7 @@ void *tls_connector(void *arg)
 	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
 	      // one day, do something
 	    }
+	    X509_free(ssl_server_cert);
 	    // just sleep and retry - maybe temporary DNS failure?
 	    // @@@@ count the number of times, and warn occasionally
 	    sleep(15);
@@ -929,6 +931,7 @@ void *tls_connector(void *arg)
 	  if (1 || tls_debug || verbose || debug) {
 	    fprintf(stderr, "%%%% Error: TLS server has no CN in cert, for TLS dest %#o\n", td->tls_addr);
 	  }
+	  X509_free(ssl_server_cert);
 	  // close and terminate
 	  SSL_free(ssl);
 	  close(tsock);
@@ -937,6 +940,7 @@ void *tls_connector(void *arg)
 #endif
 	// create tlsdest, fill in stuff
 	update_client_tlsdest(td, server_cn, tsock, ssl);
+	X509_free(ssl_server_cert);
 
 	// Send a SNS pkt to get route initiated (tell server about our Chaos address)
 	// SNS is supposed to be only for existing connections, but we
@@ -1232,7 +1236,7 @@ tls_server(void *v)
 {
   // listen to the specified server port
   tls_tcp_ursock = tcp_bind_socket(SOCK_STREAM, tls_server_port);
-  if (listen(tls_tcp_ursock, 42) < 0) {
+  if (listen(tls_tcp_ursock, SOMAXCONN) < 0) {
     perror("listen (TLS server)");
     exit(1);
   }
@@ -1275,7 +1279,12 @@ tls_server(void *v)
       close(tsock);
       continue;
     }
-    SSL_set_fd(ssl, tsock);
+    if (SSL_set_fd(ssl, tsock) == 0) {
+      fprintf(stderr,"SSL_set_fd failed (server, tsock %d): ", tsock);
+      ERR_print_errors_fp(stderr);
+      close(tsock);
+      continue;
+    }
     int v = 0;
     ERR_clear_error();		/* try to get the latest error below, not some old */
     if ((v = SSL_accept(ssl)) <= 0) {
@@ -1356,6 +1365,7 @@ tls_server(void *v)
 	    else
 	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses, rejecting\n",
 		      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
+	    X509_free(ssl_client_cert);				
 	    SSL_free(ssl);
 	    close(tsock);
 	    continue;
@@ -1367,6 +1377,7 @@ tls_server(void *v)
 		    ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
 	  }
 	  // close and wait for more
+	  X509_free(ssl_client_cert);				
 	  SSL_free(ssl);
 	  close(tsock);
 	  continue;
@@ -1383,6 +1394,7 @@ tls_server(void *v)
 	}
 	// create tlsdest, fill in stuff
 	add_server_tlsdest(client_cn, tsock, ssl, (struct sockaddr *)&caddr, clen, client_chaddr);
+	X509_free(ssl_client_cert);				
     } else {
       // no cert
       if (tls_debug) {
