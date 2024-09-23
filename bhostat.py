@@ -78,11 +78,19 @@ def host_name(addr, timeout=2):
 # Oxymoron ("simple" means "datagram" in Chaosnet lingo), but here it means:
 # given a host and contact, copy its output until EOF
 class SimpleStreamProtocol:
+    timeout = None
     def __init__(self,host,contact,options=None,args=[]):
+        if options is not None and 'timeout' in options.keys():
+            self.timeout = options['timeout']
         self.conn = StreamConn()
         self.conn.connect(host,contact,options=options,args=args)
     def copy_until_eof(self):
-        self.conn.copy_until_eof()
+        try:
+            if self.timeout is not None:
+                self.conn.sock.settimeout(self.timeout)
+            self.conn.copy_until_eof()
+        except socket.timeout as m:
+            raise ChaosError(m)
 
 # Implement methods for header, printer (of each ANS received) and nonprinter (to print e.g. free lispms)
 # If the printer methods returns False, the data is assumed non-printed and passed to the nonprinter at the end.
@@ -95,16 +103,19 @@ class SimpleProtocol:
         snargs = list(filter(lambda x: isinstance(x,int) and x < 0o400,subnets))
         hargs = list(filter(lambda x: not(isinstance(x,int) and x < 0o400),subnets))
         hdr = self.header() if callable(getattr(self.__class__,'header',None)) else None
+        ftr = self.footer() if callable(getattr(self.__class__,'footer',None)) else None
         prtr = self.printer if callable(getattr(self.__class__,'printer',None)) else None
         nprtr = self.nonprinter if callable(getattr(self.__class__,'nonprinter',None)) else None
         s = None
         # First do unicast, if any
         if len(hargs) > 0:
-            s = Simple(hargs,self.contact,options=options,header=hdr,printer=prtr,nonprinter=nprtr)
+            s = Simple(hargs,self.contact,options=options,header=hdr,footer=ftr,printer=prtr,nonprinter=nprtr)
         # then do broadcast, if any
         if len(snargs) > 0:
             # Avoid printing the header twice and repeating unicast hosts in the broadcast results
-            BroadcastSimple(snargs,self.contact,options=options,header=hdr if s is None or s.hdr_printed is False else None,
+            BroadcastSimple(snargs,self.contact,options=options,
+                                header=hdr if s is None or s.hdr_printed is False else None,
+                                footer=ftr,
                                 printer=prtr,nonprinter=nprtr,
                                 already_printed=None if s is None else s.printed_sources)
 
@@ -113,7 +124,7 @@ class Status(SimpleProtocol):
     contact = "STATUS"
     def header(self):
         return ("{:<25s}{:>6s} "+"{:>8} "*8).format("Name","Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected")
-    def printer(self,src,data):
+    def parse_status_data(self,src,data):
         # First is the name of the node
         # BGDFAX pads with spaces (instead of nulls)
         hname = str(data[:32].rstrip(b'\x00 '),'ascii')
@@ -137,6 +148,9 @@ class Status(SimpleProtocol):
                 fstart += 4+flen*2
         except AssertionError:
             print('{} value error at {}: {!r}'.format(hname,fstart,data[fstart:]))
+        return hname,statuses
+    def printer(self,src,data):
+        hname,statuses = self.parse_status_data(src,data)
         # Now print it
         if " " in hname and not no_host_names:
             # This must be a "pretty name", so find the DNS name if possible
