@@ -106,7 +106,7 @@ class NCPConn:
             self.sock.connect(address)
             return self.sock
         except socket.error as msg:
-            raise ChaosSocketError("Error opening Chaosnet socket: {} - Is the Chaosnet bridge running?".format(msg))
+            raise ChaosSocketError("Error opening Chaosnet socket {}: {} - Is the Chaosnet bridge running?".format(address,msg))
 
     def send_socket_data(self, data):
         try:
@@ -454,7 +454,7 @@ class Simple:
     # To support chaining with broadcast
     hdr_printed = False
     printed_sources = []
-    def __init__(self, hnames, contact, args=[], options=None, header=None, printer=None, nonprinter=None, already_printed=None):
+    def __init__(self, hnames, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None):
         if already_printed is not None:
             self.printed_sources = already_printed
         # Accept a list of host names to contact
@@ -481,6 +481,8 @@ class Simple:
                     return None
             except socket.error:
                 pass
+        if footer and self.hdr_printed:
+            print(footer)
         if nonprinter is not None and len(nonprinted) > 0:
             # At the end, maybe print those not printed earlier
             nonprinter(nonprinted)
@@ -499,6 +501,8 @@ class Simple:
             return None, None
         elif opc == Opcode.FWD:
             dest = data[0] + data[1]*256
+            if debug:
+                print("FWD received: use host {:o} contact {}".format(dest,str(data[2:],"ascii")), file=sys.stderr)
             # This should be a separate exception so it can be handled, and FWD should be detected in other places too.
             raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} contact {}".format(self.hname, dest, str(data[2:],"ascii")))
         else:
@@ -510,7 +514,7 @@ class BroadcastSimple:
     # To support chaining with unicast
     hdr_printed = False
     printed_sources = []
-    def __init__(self, subnets, contact, args=[], options=None, header=None, printer=None, nonprinter=None, already_printed=None):
+    def __init__(self, subnets, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None):
         nonprinted = []
         if already_printed is not None:
             self.printed_sources = already_printed
@@ -524,6 +528,8 @@ class BroadcastSimple:
             if not printer(src,data):
                 # Save this if it wasn't printed now (e.g. Free lispm)
                 nonprinted.append([src,data])
+        if footer and self.hdr_printed:
+            print(footer)
         # At the end, maybe print those not printed earlier
         if nonprinter is not None:
             nonprinter(nonprinted)
