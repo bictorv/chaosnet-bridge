@@ -1,5 +1,6 @@
 -- Chaosnet dissector for Wireshark, based on AMS hack for Chaos-over-UDP
 -- Install in ~/.config/wireshark/plugins (for Linux or macOS).
+-- or ~/.local/lib/wireshark/plugins.
 
 -- To show Chaosnet packets on Ethernet
 -- sudo tshark -O chaos ether proto 0x804
@@ -69,6 +70,27 @@ function chudp.dissector(tvbuf, pinfo, tree)
    ch:call(tv, pinfo, tree)
 end
 
+-- swap a big-endian TVB to be a little-endian, to show strings etc
+function swap_tv(intv,pklen)
+   local outarr = ByteArray.new()
+   local inarr,inlen = intv:bytes()
+   if inarr == nil or inlen == nil then
+      return intv
+   end
+   local minlen = math.min(pklen,inlen)
+   outarr:set_size(minlen)
+   -- first swap all the even bytes
+   for i=0,minlen-2,2 do
+      outarr:set_index(i, inarr:get_index(i+1))
+      outarr:set_index(i+1, inarr:get_index(i))
+   end
+   -- then maybe the last
+   if minlen % 2 == 1 then
+      outarr:set_index(minlen-1, inarr:get_index(minlen))
+   end
+   return ByteArray.tvb(outarr,"swapped"):range()
+end
+
 function chaos.dissector(tvb, pinfo, tree)
    local bendian = false
    -- It would be nice to just call this with fourth arg true if Chaos-over-UDP case (big-endian),
@@ -136,12 +158,18 @@ function chaos.dissector(tvb, pinfo, tree)
       local data_tree = subtree:add(tvb(CHAOS_HDR_LEN, data_count), "Window management data")
       local rcpt = bendian and tvb:range(CHAOS_HDR_LEN, 2):uint() or tvb:range(CHAOS_HDR_LEN, 2):le_uint()
       local wind = bendian and tvb:range(CHAOS_HDR_LEN+2, 2):uint() or tvb:range(CHAOS_HDR_LEN+2, 2):le_uint()
-      data_tree:add(tvb(CHAOS_HDR_LEN, 4), "Receipt pkt "..rcpt..", window size "..wind)
+      data_tree:add(tvb(CHAOS_HDR_LEN, 4), "Receipt pkt "..string.format("%#04x",rcpt)..", window size "..wind)
    else
       local repr
       local truncated = data_count > 64 and "..." or ""
       if opcode == 1 or opcode == 3 or opcode == 9 then		-- RFC or CLS or LOS
-	 local s = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated..(bendian and " [BE]" or "")
+	 local s0
+	 if bendian then
+	    s0 = swap_tv(tvb(CHAOS_HDR_LEN, math.min(data_count+(data_count%2), 64)),data_count):string()
+	 else
+	    s0 = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()
+	 end
+	 local s = s0..truncated..(bendian and " [BE]" or "")
 	 repr = "String ("..data_count.."): " .. s
 	 pinfo.cols.info:append(" "..s)
       elseif opcode == 14 then	-- BRD
@@ -150,7 +178,12 @@ function chaos.dissector(tvb, pinfo, tree)
 	 local subs = tvb(CHAOS_HDR_LEN, ackn) -- subnet mask is here
 	 local nn,n = parse_subnet_mask(subs,ackn) -- parse it, get number of nets and a list of them
 	 -- contact name
-	 local contact = tvb(CHAOS_HDR_LEN+ackn,data_count-ackn):string()..(bendian and " [BE]" or "")
+	 local contact
+	 if bendian then
+	    contact = swap_tv(tvb(CHAOS_HDR_LEN+ackn,data_count+(data_count%2)-ackn),data_count-ackn):string().." [BE]"
+	 else
+	    contact = tvb(CHAOS_HDR_LEN+ackn,data_count-ackn):string()
+	 end
 	 local ns
 	 if nn > 5 then
 	    ns = n[1].." to "..((#n)-1) -- if many, only give range (zero-based)
@@ -162,7 +195,13 @@ function chaos.dissector(tvb, pinfo, tree)
       else
 	 -- Show it as a string if it is DAT
 	 if opcode >= 128 and opcode < 192 then
-	    repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()..truncated
+	    local s0
+	    if bendian then
+	       s0 = swap_tv(tvb(CHAOS_HDR_LEN, math.min(data_count+(data_count%2), 64)),data_count):string()
+	    else
+	       s0 = tvb(CHAOS_HDR_LEN, math.min(data_count, 64)):string()
+	    end
+	    repr = "Data ("..data_count.."): " .. s0 ..truncated
 	 else
 	    repr = "Data ("..data_count.."): " .. tvb(CHAOS_HDR_LEN, math.min(data_count, 64))..truncated
 	 end
