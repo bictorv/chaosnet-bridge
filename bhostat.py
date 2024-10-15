@@ -88,7 +88,7 @@ class SimpleStreamProtocol:
         try:
             if self.timeout is not None:
                 self.conn.sock.settimeout(self.timeout)
-            self.conn.copy_until_eof()
+            return self.conn.copy_until_eof()
         except socket.timeout as m:
             raise ChaosError(m)
 
@@ -248,13 +248,17 @@ class ChaosLoadName(SimpleProtocol):
                 return False
             # Print a header to show what's about to happen
             print("[{:s}]".format(hname))
+            nout = 0
             try:
                 s = SimpleStreamProtocol(hname,"NAME",options=self.options)
-                s.copy_until_eof()
+                nout = s.copy_until_eof()
             except ChaosError as msg:
                 if debug:
                     print(msg, file=sys.stderr)
                 return False
+            # In case there was a response to LOAD, but nothing from NAME, give *some* info.
+            if nout == 0:
+                print("Users: {}".format(n))
             return True
         elif debug:
             print("Can't parse LOAD output from {}: {!r}".format(src,data), file=sys.stderr)

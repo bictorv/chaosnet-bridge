@@ -281,24 +281,27 @@ class PacketConn(NCPConn):
             return data + self.get_message(dlen-len(data))
 
     def copy_until_eof(self):
+        # Returns the number of bytes printed
+        nprinted = 0
         while True:
             opc, data = self.get_packet()
             if opc == Opcode.CLS:
                 self.close()
-                return None
+                return nprinted
             elif opc == Opcode.LOS:
                 raise LOSError("LOS: {}".format(str(data,"ascii")))
             elif opc == Opcode.EOF:
                 # raise EOFError("{} got EOF: {}".format(self,data))
-                return None
+                return nprinted
             # @@@@ handle ANS too?
             elif opc != Opcode.DAT:
                 raise UnexpectedOpcode("Unexpected opcode {}".format(opc))
                 return None
             else:
+                nprinted += len(data)
                 # Translate to Unix
                 out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
-                print("{!s}".format(out), end='' if out[-1] not in [0o215,0o212,0o15,0o12] else None)
+                print("{!s}".format(out), end='' if out[-1] not in [0o215,0o212,0o15,0o12] and nprinted>0 else None)
 
 # For simple broadcast protocols
 # Iterator gives source address and data for each ANS
@@ -430,15 +433,18 @@ class StreamConn(NCPConn):
         return data
 
     def copy_until_eof(self):
+        # Returns the number of bytes printed
+        nprinted = 0
         cmap = { 0o211: 0o11, 0o215: 0o12, 0o212: 0o15 }
         last = None
         while True:
             data = self.get_bytes(488)
             if len(data) == 0:
-                if last not in [0o215,0o212,0o15,0o12]:
+                if last not in [0o215,0o212,0o15,0o12] and nprinted > 0:
                     # finish with a fresh line
                     print("")
-                return None
+                return nprinted
+            nprinted += len(data)
             for c in data:
                 last = c
                 # translate
