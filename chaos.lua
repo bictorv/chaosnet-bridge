@@ -70,13 +70,13 @@ function chudp.dissector(tvbuf, pinfo, tree)
    ch:call(tv, pinfo, tree)
 end
 
--- swap a big-endian TVB to be a little-endian, to show strings etc
+-- swap a big-endian TVBrange to be a little-endian, to show strings etc
 function swap_tv(intv,pklen)
-   local outarr = ByteArray.new()
    local inarr,inlen = intv:bytes()
-   if inarr == nil or inlen == nil then
+   if inarr == nil or inlen == nil or inlen == 0 then
       return intv
    end
+   local outarr = ByteArray.new()
    local minlen = math.min(pklen,inlen)
    outarr:set_size(minlen)
    -- first swap all the even bytes
