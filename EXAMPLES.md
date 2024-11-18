@@ -98,6 +98,64 @@ Also make sure the local main cbridge has enabled the chudp server (which is lik
 
 **Please note** that you should only use UDP or IP links for local non-routed networks (like 10.x.y.z, 192.168.x.y etc). (To avoid making you paranoid, I won't mention the [zero trust](https://en.wikipedia.org/wiki/Zero_trust_security_model) model. If I did, you'd need TLS and certificates.)
 
+## Example: CADR/usim
+
+To connect your [usim](https://tumbleweed.nu/r/usim/doc/trunk/README.md) emulator to cbridge, you need to do the following. These are not always full examples and not fully explained, so please note that you also need to read the documentation of usim and cbridge and quite possibly also [the Lisp Machine Manual](https://tumbleweed.nu/r/lm-3/uv/chinual.html).
+
+If you are not connected to the Global Chaosnet, you should use addresses on the private non-routed network 376 (octal), i.e. addresses 177001-177377.
+
+### hosts.text
+
+You need a Chaosnet host table (in a file named e.g. `hosts.text`). An example file for a local network could be this.
+
+	HOST LOCAL-BRIDGE,	CHAOS 177001,SERVER,UNIX,VAX,[BRIDGE]
+	HOST LOCAL-CADR,	CHAOS 177041,USER,LISPM,LISPM,[CADR,LISPM]
+
+You can of course change LOCAL-BRIDGE and LOCAL-CADR to something more personal. The last bracket contains aliases, which are typically shorter.
+
+Such a file is used by both usim (the emulator) and the Lisp Machine system on the emulated CADR, where it lives in `SYS:SITE;HOSTS.TEXT`.
+
+### In usim.ini
+
+  - `hosts=hosts.text` where `hosts.text` is a Chaosnet host table which has entries for at least your usim/CADR machine and the cbridge (see above).
+  - `myname=`*myname* where *myname* is your host name in the hosts file, such as `LOCAL-CADR`.
+  - `backend=udp` (or `backend=hybrid`) to be able to connect to cbridge.
+  - `bridgeip=`*ipaddr* where *ipaddr* is the IP address of your cbridge (e.g. 127.0.0.1 if you are running usim and cbridge on the same machine).
+  - `bridgechaos=`*chaosaddr* where *chaosaddr* is the Chaosnet address of your cbridge, e.g. 177001.
+  - `bridgeport=`*portnr* where *portnr* is the UDP port used on your cbridge. This is needed only if you use a port other than 42042, the default.
+  - `bridgeport_local`=*portnr* where *portnr* is the UDP port to be used by usim. This is needed only if you need to use a port other than 42042, the default, e.g. if usim and cbridge are running on the same machine. A popular choice is 42043.
+  
+### In cbridge.conf
+
+This example is for running a local network, with the usim on the same machine. If you are running usim on another machine, change the address 127.0.0.1 appropriately.
+
+	; The name of your cbridge on Chaosnet
+	myname MyGW
+	; The chaosnet address of your cbridge
+	chaddr 177001
+	; Listen to Chaos-over-UDP on the standard port
+	chudp 42042
+	; Set up a firewall to protect the CADR
+	firewall enabled yes log on rules cbridge-rules.conf
+	; Set up the chaos-over-udp link to the CADR
+	link chudp 127.0.0.1:42043 host 177041 myaddr 177001
+
+For the firewall rules, I recommend something like this as a start. It protects the most sensitive servers from remote access outside your local network. I **strongly recommend** that you add the firewall setting even if you are only using a local network for now, since it's easy to forget if you at some point would join the Global Chaosnet. See [the firewall doc](FIREWALL.md) for more info.
+
+	; Allow these protocols only on the local network.
+	; Allow use of the EVAL server from local nets. This allows the remote end to do absolutely anything.
+	"EVAL" from localnet allow
+	; Protect the FILE server on your CADR (if you start one) so others can't change/delete your local files
+	"FILE" from localnet allow
+	; Protect the REMOTE-DISK and BAND-TRANSFER servers, so others can't change your disk
+	"REMOTE-DISK" from localnet allow
+	"BAND-TRANSFER" from localnet allow
+	; Reject them from anyone else
+	"EVAL" from any reject
+	"FILE" from any reject
+	"REMOTE-DISK" from any reject
+	"BAND-TRANSFER" from any reject
+
 ## Example: MX-11
 
 A different example is the (historical) config for MX-11 (aka router.chaosnet.net). (It has long been superseded by MX12, with a more complex config.)
