@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2021-2024 Björn Victor (bjorn@victor.se)
 # A little test program which sends a string of bytes (the one used by
 # BABEL) to an ECHO server and checks that the response is right, or

@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2020 Björn Victor (bjorn@victor.se)
 # Chaosnet client for FILE protocol
 # Demonstrates the Packet API for the NCP of cbridge, the bridge program for various Chaosnet implementations.

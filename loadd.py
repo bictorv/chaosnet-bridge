@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright © 2022-2024 Björn Victor (bjorn@victor.se)
 # Chaosnet server for LOAD protocol, mainly used by ITS.
 # This is a simple protocol with returns a string a'la "Fair Share: X%\r\nUsers: N."
