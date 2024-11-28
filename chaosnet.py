@@ -63,6 +63,12 @@ class Opcode(IntEnum):
     AMARK = 0o202                       # asynchronous mark
     DWD = 0o300
 
+def opcode_name(code):
+    try:
+        return Opcode(code).name
+    except ValueError:
+        return "{:o}".format(code)
+
 class NCPConn:
     sock = None
     active = False
@@ -165,7 +171,7 @@ class PacketConn(NCPConn):
 
     def send_packet(self, opc, data=None):
         if debug:
-            print(">>> {} len {}".format(Opcode(opc).name, len(data) if data is not None else 0), file=sys.stderr)
+            print(">>> {} len {}".format(opcode_name(opc), len(data) if data is not None else 0), file=sys.stderr)
         if data is None:
             self.send_socket_data(self.packet_header(opc, 0))
         else:
@@ -188,7 +194,7 @@ class PacketConn(NCPConn):
             # @@@@ NOTE BUG: when both client and server are using NCP on same host, the EOF isn't ACKed!
             opc,ack = self.get_packet()
             if opc != Opcode.ACK:
-                raise UnexpectedOpcode("in {}: Expected ACK after EOF[wait], got {}".format(self,Opcode(opc).name))
+                raise UnexpectedOpcode("in {}: Expected ACK after EOF[wait], got {}".format(self,opcode_name(opc)))
         else:
             self.send_packet(Opcode.EOF)
 
@@ -212,7 +218,7 @@ class PacketConn(NCPConn):
         else:
             assert(length <= 488)
         if debug:
-            print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
+            print("< {} {} {}".format(self,opcode_name(opc), length), file=sys.stderr)
         return opc, self.get_bytes(length)
 
     def listen(self, contact):
@@ -222,7 +228,7 @@ class PacketConn(NCPConn):
         self.send_packet(Opcode.LSN,bytes(contact,"ascii"))
         op,data = self.get_packet()
         if debug:
-            print("{}: {}".format(Opcode(op).name,data), file=sys.stderr)
+            print("{}: {}".format(opcode_name(op),data), file=sys.stderr)
         if op == Opcode.RFC or op == Opcode.BRD: # BRD is supposed to be translated to RFC!
             hostandargs = str(data,"ascii").split(" ",maxsplit=1)
             self.remote = hostandargs[0]
@@ -231,7 +237,7 @@ class PacketConn(NCPConn):
         elif op == Opcode.LOS:
             raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
-            raise UnexpectedOpcode("Expected RFC: {}".format(Opcode(op).name))
+            raise UnexpectedOpcode("Expected RFC: {}".format(opcode_name(op)))
 
     def connect(self, host, contact, args=[], options=None, simple=False):
         h = bytes(("{} {}"+" {}"*len(args)).format("{:o}".format(host) if type(host) is int else host,contact.upper(),*args),"ascii")
@@ -255,7 +261,7 @@ class PacketConn(NCPConn):
         elif opc == Opcode.LOS:
             raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
-            raise UnexpectedOpcode("Expected OPN, got {}".format(Opcode(opc).name))
+            raise UnexpectedOpcode("Expected OPN, got {}".format(opcode_name(opc)))
 
     def get_message(self, dlen=488, partialOK=False):
         opc, data = self.get_packet()
@@ -344,11 +350,11 @@ class BroadcastConn(PacketConn):
         elif opc == Opcode.LOS or opc == Opcode.CLS:
             # LOS from cbridge after BRD time-outs, CLS from buggy BSD
             if debug:
-                print("Got {}: {}".format(Opcode(opc).name, data), file=sys.stderr)
+                print("Got {}: {}".format(opcode_name(opc), data), file=sys.stderr)
             # just ignore it.
             raise StopIteration
         else:
-            raise UnexpectedOpcode("Got unexpected {} len {}: {}".format(Opcode(opc).name, len(data) if data is not None else 0, data))
+            raise UnexpectedOpcode("Got unexpected {} len {}: {}".format(opcode_name(opc), len(data) if data is not None else 0, data))
 
 class StreamConn(NCPConn):
     def __init__(self):
@@ -356,7 +362,7 @@ class StreamConn(NCPConn):
         super().__init__()
 
     def send_data(self, data):
-        # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
+        # print("send pkt {} {} {!r}".format(opcode_name(opcode), type(data), data))
         if isinstance(data, str):
             msg = bytes(data,"ascii")
         else:
@@ -512,7 +518,7 @@ class Simple:
             # This should be a separate exception so it can be handled, and FWD should be detected in other places too.
             raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} contact {}".format(self.hname, dest, str(data[2:],"ascii")))
         else:
-            raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(Opcode(opc).name, self.hname, data))
+            raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(opcode_name(opc), self.hname, data))
 
 # Given subnets, contact, options, header, and a printer (taking ANS as arg),
 # broadcast and then iterate printer over responses, filtering previously received ones
