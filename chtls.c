@@ -671,7 +671,7 @@ static int tcp_server_accept(int sock, struct sockaddr_storage *saddr, u_int *sa
     perror("accept");
     fprintf(stderr,"errno = %d\n", errno);
     // @@@@ better error handling, back off and try again? what could go wrong here?
-    exit(1);
+    abort();
   }
   // @@@@ log stuff about the connection?
   if (tls_debug) {
@@ -690,7 +690,7 @@ static int tcp_bind_socket(int type, u_short port)
 
   if ((sock = socket(do_tls_ipv6 ? AF_INET6 : AF_INET, type, 0)) < 0) {
     perror("socket (TCP) failed");
-    exit(1);
+    abort();
   }
   // @@@@ SO_REUSEADDR or SO_REUSEPORT
   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
@@ -714,7 +714,7 @@ static int tcp_bind_socket(int type, u_short port)
     memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
     if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
       perror("bind(v6) failed");
-      exit(1);
+      abort();
     }
   } else {
     struct sockaddr_in sin;
@@ -724,7 +724,7 @@ static int tcp_bind_socket(int type, u_short port)
     sin.sin_addr.s_addr = INADDR_ANY;
     if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
       perror("bind() failed");
-      exit(1);
+      abort();
     }
   }
   return sock;
@@ -746,7 +746,7 @@ static int tcp_client_connect(struct sockaddr *sin)
 			    (sin->sa_family == AF_INET6 ? "IPv6" : "??")));
     if ((sock = socket(sin->sa_family, SOCK_STREAM, 0)) < 0) {
       perror("socket(tcp)");
-      exit(1);
+      abort();
     }
     
     if (tls_debug) {
@@ -870,7 +870,7 @@ void *tls_connector(void *arg)
 #if 0
       // or just let this thread die?
       pthread_exit(&(int){ 1 });
-      exit(1);
+      abort();
       // don't just keep trying!
       // continue;
 #endif
@@ -1044,7 +1044,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       perror("pthread_mutex_lock(reconnect)");
     if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
       perror("tls_please_reopen_tcp(cond)\n");
-      exit(1);
+      abort();
     } 
     if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
       perror("pthread_mutex_unlock(reconnect)");
@@ -1060,11 +1060,11 @@ static void tls_wait_for_reconnect_signal(struct tls_dest *td)
   pthread_mutex_lock(&td->tcp_reconnect_mutex);
   if (pthread_cond_wait(&td->tcp_reconnect_cond, &td->tcp_reconnect_mutex) < 0) {
     perror("tls_wait_for_reconnect_signal(cond)");
-    exit(1);
+    abort();
   }
   if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)  {
     perror("tls_wait_for_reconnect_signal(unlock)");
-    exit(1);
+    abort();
   }
   if (tls_debug)
     fprintf(stderr,"wait_for_reconnect_signal done\n");
@@ -1078,11 +1078,11 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 
   if (len > 0xffff) {
     fprintf(stderr,"tls_write_record: too long: %#x  > 0xffff\n", len);
-    exit(1);
+    abort();
   }
   if (len > CBRIDGE_TCP_MAXLEN) {
     fprintf(stderr,"tcp_write_record: too long: %#x > %#x\n", len, (u_int)CBRIDGE_TCP_MAXLEN);
-    exit(1);
+    abort();
   }
 
   u_char obuf[CBRIDGE_TCP_MAXLEN+2];
@@ -1238,7 +1238,7 @@ tls_server(void *v)
   tls_tcp_ursock = tcp_bind_socket(SOCK_STREAM, tls_server_port);
   if (listen(tls_tcp_ursock, SOMAXCONN) < 0) {
     perror("listen (TLS server)");
-    exit(1);
+    abort();
   }
 
   // make sure other threads are waiting
@@ -1257,7 +1257,7 @@ tls_server(void *v)
     if ((tsock = tcp_server_accept(tls_tcp_ursock, &caddr, &clen)) < 0) {
       perror("accept (TLS server)");
       // @@@@ what could go wrong here?
-      exit(1);
+      abort();
     }
     if (strlen(tls_crl_file) > 0) {
       // Validate the CRL file. If it has expired, don't open the connection since validation will fail anyway.

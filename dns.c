@@ -95,7 +95,7 @@ dns_responder(u_char *rfc, int len)
       return;
     } else {
       perror("sem_trywait(dns responder)");
-      exit(1);
+      abort();
     }
   }
 
@@ -117,7 +117,7 @@ dns_responder(u_char *rfc, int len)
   u_char *req = malloc(qlen);
   if (req == NULL) {
     perror("malloc(dns responder)");
-    exit(1);
+    abort();
   }
   // PDP11 swap
   ntohs_buf((u_short *)data, (u_short *)req, qlen);
@@ -131,7 +131,7 @@ dns_responder(u_char *rfc, int len)
   // tell forwarder to get going
   if (sem_post(dns_thread_readerp) < 0) {
     perror("sem_post(dns responder)");
-    exit(1);
+    abort();
   }
 }
 
@@ -247,7 +247,7 @@ dns_forwarder_thread(void *v)
     // wait for someting to do
     if (sem_wait(dns_thread_readerp) < 0) {
       perror("sem_wait(dns forwarder)");
-      exit(1);
+      abort();
     }
 
     PTLOCKN(dns_lock,"dns_lock");
@@ -652,7 +652,7 @@ init_chaos_dns_state(res_state statp)
   // initialize resolver library
   if (res_ninit(statp) < 0) {
     fprintf(stderr,"Can't init statp\n");
-    exit(1);
+    abort();
   }
   // make sure to make recursive requests
   statp->options |= RES_RECURSE;
@@ -686,20 +686,20 @@ init_chaos_dns(int do_forwarding)
     // no support for "anonymous" semaphores
     if ((dns_thread_readerp = sem_open("/cbridge-dns-reader", O_CREAT, S_IRWXU, 0)) < 0) {
       perror("sem_open(/cbridge-dns-reader)");
-      exit(1);
+      abort();
     }
     if ((dns_thread_writerp = sem_open("/cbridge-dns-writer", O_CREAT, S_IRWXU, CHREQ_MAX)) < 0) {
       perror("sem_open(/cbridge-dns-writer)");
-      exit(1);
+      abort();
     }
 #else
     if (sem_init(&dns_thread_reader, 0, 0) < 0) {
       perror("sem_init(dns reader)");
-      exit(1);
+      abort();
     }
     if (sem_init(&dns_thread_writer, 0, CHREQ_MAX) < 0) {
       perror("sem_init(dns writer)");
-      exit(1);
+      abort();
     }
     dns_thread_readerp = &dns_thread_reader;
     dns_thread_writerp = &dns_thread_writer;
@@ -857,19 +857,19 @@ dns_show_section(int sect, ns_msg m)
     if (ns_parserr(&m, sect, i, &rr) < 0) {
       perror("ns_parserr");
       return;
-      //exit(1);
+      //abort();
     }
     if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_a) && (ns_rr_class(rr) == ns_c_chaos)) {
       // Expand the address domain
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0) {
 	perror("dn_expand");
-	exit(1);
+	abort();
       }
       // and get the address
       if ((a_addr = ns_get16(ns_rr_rdata(rr)+offs)) < 0) {
 	perror("ns_get16");
 	return;
-	//exit(1);
+	//abort();
       }
       printf(" %d: %s addr domain %s, addr %#o\n", i, ns_rr_name(rr), a_dom, a_addr);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_a) && (ns_rr_class(rr) == ns_c_in)) {
@@ -880,7 +880,7 @@ dns_show_section(int sect, ns_msg m)
       // Expand the domain
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0) {
 	perror("dn_expand");
-	exit(1);
+	abort();
       }
       printf(" %d: %s %s %s\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_rp)) {
@@ -888,13 +888,13 @@ dns_show_section(int sect, ns_msg m)
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&a_dom, sizeof(a_dom))) < 0) {
 	perror("dn_expand");
 	return;
-	//exit(1);
+	//abort();
       }
       // Expand the txt domain
       if ((offs = dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr)+offs, (char *)&b_dom, sizeof(b_dom))) < 0) {
 	perror("dn_expand");
 	return;
-	//exit(1);
+	//abort();
       }
       printf(" %d: %s %s %s \"%s\"\n", i, ns_rr_name(rr), p_type(ns_rr_type(rr)), a_dom, b_dom);
     } else if ((ns_rr_rdlen(rr) > 0) && (ns_rr_type(rr) == ns_t_hinfo)) {

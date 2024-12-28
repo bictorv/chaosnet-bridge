@@ -134,7 +134,7 @@ parse_ncp_config_line()
       for (sp = tok, ep = index(tok, ','); ep != NULL; sp = ep+1, ep = index(ep+1, ',')) {
 	// look for comma-separated domain list
 	chaos_domains = realloc(chaos_domains, (number_of_chaos_domains+1) * sizeof(char *));
-	if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); exit(1); }
+	if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); abort(); }
 	*ep = '\0';
 	if (strlen(sp) == 0) {
 	  fprintf(stderr,"Syntax error in \"domain\" setting - empty domain\n");
@@ -148,7 +148,7 @@ parse_ncp_config_line()
 	return -1;
       }
       chaos_domains = realloc(chaos_domains, (number_of_chaos_domains+1) * sizeof(char *));
-      if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); exit(1); }
+      if (chaos_domains == NULL) { perror("realloc(chaos_domains)"); abort(); }
       chaos_domains[number_of_chaos_domains++] = strdup(sp);
 #endif
     } else if (strcmp(tok,"retrans") == 0) {
@@ -417,12 +417,12 @@ make_named_socket(int socktype, char *path, conntype_t conntype)
       if (ncp_debug) fprintf(stderr,"stat(%s) successful, trying to connect\n", local.sun_path);
       if ((sock = socket(AF_UNIX, socktype, 0)) < 0) {
 	perror("socktype(AF_UNIX)");
-	exit(1);
+	abort();
       }
       if (connect(sock, (struct sockaddr *)&local, slen) == 0) {
 	fprintf(stderr,"?? Warning: server socket \"%s\" already exists and is active - avoid running two cbridge processes!\n",
 		local.sun_path);
-	exit(1);
+	abort();
       } else if (ncp_debug) {
 	fprintf(stderr,"Info: connect to \"%s\": %s\n", local.sun_path, strerror(errno));
       }
@@ -434,7 +434,7 @@ make_named_socket(int socktype, char *path, conntype_t conntype)
     // it didn't respond, try removing it
     if (unlink(local.sun_path) < 0) {
       fprintf(stderr,"?? failed to unlink \"%s\": %s\n", local.sun_path, strerror(errno));
-      exit(1);
+      abort();
     } else if (ncp_debug) 
       fprintf(stderr,"NCP unlinked old socket file %s\n", local.sun_path);
   } else if (ncp_debug)
@@ -443,19 +443,19 @@ make_named_socket(int socktype, char *path, conntype_t conntype)
   
   if ((sock = socket(AF_UNIX, socktype, 0)) < 0) {
     perror("?? socket(AF_UNIX)");
-    exit(1);
+    abort();
   }
   slen = strlen(local.sun_path)+ 1 + sizeof(local.sun_family);
   if (bind(sock, (struct sockaddr *)&local, slen) < 0) {
     perror("?? bind(local)");
-    exit(1);
+    abort();
   }
   if (chmod(local.sun_path, 0777) < 0)
     perror("?? chmod(local, 0777)"); // @@@@ configurable?
   if (socktype == SOCK_STREAM) {
     if (listen(sock, 25) < 0) {	// @@@@ random limit
       perror("?? listen(local)");
-      exit(1);
+      abort();
     }
   }
   // Set low socket buffer sizes to make windows matter more.
@@ -472,11 +472,11 @@ make_named_socket(int socktype, char *path, conntype_t conntype)
 
   // no signal, just error, please!
 #ifdef F_SETNOSIGPIPE
-  if (fcntl(sock, F_SETNOSIGPIPE, 1) == -1)  { perror("fcntl(pipe)"); exit(1); }
+  if (fcntl(sock, F_SETNOSIGPIPE, 1) == -1)  { perror("fcntl(pipe)"); abort(); }
 #else
 #ifdef SO_NOSIGPIPE
   int set = 1;
-  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int)) < 0) { perror("setsockopt(pipe)"); exit(1); }
+  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int)) < 0) { perror("setsockopt(pipe)"); abort(); }
 #else
 #ifndef MSG_NOSIGNAL
   #warn No way to disable SIGPIPE
@@ -641,7 +641,7 @@ make_conn(conntype_t ctype, int sock, struct sockaddr_un *sa, int sa_len)
 
   if ((cs == NULL)||(read_pkts == NULL)||(received_pkts_ooo==NULL)||(send_pkts==NULL)) {
     perror("?? malloc(make_conn)");
-    exit(1);
+    abort();
   }
 
   cs->pktnum_made_highest = make_fresh_index(); // initialize
@@ -954,7 +954,7 @@ make_listener(struct conn *c, u_char *contact)
   struct listener *l = (struct listener *)malloc(sizeof(struct listener));
   if (l == NULL) {
     perror("?? malloc(make_listener)");
-    exit(1);
+    abort();
   }
   int len = strlen((char *)contact);
   if (len > MAX_CONTACT_NAME_LENGTH) len = MAX_CONTACT_NAME_LENGTH;
@@ -1168,7 +1168,7 @@ make_pkt_from_conn(int opcode, struct conn *c, u_char *pkt)
     break;
   case CHOP_LSN:
     fprintf(stderr,"making LSN packet doesn't make sense\n");
-    exit(1);
+    abort();
   }
   set_ch_nbytes(ch, pklen);
 
@@ -1772,7 +1772,7 @@ add_private_host(char *name, u_short addr)
   x = realloc(private_hosts, (number_of_private_hosts + 1) * sizeof(struct private_host_addr));
   if (x == NULL) {
     fprintf(stderr, "Out of memory for private host table.\n");
-    exit(1);
+    abort();
   }
   private_hosts = x;
   private_hosts[number_of_private_hosts].name = strdup(name);
@@ -1919,7 +1919,7 @@ parse_contact_name(u_char *in)
     i++;
   }
   copy = calloc(1, i+1);
-  if (copy == NULL) { fprintf(stderr,"calloc failed (parse_contact_name)\n"); exit(1); }
+  if (copy == NULL) { fprintf(stderr,"calloc failed (parse_contact_name)\n"); abort(); }
   strncpy((char *)copy, (char *)in, i);
   return copy;
 }
@@ -1957,7 +1957,7 @@ parse_contact_args(struct conn *conn, u_char *data, u_char *contact, int len)
     } else {
       // otherwise return a copy
       u_char *c = (u_char *)calloc(e-p+1, 1);
-      if (c == NULL) { perror("calloc failed in parse_contact_args"); exit(1); }
+      if (c == NULL) { perror("calloc failed in parse_contact_args"); abort(); }
       if (ncp_debug) fprintf(stderr,"NCP: parse_contact_args returning %zd bytes\n", e-p);
       memcpy(c, p, e-p);
       conn->conn_contact_args_len = e-p;
@@ -2285,7 +2285,7 @@ ncp_user_server(void *v)
 
   for (i = 0; socklist[i].sockname != NULL; i++);
   fds = malloc(i * sizeof(int));
-  if (fds == NULL) { perror("malloc(fds)"); exit(1); }
+  if (fds == NULL) { perror("malloc(fds)"); abort(); }
 
   for (i = 0; socklist[i].sockname != NULL; i++) {
     fds[i] = make_named_socket(socklist[i].socktype, socklist[i].sockname, socklist[i].sockconn);
@@ -2318,7 +2318,7 @@ ncp_user_server(void *v)
 	    }
 	    perror("?? accept(simplesock)");
 	    // @@@@ what could go wrong? lots
-	    exit(1);
+	    abort();
 	  }
 	  if (ncp_debug) printf("accepted socket \"%s\"\n", ((struct sockaddr_un *)sa)->sun_path);
 	  struct conn *c = make_conn(socklist[i].sockconn, fd, (struct sockaddr_un *)sa, clen);
@@ -2560,7 +2560,7 @@ add_output_pkt(struct conn *c, struct chaos_header *pkt)
   struct chaos_header *saved = (struct chaos_header *)malloc(pklen);
   if (saved == NULL) {
     perror("?? malloc(saved, add_output_pkt)");
-    exit(1);
+    abort();
   }
   memcpy(saved, pkt, pklen);
 
@@ -2861,7 +2861,7 @@ conn_to_packet_stream_handler(void *v)
 
   if ((conn->conn_type != CT_Stream) && (conn->conn_type != CT_Packet)) {
     fprintf(stderr,"%%%% Bug: conn_to_packet_stream_handler running with non-stream conn\n");
-    exit(1);
+    abort();
   }
 
   while (1) {
@@ -3412,11 +3412,11 @@ static void asynch_packet_to_conn(u_char *pkt, int len)
   pthread_attr_t attr;
   if ((e = pthread_attr_init(&attr)) != 0) {
     fprintf(stderr,"pthread_attr_init: %s", strerror(e));
-    exit(1);
+    abort();
   }
   if ((e = pthread_attr_setdetachstate(&attr, 1)) != 0) {
     fprintf(stderr,"pthread_attr_setdetachstate: %s", strerror(e));
-    exit(1);
+    abort();
   }
 
   if ((e = pthread_create(&thr, &attr, &asynch_packet_to_conn_handler, ptc)) != 0) {
@@ -3425,7 +3425,7 @@ static void asynch_packet_to_conn(u_char *pkt, int len)
   }
   if ((e = pthread_attr_destroy(&attr)) != 0) {
     fprintf(stderr,"pthread_attr_destroy: %s", strerror(e));
-    exit(1);
+    abort();
   }
   if (ncp_debug) fprintf(stderr,"NCP: Started asynch pkt thread %p for %p, len %d\n", (void *)thr, data, len);
   // and be done
@@ -3553,7 +3553,7 @@ receive_or_die(struct conn *conn, u_char *buf, int buflen)
 	return -1;
       } else {
 	perror("?? recv(receive_or_die)");
-	exit(1);
+	abort();
       }
     } else if (cnt == 0) {
       if (ncp_debug > 1) printf("== receive_or_die (%s, %s): sock %d select %d, read %d bytes, assuming closed\n", 
@@ -3982,7 +3982,7 @@ send_to_user_socket(struct conn *conn, struct chaos_header *pkt, u_char *buf, in
       socket_closed_for_conn(conn);
     } else {
       perror("?? write(send_to_user_socket)");
-      exit(1);
+      abort();
     }
   } else if (slen != len) {
     fprintf(stderr,"%s: sent %d bytes on socket instead of expected %d\n", __func__, slen, len);
@@ -4150,7 +4150,7 @@ conn_to_socket_handler(void *arg)
 
     if (pkt == NULL) {
       fprintf(stderr,"%%%% Disaster: null pkt read from read_pkts\n");
-      exit(1);
+      abort();
     }
 
     // handle it
@@ -4185,28 +4185,28 @@ start_conn(struct conn *conn)
   pthread_attr_t attr;
   if ((e = pthread_attr_init(&attr)) != 0) {
     fprintf(stderr,"pthread_attr_init: %s", strerror(e));
-    exit(1);
+    abort();
   }
   if ((e = pthread_attr_setdetachstate(&attr, 1)) != 0) {
     fprintf(stderr,"pthread_attr_setdetachstate: %s", strerror(e));
-    exit(1);
+    abort();
   }
   if ((e = pthread_create(&conn->conn_to_sock_thread, &attr, &conn_to_socket_handler, conn)) != 0) {
     fprintf(stderr,"pthread_create(conn_to_sock_thread): %s", strerror(e));
-    exit(1);
+    abort();
   } else if (ncp_debug) {
     fprintf(stderr,"conn %p created conn_to_sock_thread %p\n", conn, (void *)conn->conn_to_sock_thread);
   }
   if ((e = pthread_create(&conn->conn_from_sock_thread, &attr, &socket_to_conn_handler, conn)) != 0) {
     fprintf(stderr,"pthread_create(conn_from_sock_thread): %s", strerror(e));
-    exit(1);
+    abort();
   } else if (ncp_debug) {
     fprintf(stderr,"conn %p created conn_from_sock_thread %p\n", conn, (void *)conn->conn_from_sock_thread);
   }
   if (conn->conn_type != CT_Simple) {
     if ((e = pthread_create(&conn->conn_to_net_thread, &attr, &conn_to_packet_stream_handler, conn)) != 0) {
       fprintf(stderr,"pthread_create(conn_to_net_thread): %s", strerror(e));
-      exit(1);
+      abort();
     } else if (ncp_debug) {
       fprintf(stderr,"conn %p created conn_to_net_thread %p\n", conn, (void *)conn->conn_to_net_thread);
     }
@@ -4215,7 +4215,7 @@ start_conn(struct conn *conn)
   }
   if ((e = pthread_attr_destroy(&attr)) != 0) {
     fprintf(stderr,"pthread_attr_destroy: %s", strerror(e));
-    exit(1);
+    abort();
   }
 }
 
