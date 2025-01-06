@@ -1287,7 +1287,9 @@ tls_server(void *v)
     }
     int v = 0;
     ERR_clear_error();		/* try to get the latest error below, not some old */
+    printf("%%%% TLS server calling SSL_accept\n");
     if ((v = SSL_accept(ssl)) <= 0) {
+      printf("%%%% TLS server SSL_accept failed\n");
       // this already catches verification - client end gets "SSL alert number 48"?
       int err = SSL_get_error(ssl, v);
       if (err != SSL_ERROR_SSL) {
@@ -1313,6 +1315,7 @@ tls_server(void *v)
       SSL_free(ssl);
       continue;
     }      
+    printf("%%%% TLS server SSL_accept success\n");
 
     X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
 
