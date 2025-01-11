@@ -1355,9 +1355,11 @@ tls_server(void *v)
     }
     int v = 0;
     ERR_clear_error();		/* try to get the latest error below, not some old */
-    fprintf(stderr,"%%%% TLS server calling SSL_accept\n");
+    if (tls_debug) fprintf(stderr,"%%%% TLS server calling SSL_accept\n");
     if ((v = ssl_accept_with_timeout(ssl)) <= 0) {
-      fprintf(stderr,"%%%% TLS server SSL_accept failed\n");
+      char ip[INET6_ADDRSTRLEN];
+      fprintf(stderr,"%%%% TLS server SSL_accept from %s failed, closing\n",
+	      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
       // this already catches verification - client end gets "SSL alert number 48"?
       int err = SSL_get_error(ssl, v);
       if (err != SSL_ERROR_SSL) {
@@ -1383,7 +1385,7 @@ tls_server(void *v)
       SSL_free(ssl);
       continue;
     }      
-    fprintf(stderr,"%%%% TLS server SSL_accept success\n");
+    if (tls_debug) fprintf(stderr,"%%%% TLS server SSL_accept success\n");
 
     X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
 
@@ -1664,7 +1666,7 @@ void * tls_input(void *v)
     timeout.tv_sec = TLS_INPUT_RETRY_TIMEOUT;
     timeout.tv_usec = 0;
     if ((sval = select(maxfd, &rfd, NULL, NULL, &timeout)) == EINTR) {
-      if (tls_debug) fprintf(stderr,"TLS input timeout, retrying\n");
+      if (tls_debug > 1) fprintf(stderr,"TLS input timeout, retrying\n");
       continue;
     } else if (sval < 0) {
       perror("select(tls)");
