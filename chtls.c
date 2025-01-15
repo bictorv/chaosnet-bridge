@@ -1233,68 +1233,33 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
 // This seems to be useful to counteract internet-measurement.com, which sometimes connects to the server port
 // without performing a TLS handshake (how would it know it should), hanging and consuming resources, eventually
 // crashing cbridge (don't know where/how, yet).
-// See https://stackoverflow.com/questions/11835203/openssl-ssl-connect-blocks-forever-how-to-set-timeout.
-// ("The OpenSSL Library gives you the maximum flexibility in terms of handling socket related issues" - rubbish!)
-//
-// This does not help against someone connecting, and then sending < 4 bytes (which triggers the SSL_accept),
-// and then hanging there (which makes the SSL_accept hang). Using SO_RCVTIMEO seems even more awkward than the
-// current approach though, and using thread-local timers seems "an area under development" still?
 static int
 ssl_accept_with_timeout(SSL *ssl)
 {
-  // Is there available data already?
-  if (SSL_pending(ssl) > 0) {
-    if (tls_debug) fprintf(stderr,"%s: already pending data\n", __func__);
-    return SSL_accept(ssl);	// then just try to use it
-  }
+  int tsock = SSL_get_fd(ssl);
 
-  // Else hairier: set non-blocking, use select with timeout, and check again, before trying SSL_accept
-  int fd = SSL_get_fd(ssl);
-  // Make sure the socket is nonblocking
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0)
-    flags = 0;
-  if (fcntl(fd, F_SETFL, flags|O_NONBLOCK) < 0) {
-    perror("fcntl(F_SETFL)");
+  // Set a receive timeout for the socket
+  struct timeval tmout, otmout;
+  socklen_t otmout_len = sizeof(otmout);
+  if (getsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &otmout, &otmout_len) < 0) {
+    perror("getsockopt(SO_RCVTIMEO)");
     abort();
   }
-  fd_set fds;
-  int ntries = 0;
-  while (ntries < 3) {		// @@@@ try this - but the loop shouldn't be needed really
-    FD_ZERO(&fds);
-    FD_SET(fd, &fds);
-    struct timeval timeout;
-    timeout.tv_usec = 0;
-    timeout.tv_sec = 3;		// @@@@ try this
-    int sval = select(fd+1, &fds, NULL, NULL, &timeout);
-    if (sval < 0) {
-      perror("select(ssl_accept_with_timeout)");
-      abort();
-    } else if (sval > 0) {
-      // There is something to read
-      if (fcntl(fd, F_SETFL, flags) < 0) { // restore flags
-	perror("fnctl(ssl_accept_with_timeout)");
-	abort();
-      }
-      // @@@@ odd: pending and has_pending are typically both 0 in cases where the connections is a proper TLS connection.
-      // Treating that as timeout makes the TLS connection fail (after N tries in this loop).
-      if (tls_debug) fprintf(stderr,"%s: try %d: data exists, pending=%d, has_pending=%d, trying SSL_accept\n", __func__, ntries,  
-			     SSL_pending(ssl), SSL_has_pending(ssl));
-      // @@@@ will hang if < 4 bytes available.
-      return SSL_accept(ssl);
-    } else {
-      // timed out, loop back
-      if (tls_debug) fprintf(stderr,"%s: try %d: time out, try again\n", __func__, ntries);
-      ntries++;
-    }
-  }
-  // Tried N times without success, fail
-  if (tls_debug) fprintf(stderr,"%s: tried %d times, failing\n", __func__, ntries);
-  if (fcntl(fd, F_SETFL, flags) < 0) { // restore flags
-    perror("fnctl(ssl_accept_with_timeout)");
+  if (tls_debug) fprintf(stderr,"TLS accept: SO_RCVTIMEO was %ld s %d us\n", otmout.tv_sec, otmout.tv_usec);
+  tmout.tv_sec = 5;		// @@@@ well, short but not too short?
+  tmout.tv_usec = 0;
+  if (setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &tmout, sizeof(tmout)) < 0) {
+    perror("setsockopt(SO_RCVTIMEO)");
     abort();
   }
-  return -1;
+  // Try the accept
+  int v = SSL_accept(ssl);
+  // Reset the timeout before returning
+  if (setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &otmout, sizeof(otmout)) < 0) {
+    perror("setsockopt(SO_RCVTIMEO, otmout)");
+    abort();
+  }
+  return v;
 }
 
 // TLS server thread.
