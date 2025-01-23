@@ -208,12 +208,11 @@ char *seconds_as_interval(u_int t)
 
 void print_time(u_char *bp, int len, u_short src, int verbose)
 {
-  u_short *dp = (u_short *)bp;
   char tbuf[64];
 
   if (len != 4) { printf("Bad time length %d (expected 4)\n", len); exit(1); }
 
-  time_t t = (u_short)(*dp++); t |= (u_long) ((u_short)(*dp)<<16);
+  time_t t = ((u_long)bp[3]<<24) + ((u_long)bp[2]<<16) + ((u_long)bp[1]<<8) + ((u_long)bp[0]);
   time_t here = time(NULL);
 #if __APPLE__
   // imagine this
