@@ -18,8 +18,16 @@
 #include <openssl/x509v3.h>
 
 // when to start warning about approaching cert expiry
+#ifndef TLS_CERT_EXPIRY_WARNING_DAYS
 #define TLS_CERT_EXPIRY_WARNING_DAYS 90
+#endif
 static int tls_cert_expiry_warning_days = TLS_CERT_EXPIRY_WARNING_DAYS;
+
+// How many seconds to wait for SSL_accept to return
+#ifndef TLS_ACCEPT_TIMEOUT
+#define TLS_ACCEPT_TIMEOUT 5
+#endif
+static int tls_accept_timeout = TLS_ACCEPT_TIMEOUT;
 
 extern u_short tls_myaddrs[];
 extern int tls_n_myaddrs;
@@ -125,6 +133,14 @@ parse_tls_config_line()
 	fprintf(stderr,"tls: bad 'debug' arg %s specified\n", tok);
 	return -1;
       }
+    } else if (strcmp(tok,"accept_timeout") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no value for accept_timeout specified\n"); return -1; }
+      if ((sscanf(tok, "%d", &tls_accept_timeout) != 1) || 
+	  (tls_accept_timeout <= 0) || (tls_accept_timeout > 1800)) {
+	fprintf(stderr,"tls: bad value %s for accept_timeout specified\n", tok);
+	return -1;
+      }
     } else {
       fprintf(stderr,"bad tls keyword %s\n", tok);
       return -1;
@@ -135,6 +151,9 @@ parse_tls_config_line()
       fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
     // default - see send_empty_sns below
     tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
+  }
+  if ((do_tls_server == 0) && (tls_accept_timeout != TLS_ACCEPT_TIMEOUT)) {
+    fprintf(stderr,"tls: meaningless to set accept_timeout unless server.\n");
   }
   if (verbose) {
     printf("Using TLS myaddrs %#o",tls_myaddrs[0]);
@@ -1245,8 +1264,7 @@ ssl_accept_with_timeout(SSL *ssl)
     perror("getsockopt(SO_RCVTIMEO)");
     abort();
   }
-  if (tls_debug) fprintf(stderr,"TLS accept: SO_RCVTIMEO was %ld s %d us\n", otmout.tv_sec, otmout.tv_usec);
-  tmout.tv_sec = 5;		// @@@@ well, short but not too short?
+  tmout.tv_sec = tls_accept_timeout; // should be short but not too short?
   tmout.tv_usec = 0;
   if (setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &tmout, sizeof(tmout)) < 0) {
     perror("setsockopt(SO_RCVTIMEO)");
