@@ -1334,6 +1334,7 @@ tls_server(void *v)
       fprintf(stderr,"SSL_set_fd failed (server, tsock %d): ", tsock);
       ERR_print_errors_fp(stderr);
       close(tsock);
+      SSL_free(ssl);
       continue;
     }
     int v = 0;
