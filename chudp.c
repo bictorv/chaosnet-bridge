@@ -149,7 +149,7 @@ static int chudp_connect(u_short port, sa_family_t family)
 
   if ((sock = socket(family, SOCK_DGRAM, 0)) < 0) {
     perror("socket failed");
-    exit(1);
+    abort();
   }
   if (family == AF_INET6) {
     struct sockaddr_in6 sin6;
@@ -161,7 +161,7 @@ static int chudp_connect(u_short port, sa_family_t family)
     memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
     if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
       perror("bind(v6) failed");
-      exit(1);
+      abort();
     }
   } else {
     struct sockaddr_in sin;
@@ -170,7 +170,7 @@ static int chudp_connect(u_short port, sa_family_t family)
     sin.sin_addr.s_addr = INADDR_ANY;
     if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
       perror("bind failed");
-      exit(1);
+      abort();
     }
   }
   return sock;
@@ -223,7 +223,7 @@ chudp_send_pkt(int sock, struct sockaddr *sout, unsigned char *buf, int len)
     if (verbose || debug)
       perror("sendto failed");
 #if 0 // don't die here, some link may be down. Ideally don't retry until "later"
-    exit(1);
+    abort();
 #endif
   }
 }
@@ -297,7 +297,7 @@ chudp_receive(int sock, unsigned char *buf, int buflen)
   cnt = recvfrom(sock, buf, buflen, 0, (struct sockaddr *) &sin, &sinlen);
   if (cnt < 0) {
     perror("recvfrom");
-    exit(1);
+    abort();
   }
   if (inet_ntop(sin.sin6_family,
 		(sin.sin6_family == AF_INET ? (void *)&((struct sockaddr_in *)&sin)->sin_addr
@@ -480,7 +480,7 @@ chudp_input(void *v)
     int e = pthread_detach(subthreads[i]);
     if (e != 0) {
       fprintf(stderr,"pthread_detach (chudp thread %d): %s\n", i, strerror(e));
-      exit(1);
+      abort();
     }
   }
   while (1) {

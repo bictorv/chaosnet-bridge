@@ -248,14 +248,14 @@ init_chaos_ip()
   int one = 1;
   if ((ip_sock = socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
     perror("socket(AF_INET, SOCK_RAW, IPPROTO_CHAOS)");
-    exit(1);
+    abort();
   } 
   // need to be able to use broadcast, for subnet mappings
   if (setsockopt(ip_sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)) < 0)
     perror("setsockopt(ipv4, SO_BROADCAST)");
   if ((ip6_sock = socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)) < 0) {
     perror("socket(AF_INET6, SOCK_RAW, IPPROTO_CHAOS)");
-    exit(1);
+    abort();
   } 
 }
 

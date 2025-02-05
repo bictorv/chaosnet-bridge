@@ -215,7 +215,7 @@ void * unix_input(void *v)
   }
 
   if ((unixsock = u_connect_to_server()) < 0) {
-    //exit(1);
+    //abort();
     if (verbose || unixdebug)
       fprintf(stderr,"Warning: couldn't open unix socket - check if chaosd is running?\n");
   }

@@ -33,7 +33,7 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 - `chudp` *portnr* [`dynamic` \| `static` \| `ipv6` \| `debug` off/on ]
 
 	set my chudp portnr (default 42042). If `dynamic`, add new chudp links [dynamically](#dynamic-links-and-routes) when receiving pkts from unknown sources. With ipv6 option, listens to both v4 and v6 (enabled also by defining a chudp link where the host has an ipv6 addr). With debug on, prints some debug stuff. 
-- `tls` [ `key` *keyfile* ] [ `cert` *certfile* ] [ `ca-chain` *ca-chain-cert-file* ] [ `myaddrs` *list* ] [ `server` *portnr* ] [ `debug` off/on ] [ `expirywarn `*days* ] [ `crl` *crlfile* ]
+- `tls` [ `key` *keyfile* ] [ `cert` *certfile* ] [ `ca-chain` *ca-chain-cert-file* ] [ `myaddrs` *list* ] [ `server` *portnr* ] [ `debug` off/on ] [ `expirywarn `*days* ] [ `crl` *crlfile* ] [ `accept_timeout` *%d* ]
 
 	set up for TLS using the private key in *keyfile*, the cert in *certfile*, and the CA trust chain in *ca-chain-cert-file*. If `server` is specified, a TLS server is started listening to *portnr* (default 42042, if at EOL). This requires a server certificate. TLS servers are always "dynamic" in that they listen to connections from anywhere, but accept only those using certificates trusted by the CA trust chain. Server-end connections are added dynamically at runtime, and can not be pre-declared. 
 
@@ -42,6 +42,8 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 	With debug on, prints some debug stuff.  `expirywarn` defaults to 90, the number of days before certificate expiry to start whining about it.
 	
 	The `crl` parameter specifies a Certificate Revocation List file, supplied by the CA you use. This is encouraged, in particular if you are running a TLS server. You will need to update it regularly (a warning is printed about this). See the [TLS documentation](TLS.md#certificate-revocation-list-crl) for more info.
+	
+	The `accept_timeout` setting specifies the number of seconds to wait for an incoming TCP connection to complete an initial SSL negotiation (by means of `SSL_accept`). The timeout value should be small but not too small (default 5). This setting is only meaningful when setting up a TLS server. The timeout stops robots that connect to the server port from using up valuable resources in cbridge.
 - `ether` [ `debug` off/on ]
 
 	With debug on, prints some debug stuff. (Note that interface names are now on link definitions.) 
@@ -99,7 +101,7 @@ Link and route defs take optional arguments.
 
 - `mux` *%o-list*
 
-    For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (currently 4, see `CHTLS_MAXMUX`).
+    For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (currently 16, see `CHTLS_MAXMUX`).
     **NOTE** that the "muxed" addresses *must* be on the same subnet as the TLS link, and *each* must be directly reachable through (individual) links, defined *before* the TLS link. *Note*: If the link to the muxed address is a `subnet` link (rather than a `host` link), routing might break.
 
 ### LINKTYPE:

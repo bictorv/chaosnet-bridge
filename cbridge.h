@@ -156,7 +156,7 @@ struct chroute {
   time_t rt_cost_updated;	/* cost last updated */
 #if CHAOS_TLS
 // Number of addresses we can multiplex on a connection
-#define CHTLS_MAXMUX 4
+#define CHTLS_MAXMUX 16
   u_short rt_tls_muxed[CHTLS_MAXMUX]; /* Other addresses we're muxing for */
 #endif
 };

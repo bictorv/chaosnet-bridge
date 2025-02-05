@@ -126,7 +126,7 @@ pkqueue_add(struct chaos_header *pkt, struct pkqueue *q)
   // make new element
   nl = (struct pkt_elem *)malloc(sizeof(struct pkt_elem)); // new last
   if (nl == NULL) {
-    perror("malloc(pkt_elem)"); exit(1);
+    perror("malloc(pkt_elem)"); abort();
   }
   nl->pkt = pkt;
   nl->transmitted.tv_sec = 0;
@@ -159,7 +159,7 @@ pkqueue_insert_by_packetno(struct chaos_header *pkt, struct pkqueue *q)
 
   nl = (struct pkt_elem *)malloc(sizeof(struct pkt_elem)); // new last
   if (nl == NULL) {
-    perror("malloc(pkt_elem)"); exit(1);
+    perror("malloc(pkt_elem)"); abort();
   }
   nl->pkt = pkt;
   nl->transmitted.tv_sec = 0;

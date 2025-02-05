@@ -268,7 +268,7 @@ u_short find_closest_addr(u_short haddrs[], int naddrs)
   int i, a;
   if (naddrs <= 0) {
     fprintf(stderr,"find_closest_addr called with %d addresses to search\n", naddrs);
-    exit(1);
+    abort();
   }
   if (naddrs == 1)
     // only one choice
@@ -2274,14 +2274,14 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr, "Starting thread for UNIX socket\n");
     if ((e = pthread_create(&threads[ti++], NULL, &unix_input, NULL)) != 0) {
       fprintf(stderr,"pthread_create(unix_input): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
   if (do_udp) {
     if (verbose) fprintf(stderr, "Starting thread for UDP sockets\n");
     if ((e = pthread_create(&threads[ti++], NULL, &chudp_input, &do_udp6)) != 0) {
       fprintf(stderr,"pthread_create(chudp_input): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 #if CHAOS_ETHERP
@@ -2289,7 +2289,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting thread for Ethernet\n");
     if ((e = pthread_create(&threads[ti++], NULL, &ether_input, NULL)) != 0) {
       fprintf(stderr,"pthread_create(ether_input): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 #endif // CHAOS_ETHERP
@@ -2298,7 +2298,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting thread for Chaos-over-IP\n");
     if ((e = pthread_create(&threads[ti++], NULL, &chip_input, NULL)) != 0) {
       fprintf(stderr,"pthread_create(chip_input): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 #endif
@@ -2313,14 +2313,14 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting thread for TLS server\n");
     if ((e = pthread_create(&threads[ti++], NULL, &tls_server, NULL)) != 0) {
       fprintf(stderr,"pthread_create(tls_server): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
   if (do_tls || do_tls_server) {
     if (verbose) fprintf(stderr,"Starting thread for TLS input\n");
     if ((e = pthread_create(&threads[ti++], NULL, &tls_input, NULL)) != 0) {
       fprintf(stderr,"pthread_create(tls_input): %s", strerror(e));
-      exit(1);
+      abort();
     }
     int i;
     for (i = 0; i < tlsdest_len; i++) {
@@ -2328,7 +2328,7 @@ main(int argc, char *argv[])
 	if (verbose) fprintf(stderr,"Starting thread for TLS client connector %d\n", i);
 	if ((e = pthread_create(&threads[ti++], NULL, &tls_connector, &tlsdest[i])) != 0) {
 	  fprintf(stderr,"pthread_create(tls_connector %d): %s", i, strerror(e));
-	  exit(1);
+	  abort();
 	}
       }
     }    
@@ -2339,7 +2339,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting thread for DNS forwarder\n");
     if ((e = pthread_create(&threads[ti++], NULL, &dns_forwarder_thread, NULL)) != 0) {
       fprintf(stderr,"pthread_create(dns_forwarder_thread): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 #endif
@@ -2350,7 +2350,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting RUT sender thread\n");
     if ((e = pthread_create(&threads[ti++], NULL, &rut_sender, NULL)) != 0) {
       fprintf(stderr,"pthread_create(rut_sender): %s", strerror(e));
-      exit(1);
+      abort();
     }
   } else {
     if (verbose) fprintf(stderr,"Not starting RUT sender thread: only %d network%s, %d host link%s\n",
@@ -2361,7 +2361,7 @@ main(int argc, char *argv[])
   if (verbose) fprintf(stderr,"Starting route cost updating thread\n");
   if ((e = pthread_create(&threads[ti++], NULL, &route_cost_updater, NULL)) != 0) {
     fprintf(stderr,"pthread_create(route_cost_updater): %s", strerror(e));
-    exit(1);
+    abort();
   }
   if (do_udp || do_udp6
 #if CHAOS_IP
@@ -2371,7 +2371,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting hostname re-parsing thread\n");
     if ((e = pthread_create(&threads[ti++], NULL, &reparse_link_host_names_thread, NULL)) != 0) {
       fprintf(stderr,"pthread_create(reparse_link_host_names_thread): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 
@@ -2379,7 +2379,7 @@ main(int argc, char *argv[])
     if (verbose) fprintf(stderr,"Starting NCP\n");
     if ((e = pthread_create(&threads[ti++], NULL, &ncp_user_server, NULL)) != 0) {
       fprintf(stderr,"pthread_create(ncp_user_server): %s", strerror(e));
-      exit(1);
+      abort();
     }
   }
 
@@ -2387,7 +2387,7 @@ main(int argc, char *argv[])
   for (int i = 0; i < ti; i++) {
     if ((e = pthread_detach(threads[i])) != 0) {
       fprintf(stderr,"pthread_detach (thread %d): %s\n", i, strerror(e));
-      exit(1);
+      abort();
     }
   }
 

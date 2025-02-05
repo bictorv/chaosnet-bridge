@@ -18,8 +18,16 @@
 #include <openssl/x509v3.h>
 
 // when to start warning about approaching cert expiry
+#ifndef TLS_CERT_EXPIRY_WARNING_DAYS
 #define TLS_CERT_EXPIRY_WARNING_DAYS 90
+#endif
 static int tls_cert_expiry_warning_days = TLS_CERT_EXPIRY_WARNING_DAYS;
+
+// How many seconds to wait for SSL_accept to return
+#ifndef TLS_ACCEPT_TIMEOUT
+#define TLS_ACCEPT_TIMEOUT 5
+#endif
+static int tls_accept_timeout = TLS_ACCEPT_TIMEOUT;
 
 extern u_short tls_myaddrs[];
 extern int tls_n_myaddrs;
@@ -125,6 +133,14 @@ parse_tls_config_line()
 	fprintf(stderr,"tls: bad 'debug' arg %s specified\n", tok);
 	return -1;
       }
+    } else if (strcmp(tok,"accept_timeout") == 0) {
+      tok = strtok(NULL, " \t\r\n");
+      if (tok == NULL) { fprintf(stderr,"tls: no value for accept_timeout specified\n"); return -1; }
+      if ((sscanf(tok, "%d", &tls_accept_timeout) != 1) || 
+	  (tls_accept_timeout <= 0) || (tls_accept_timeout > 1800)) {
+	fprintf(stderr,"tls: bad value %s for accept_timeout specified\n", tok);
+	return -1;
+      }
     } else {
       fprintf(stderr,"bad tls keyword %s\n", tok);
       return -1;
@@ -135,6 +151,9 @@ parse_tls_config_line()
       fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
     // default - see send_empty_sns below
     tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
+  }
+  if ((do_tls_server == 0) && (tls_accept_timeout != TLS_ACCEPT_TIMEOUT)) {
+    fprintf(stderr,"tls: meaningless to set accept_timeout unless server.\n");
   }
   if (verbose) {
     printf("Using TLS myaddrs %#o",tls_myaddrs[0]);
@@ -671,7 +690,7 @@ static int tcp_server_accept(int sock, struct sockaddr_storage *saddr, u_int *sa
     perror("accept");
     fprintf(stderr,"errno = %d\n", errno);
     // @@@@ better error handling, back off and try again? what could go wrong here?
-    exit(1);
+    abort();
   }
   // @@@@ log stuff about the connection?
   if (tls_debug) {
@@ -690,7 +709,7 @@ static int tcp_bind_socket(int type, u_short port)
 
   if ((sock = socket(do_tls_ipv6 ? AF_INET6 : AF_INET, type, 0)) < 0) {
     perror("socket (TCP) failed");
-    exit(1);
+    abort();
   }
   // @@@@ SO_REUSEADDR or SO_REUSEPORT
   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
@@ -714,7 +733,7 @@ static int tcp_bind_socket(int type, u_short port)
     memcpy(&sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any));
     if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
       perror("bind(v6) failed");
-      exit(1);
+      abort();
     }
   } else {
     struct sockaddr_in sin;
@@ -724,7 +743,7 @@ static int tcp_bind_socket(int type, u_short port)
     sin.sin_addr.s_addr = INADDR_ANY;
     if (bind(sock,(struct sockaddr *)&sin, sizeof(sin)) < 0) {
       perror("bind() failed");
-      exit(1);
+      abort();
     }
   }
   return sock;
@@ -746,7 +765,7 @@ static int tcp_client_connect(struct sockaddr *sin)
 			    (sin->sa_family == AF_INET6 ? "IPv6" : "??")));
     if ((sock = socket(sin->sa_family, SOCK_STREAM, 0)) < 0) {
       perror("socket(tcp)");
-      exit(1);
+      abort();
     }
     
     if (tls_debug) {
@@ -870,7 +889,7 @@ void *tls_connector(void *arg)
 #if 0
       // or just let this thread die?
       pthread_exit(&(int){ 1 });
-      exit(1);
+      abort();
       // don't just keep trying!
       // continue;
 #endif
@@ -1044,7 +1063,7 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       perror("pthread_mutex_lock(reconnect)");
     if (pthread_cond_signal(&td->tcp_reconnect_cond) < 0) {
       perror("tls_please_reopen_tcp(cond)\n");
-      exit(1);
+      abort();
     } 
     if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)
       perror("pthread_mutex_unlock(reconnect)");
@@ -1060,11 +1079,11 @@ static void tls_wait_for_reconnect_signal(struct tls_dest *td)
   pthread_mutex_lock(&td->tcp_reconnect_mutex);
   if (pthread_cond_wait(&td->tcp_reconnect_cond, &td->tcp_reconnect_mutex) < 0) {
     perror("tls_wait_for_reconnect_signal(cond)");
-    exit(1);
+    abort();
   }
   if (pthread_mutex_unlock(&td->tcp_reconnect_mutex) < 0)  {
     perror("tls_wait_for_reconnect_signal(unlock)");
-    exit(1);
+    abort();
   }
   if (tls_debug)
     fprintf(stderr,"wait_for_reconnect_signal done\n");
@@ -1078,11 +1097,11 @@ static int tls_write_record(struct tls_dest *td, u_char *buf, int len)
 
   if (len > 0xffff) {
     fprintf(stderr,"tls_write_record: too long: %#x  > 0xffff\n", len);
-    exit(1);
+    abort();
   }
   if (len > CBRIDGE_TCP_MAXLEN) {
     fprintf(stderr,"tcp_write_record: too long: %#x > %#x\n", len, (u_int)CBRIDGE_TCP_MAXLEN);
-    exit(1);
+    abort();
   }
 
   u_char obuf[CBRIDGE_TCP_MAXLEN+2];
@@ -1229,6 +1248,38 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   return actual;
 }
 
+// SSL_accept with timeout.
+// This seems to be useful to counteract internet-measurement.com, which sometimes connects to the server port
+// without performing a TLS handshake (how would it know it should), hanging and consuming resources, eventually
+// crashing cbridge (don't know where/how, yet).
+static int
+ssl_accept_with_timeout(SSL *ssl)
+{
+  int tsock = SSL_get_fd(ssl);
+
+  // Set a receive timeout for the socket
+  struct timeval tmout, otmout;
+  socklen_t otmout_len = sizeof(otmout);
+  if (getsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &otmout, &otmout_len) < 0) {
+    perror("getsockopt(SO_RCVTIMEO)");
+    abort();
+  }
+  tmout.tv_sec = tls_accept_timeout; // should be short but not too short?
+  tmout.tv_usec = 0;
+  if (setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &tmout, sizeof(tmout)) < 0) {
+    perror("setsockopt(SO_RCVTIMEO)");
+    abort();
+  }
+  // Try the accept
+  int v = SSL_accept(ssl);
+  // Reset the timeout before returning
+  if (setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &otmout, sizeof(otmout)) < 0) {
+    perror("setsockopt(SO_RCVTIMEO, otmout)");
+    abort();
+  }
+  return v;
+}
+
 // TLS server thread.
 // Bind a socket, listen, and loop accepting valid TLS connections.
 void * 
@@ -1238,7 +1289,7 @@ tls_server(void *v)
   tls_tcp_ursock = tcp_bind_socket(SOCK_STREAM, tls_server_port);
   if (listen(tls_tcp_ursock, SOMAXCONN) < 0) {
     perror("listen (TLS server)");
-    exit(1);
+    abort();
   }
 
   // make sure other threads are waiting
@@ -1257,7 +1308,7 @@ tls_server(void *v)
     if ((tsock = tcp_server_accept(tls_tcp_ursock, &caddr, &clen)) < 0) {
       perror("accept (TLS server)");
       // @@@@ what could go wrong here?
-      exit(1);
+      abort();
     }
     if (strlen(tls_crl_file) > 0) {
       // Validate the CRL file. If it has expired, don't open the connection since validation will fail anyway.
@@ -1283,11 +1334,16 @@ tls_server(void *v)
       fprintf(stderr,"SSL_set_fd failed (server, tsock %d): ", tsock);
       ERR_print_errors_fp(stderr);
       close(tsock);
+      SSL_free(ssl);
       continue;
     }
     int v = 0;
     ERR_clear_error();		/* try to get the latest error below, not some old */
-    if ((v = SSL_accept(ssl)) <= 0) {
+    if (tls_debug) fprintf(stderr,"%%%% TLS server calling SSL_accept\n");
+    if ((v = ssl_accept_with_timeout(ssl)) <= 0) {
+      char ip[INET6_ADDRSTRLEN];
+      fprintf(stderr,"%%%% TLS server SSL_accept from %s failed, closing\n",
+	      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
       // this already catches verification - client end gets "SSL alert number 48"?
       int err = SSL_get_error(ssl, v);
       if (err != SSL_ERROR_SSL) {
@@ -1313,6 +1369,7 @@ tls_server(void *v)
       SSL_free(ssl);
       continue;
     }      
+    if (tls_debug) fprintf(stderr,"%%%% TLS server SSL_accept success\n");
 
     X509 *ssl_client_cert = SSL_get_peer_certificate(ssl);
 
@@ -1593,7 +1650,7 @@ void * tls_input(void *v)
     timeout.tv_sec = TLS_INPUT_RETRY_TIMEOUT;
     timeout.tv_usec = 0;
     if ((sval = select(maxfd, &rfd, NULL, NULL, &timeout)) == EINTR) {
-      if (tls_debug) fprintf(stderr,"TLS input timeout, retrying\n");
+      if (tls_debug > 1) fprintf(stderr,"TLS input timeout, retrying\n");
       continue;
     } else if (sval < 0) {
       perror("select(tls)");

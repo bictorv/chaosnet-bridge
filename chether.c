@@ -506,7 +506,7 @@ get_packet_socket(u_short ethtype, struct chethdest *cd)
   pfp->bf_len = p - pfp->bf_insns; /* length of program */
   if (pfp->bf_len > BPF_PFMAX) {
     fprintf(stderr,"BPF: filter program too long, increase BPF_PFMAX!\n");
-    exit(1);
+    abort();
   }
 
   if (ioctl(fd, BIOCSETF, (char *)pfp) < 0) {
@@ -721,7 +721,7 @@ send_packet(struct chethdest *cd, int if_fd, u_short ethtype, u_char *addr, u_ch
     {
       perror("send_packet");
       fprintf(stderr, "\n");
-      exit(1);
+      abort();
     }
 }
 
@@ -795,7 +795,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     protocol = ntohs(ETHERTYPE_CHAOS);
   else {
     fprintf(stderr,"get_packet: bad FD\n");
-    exit(1);
+    abort();
   }
 
 #if 0 //debug
@@ -822,7 +822,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
 		  buflen, BPF_MTU);
 	}
 #endif
-	exit(1);
+	abort();
       }
       else if (chether_debug || debug) perror("read BPF ether");
       return 0;
@@ -916,7 +916,7 @@ get_packet(struct chethdest *cd, int if_fd, u_char *buf, int buflen)
     {
       if (errno != EAGAIN) {
 	perror ("get_packet: Read error");
-	exit(1);
+	abort();
       }
       return 0;
     }
@@ -1346,9 +1346,9 @@ ether_input(void *v)
   get_my_ea();
   for (i = 0; i < nchethdest; i++) {
     if ((chethdest[i].cheth_arpfd = get_packet_socket(ETHERTYPE_ARP, &chethdest[i])) < 0)
-      exit(1);
+      abort();
     if ((chethdest[i].cheth_chfd = get_packet_socket(ETHERTYPE_CHAOS, &chethdest[i])) < 0)
-      exit(1);
+      abort();
   }
 
   /* Ether -> others thread */
