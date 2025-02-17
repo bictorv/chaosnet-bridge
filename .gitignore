@@ -64,5 +64,8 @@ finger
 # Python cache
 __pycache__/**
 
+# temp stuff
+tmp/**
+
 # Xcode project (not yet)
 Chaosnet Bridge/**
