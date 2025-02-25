@@ -151,6 +151,14 @@ parse_tls_config_line()
       fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
     // default - see send_empty_sns below
     tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
+  } else {
+    for (int i = 0; i < tls_n_myaddrs; i++) {
+      if (!is_mychaddr(tls_myaddrs[i])) {
+	// @@@@ this can't be avoided sometimes, so guard it with tls_debug later
+	fprintf(stderr,"tls: adding TLS myaddr %#o to myaddrs\n", tls_myaddrs[i]);
+	add_mychaddr(tls_myaddrs[i]);
+      }
+    }
   }
   if ((do_tls_server == 0) && (tls_accept_timeout != TLS_ACCEPT_TIMEOUT)) {
     fprintf(stderr,"tls: meaningless to set accept_timeout unless server.\n");
@@ -1391,7 +1399,7 @@ tls_server(void *v)
 	  u_short claddrs[4];
 	  int i, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
 	  if (tls_debug) {
-	    fprintf(stderr, "TLS server client CN %s has %d Chaos address(es): ", client_cn, naddrs);
+	    fprintf(stderr, "TLS server: client CN %s has %d Chaos address(es): ", client_cn, naddrs);
 	    for (i = 0; i < naddrs; i++)
 	      fprintf(stderr,"%#o ", claddrs[i]);
 	    fprintf(stderr,"\n");
@@ -1403,7 +1411,8 @@ tls_server(void *v)
 	    // search for address on my subnet
 	    int i;
 	    for (i = 0; i < naddrs; i++) {
-	      if (mychaddr_on_net(claddrs[i]) != 0) {
+	      // Check for the address(es) the TLS server is supposed to handle
+	      if (my_tls_myaddr(claddrs[i]) != 0) {
 		client_chaddr = claddrs[i];
 		break;
 	      }
@@ -1417,7 +1426,7 @@ tls_server(void *v)
 	      fprintf(stderr,"%%%% TLS: DNS error while looking up client CN %s at %s, rejecting\n",
 		      client_cn, ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)));
 	    else if (naddrs > 0) 
-	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses on my subnets, rejecting\n",
+	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses on my TLS subnets, rejecting\n",
 		      ip46_ntoa((struct sockaddr *)&caddr, ip, sizeof(ip)), client_cn);
 	    else
 	      fprintf(stderr,"%%%% TLS server: client at %s presents cert CN %s with no Chaos addresses, rejecting\n",
