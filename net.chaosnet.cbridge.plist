@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- To install do:
+       cp cbridge.launchd  ~/Library/LaunchAgents/net.chaosnet.cbridge.plist
+       launchctl load -w ~/Library/LaunchAgents/net.chaosnet.cbridge.plist
+     To disable (permanently, see the -w option to launchctl):
+       launchctl unload -w ~/Library/LaunchAgents/net.chaosnet.cbridge.plist 
+     To restart, do unload followed by load
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>net.chaosnet.cbridge</string>
+
+    <!-- This makes ~ work in program arguments -->
+    <key>EnableGlobbing</key>
+    <true/>
+
+    <!-- #### Edit this as appropriate -->
+    <key>WorkingDirectory</key>
+    <string>/Users/victor/chaosnet-bridge</string>
+    
+    <key>Program</key>
+    <string>/Users/victor/chaosnet-bridge/cbridge</string>
+
+    <!-- #### Edit this as appropriate -->
+    <!-- NOTE that this is argv, including argv[0] -->
+    <key>ProgramArguments</key>
+    <array>
+      <string>cbridge</string>
+      <!-- <string>-v</string> -->
+      <!-- <string>-c</string> -->
+      <!-- <string>cbridge.conf</string> -->
+    </array>
+
+    <!-- Start it on "load" -->
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Don't keep it alive: if it crashes you should debug it -->
+    <key>KeepAlive</key>
+    <false/>
+    
+    <!-- Put output somewhere -->
+    <!-- #### Edit this as appropriate -->
+    <key>StandardOutPath</key>
+    <string>/Users/victor/Library/Logs/cbridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/victor/Library/Logs/cbridge.log</string>
+  </dict>
+</plist>
