@@ -341,7 +341,7 @@ dns_name_of_addr(u_short chaddr, u_char *namestr, int namestr_len)
   struct __res_state chres;
   res_state statp = &chres;
   memset(&chres, 0, sizeof(chres));
-  char qstring[NS_MAXDNAME];
+  char qstring[NS_MAXDNAME+1];
   u_char answer[NS_PACKETSZ];
   int anslen;
   ns_msg m;
@@ -416,11 +416,12 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
   char a_dom[NS_MAXDNAME];
   int a_addr;
   char qstring[NS_MAXDNAME];
+  u_char cname_string[NS_MAXDNAME];
   u_char answer[NS_PACKETSZ];
   int anslen;
   ns_msg m;
   ns_rr rr;
-  int i, ix = 0, offs;
+  int i, ix = 0, offs, got_cname = 0;
 
   init_chaos_dns_state(statp);
 
@@ -474,10 +475,22 @@ dns_addrs_of_name(u_char *namestr, u_short *addrs, int addrs_len)
 	fprintf(stderr,"%% DNS: warning - address for %s is in %s which is different from %s\n",
 		namestr, a_dom, chaos_address_domain);
       }
+    } else if (ns_rr_type(rr) == ns_t_cname) {
+      if (trace_dns) fprintf(stderr,"%% DNS: got CNAME for %s when asking for A\n", namestr);
+      if ((dn_expand(ns_msg_base(m), ns_msg_end(m), ns_rr_rdata(rr), (char *)&cname_string, sizeof(cname_string))) < 0) {
+	if (trace_dns) fprintf(stderr,"%% DNS: could not extract CNAME from record for %s!\n", namestr);
+      } else {
+	got_cname = 1;
+      }
     } else if (trace_dns) {
       fprintf(stderr,"%% DNS: warning - asked for A for %s but got answer type %s\n",
 	      namestr, p_type(ns_rr_type(rr)));
     }
+  }
+  if ((ix == 0) && got_cname) {
+    // Server didn't provide the A record as additional info, go ask for it
+    if (trace_dns) fprintf(stderr,"%% DNS: recursing on CNAME %s for %s\n", cname_string, namestr);
+    return dns_addrs_of_name(cname_string, addrs, addrs_len);
   }
   return ix;
 }
