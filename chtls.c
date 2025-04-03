@@ -645,7 +645,7 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     if (tls_debug) fprintf(stderr,"Reusing tlsdest for %s\n", name);
     // update sock and ssl,
     // but make sure to close whatever is being reused first
-    if ((td->tls_sock != 0) && (td->tls_sock != sock)); {
+    if ((td->tls_sock != 0) && (td->tls_sock != sock)) {
       if (tls_debug) fprintf(stderr,"%%%% TLS: closing socket %d before reusing tlsdest\n", td->tls_sock);
       close(td->tls_sock);
     }
