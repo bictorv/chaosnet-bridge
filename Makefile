@@ -3,8 +3,13 @@ MACH_NAME = $(shell uname -m)
 
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
-CFLAGS = -I/opt/local/include -g
-LDFLAGS = -L/opt/local/lib
+  ifneq ($(HOMEBREW_PREFIX),)
+    CFLAGS = -I$(HOMEBREW_PREFIX)/include -g
+    LDFLAGS = -L$(HOMEBREW_PREFIX)/lib
+  else
+    CFLAGS = -I/opt/local/include -g
+    LDFLAGS = -L/opt/local/lib
+  endif
 else
 CFLAGS = -g
 endif
