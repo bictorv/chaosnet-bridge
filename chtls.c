@@ -608,6 +608,11 @@ update_client_tlsdest(struct tls_dest *td, u_char *server_cn, int tsock, SSL *ss
     strncpy(td->tls_name, (char *)server_cn, TLSDEST_NAME_LEN);
 #endif
   td->tls_serverp = 0;
+  // make sure to close whatever is being updated first
+  if ((td->tls_sock != 0) && (td->tls_sock != tsock)) {
+    if (tls_debug) fprintf(stderr,"%%%% TLS: closing socket %d before updating tlsdest\n", td->tls_sock);
+    close(td->tls_sock);
+  }
   td->tls_sock = tsock;
   td->tls_ssl = ssl;
 
@@ -638,7 +643,12 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
   }
   if (td != NULL) {
     if (tls_debug) fprintf(stderr,"Reusing tlsdest for %s\n", name);
-    // update sock and ssl
+    // update sock and ssl,
+    // but make sure to close whatever is being reused first
+    if ((td->tls_sock != 0) && (td->tls_sock != sock)) {
+      if (tls_debug) fprintf(stderr,"%%%% TLS: closing socket %d before reusing tlsdest\n", td->tls_sock);
+      close(td->tls_sock);
+    }
     td->tls_sock = sock;
     td->tls_ssl = ssl;
     // get sockaddr
@@ -1009,6 +1019,11 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
   if (td->tls_ssl != NULL) {
     SSL_free(td->tls_ssl);
     td->tls_ssl = NULL;
+  }
+  if (td->tls_sock != 0) {
+    if (tls_debug) fprintf(stderr,"%%%% TLS: %s closing socket %d\n", __func__, td->tls_sock);
+    close(td->tls_sock);
+    td->tls_sock = 0;
   }
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 
@@ -1796,6 +1811,15 @@ validate_crl_file()
   FILE *f = fopen(tls_crl_file,"r");
   if (f == NULL) {
     perror("crl fopen");
+    if (errno == EMFILE) {	// Too many open files, time to crash
+#if __linux__
+      system("/bin/netstat -4 -6 -n");
+      char command[128];
+      snprintf(command, sizeof(command), "/bin/ls -l /proc/%d/fd", getpid());
+      if (system(command) == 0)
+#endif
+      abort();
+    }
     return -1;
   }
   X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
@@ -1815,6 +1839,15 @@ validate_cert_vs_crl(X509 *cert, char *fname)
   FILE *f = fopen(tls_crl_file,"r");
   if (f == NULL) {
     perror("crl fopen");
+    if (errno == EMFILE) {	// Too many open files, time to crash
+#if __linux__
+      system("/bin/netstat -4 -6 -n");
+      char command[128];
+      snprintf(command, sizeof(command), "/bin/ls -l /proc/%d/fd", getpid());
+      if (system(command) == 0)
+#endif
+      abort();
+    }
     return -1;
   }
   X509_CRL *crl = PEM_read_X509_CRL(f, NULL, NULL, NULL);
