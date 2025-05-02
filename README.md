@@ -150,6 +150,8 @@ Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`
 
 A simple unix sockets interface ("API") for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup). There is also a higher-level Python library.
 
+For convenient Chaosnet DNS use on macOS 15.4 (and perhaps higher), install `libbind` (which needs `tbl` which comes with `groff`).
+
 ## Routing basics
 
 When configuring your Chaosnets, you should really think about routing

@@ -138,8 +138,8 @@ dns_responder(u_char *rfc, int len)
 // from libresolv, ns_parse
 // * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
 // * Copyright (c) 1996,1999 by Internet Software Consortium.
-/* static */ int // can't be static because declared in arpa/nameser.h
-ns_skiprr(const u_char *ptr, const u_char *eom, ns_sect section, int count) {
+static int
+cb_ns_skiprr(const u_char *ptr, const u_char *eom, ns_sect section, int count) {
 	const u_char *optr = ptr;
 
 	for ((void)NULL; count > 0; count--) {
@@ -189,7 +189,7 @@ truncate_dns_pkt(u_char *pkt, int len)
 	int nrr = 0;
 	while ((size < CH_PK_MAX_DATALEN) && (size < len)) {
 	  // skip over a RR, finding length of the RR
-	  int rrlen = ns_skiprr(p, ns_msg_end(m), i, 1);
+	  int rrlen = cb_ns_skiprr(p, ns_msg_end(m), i, 1);
 	  if (rrlen < 0) {
 	    fprintf(stderr,"Failed skipping RR!\n");
 	    return -1;
@@ -669,6 +669,14 @@ init_chaos_dns_state(res_state statp)
   }
   // make sure to make recursive requests
   statp->options |= RES_RECURSE;
+#ifdef RES_DEBUG
+  if (trace_dns)		// if tracing, also debug
+    statp->options |= RES_DEBUG;
+#endif
+  // We control domain search lists etc ourselves.
+  statp->options |= RES_NOALIASES; // no HOSTALIASES processing
+  statp->options &= ~(RES_DNSRCH|RES_DEFNAMES); // no default domain name or searching local domain
+
   statp->nscount = 0;
   // Now copy the parsed server addrs
   for (int i = 0; i < n_parsed_servers; i++) {
@@ -681,7 +689,7 @@ init_chaos_dns_state(res_state statp)
   if (statp->nscount == 0) {
     fprintf(stderr,"%%%% DNS: could not parse any DNS servers!\n");
     // @@@@ probably exit?
-#if 0
+#if 0				// @@@@ debug
   } else if (trace_dns) {
     print_resolver_state(statp);
 #endif
