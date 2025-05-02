@@ -1481,7 +1481,12 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
   struct addrinfo *he, hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = PF_UNSPEC;
-  hints.ai_flags = AI_ADDRCONFIG;
+#ifdef AI_ADDRCONFIG		// Use AI_ADDRCONFIG if appropriate
+#ifdef AI_MASK			// and it is a valid flag
+  if (AI_MASK & AI_ADDRCONFIG)
+#endif
+    hints.ai_flags = AI_ADDRCONFIG;
+#endif
 
   tok = strtok(NULL," \t\r\n");
   if (default_port > 0) {

@@ -1,15 +1,18 @@
 OS_NAME = $(shell uname)
 MACH_NAME = $(shell uname -m)
 
+# default
+LIBRESOLV=-lresolv
+
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
-CFLAGS = -I/opt/local/include -g
+# To make chaosnet dns work in 15.4, you should install libbind (which needs tbl which comes with groff)
+CFLAGS = -I/opt/local/include/bind -I/opt/local/include -g
 LDFLAGS = -L/opt/local/lib
+LIBRESOLV = -lbind
 else
 CFLAGS = -g
 endif
-
-LIBRESOLV=-lresolv
 
 # For OpenBSD, do "pkg_add libbind"
 ifeq ($(OS_NAME), OpenBSD)
