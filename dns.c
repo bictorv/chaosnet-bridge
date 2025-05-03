@@ -641,7 +641,12 @@ init_chaos_dns_state(res_state statp)
 	struct addrinfo *he, hi;
 	memset(&hi, 0, sizeof(hi));
 	hi.ai_family = AF_INET;
-	hi.ai_flags = AI_ADDRCONFIG;
+#ifdef AI_ADDRCONFIG		// Use AI_ADDRCONFIG if appropriate
+#ifdef AI_MASK			// and it is a valid flag
+	if (AI_MASK & AI_ADDRCONFIG)
+#endif
+	  hi.ai_flags = AI_ADDRCONFIG;
+#endif
 	int val = getaddrinfo(chaos_dns_servers[i], NULL, &hi, &he);
 	if (val == 0) {
 	  if (he->ai_family == AF_INET) {
