@@ -27,7 +27,7 @@ Use cases could be
 - connecting ITSes running on klh10 or simh, or [the usim CADR emulator](https://tumbleweed.nu/lm-3/).
   Rather than configuring your
   klh10 to handle all other chudp hosts and iptables to forward chudp
-  pkts over the tun interface, keep routing in the bridge
+  pkts over the tun interface, you can keep routing in the bridge
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
@@ -43,6 +43,16 @@ Use cases could be
 There is also support for connecting user programs such as Supdup (in some Unix-like environment) to Chaosnet - [read more](#network-control-program).
 
 For more info on the Global Chaosnet, see https://chaosnet.net.
+
+## Requirements
+
+Note: This list might not be complete. Let me know your findings.
+
+For Linux:
+- `libpcap-dev`, `libnet1-dev`, `libssl-dev`
+
+For macOS:
+- `libpcap`, `openssl`, `libbind` (which needs `groff`)
 
 ## Features
 
@@ -120,7 +130,7 @@ subnet mappings on IPv4, since they map to the broadcast address.
 Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
 Yet Implemented.
 
-Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` and `libnet11` (on Mac, using `port`).
+Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` (on macOS, using `port`).
 
 For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
 
@@ -144,7 +154,7 @@ infrastructure. There is one for the Global Chaosnet, see [TLS](TLS.md)
 TLS is asymmetric, in the sense that one end is the server which the
 clients connect to.
 
-Requires `libssl-dev` to compile on Linux; on Mac with `port`, install `openssl`.
+Requires `libssl-dev` to compile on Linux; on macOS with `port`, install `openssl`.
 
 ### Network Control Program
 
