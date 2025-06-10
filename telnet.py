@@ -408,3 +408,5 @@ if __name__ == '__main__':
     except ChaosError as m:
         print("Chaosnet error: {}".format(m), file=sys.stderr)
         sys.exit(1)
+    except KeyboardInterrupt:
+        pass

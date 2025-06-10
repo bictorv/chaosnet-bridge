@@ -6,9 +6,11 @@ LIBRESOLV=-lresolv
 
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
-# To make chaosnet dns work in 15.4, you should install libbind (which needs tbl which comes with groff)
-CFLAGS = -I/opt/local/include/bind -I/opt/local/include -g
 LDFLAGS = -L/opt/local/lib
+CFLAGS = -I/opt/local/include -g
+# To make chaosnet dns work in 15.4, you may need to install libbind (which needs tbl which comes with groff).
+# You can try using libresolv by commenting the following two lines.
+CFLAGS = -I/opt/local/include/bind -I/opt/local/include -g
 LIBRESOLV = -lbind
 else
 CFLAGS = -g

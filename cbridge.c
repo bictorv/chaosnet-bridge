@@ -1930,7 +1930,8 @@ parse_config(char *cfile)
   // Obtain configuration
   FILE *config = fopen(cfile,"r");
   if (!config) {
-    fprintf(stderr,"Can't open config file '%s'\n",cfile);
+    char cwd[MAXPATHLEN];
+    fprintf(stderr,"Can't open config file '%s' in %s\n",cfile,getcwd(cwd,sizeof(cwd)));
     perror("fopen");
     exit(1);
   } else {
