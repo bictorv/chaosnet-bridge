@@ -3,17 +3,21 @@ MACH_NAME = $(shell uname -m)
 
 # default
 LIBRESOLV=-lresolv
+CFLAGS = -g
 
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
-LDFLAGS = -L/opt/local/lib
-CFLAGS = -I/opt/local/include -g
+PFX=/opt/local
+# Are we using homebrew rather than port?
+ifneq ($(HOMEBREW_PREFIX),)
+  PFX=$(HOMEBREW_PREFIX)
+endif
+LDFLAGS = -L$(PFX)/lib
+CFLAGS = -I$(PFX)/include -g
 # To make chaosnet dns work in 15.4, you may need to install libbind (which needs tbl which comes with groff).
 # You can try using libresolv by commenting the following two lines.
-CFLAGS = -I/opt/local/include/bind -I/opt/local/include -g
+CFLAGS += -I$(PFX)/include/bind
 LIBRESOLV = -lbind
-else
-CFLAGS = -g
 endif
 
 # For OpenBSD, do "pkg_add libbind"
@@ -30,9 +34,10 @@ ifeq ($(OS_NAME), FreeBSD)
 LIBRESOLV=
 endif
 
+# This is useful.
 CFLAGS+=-Wall
 
-all: cbridge hostat finger
+all: cbridge
 
 OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o firewall.o
 
@@ -77,12 +82,6 @@ pkqueue.o: pkqueue.c pkqueue.h cbridge-chaos.h
 
 firewall.o: firewall.c cbridge.h cbridge-chaos.h
 	$(CC) -c $(CFLAGS) -o $@ $<
-
-hostat: hostat.c cbridge-chaos.h
-	$(CC) $(CFLAGS) -o $@ $<
-
-finger: finger.c cbridge-chaos.h
-	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
 	rm -f cbridge hostat finger $(OBJS)

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Firewall script for cbridge, to avoid having the world access your Chaosnet over UDP
 
+# Where is the cbridge.conf file?
+CBCONF ?= cbridge.conf
 # Name of the iptables input chain to use (don't use INPUT, more work to clean up)
 CHAIN=Cbridge_INPUT
 
@@ -16,11 +18,11 @@ if [ "$1" = "stop" ]; then
     fi
 fi
 
-CHUDP_port=`cat cbridge.conf | grep -v ';' | grep -e '^chudp' | awk '{ print $2 }'`
+CHUDP_port=`cat $CBCONF | grep -v ';' | grep -e '^chudp' | awk '{ print $2 }'`
 if [ "x$CHUDP_port" = "x" ]; then
     CHUDP_port=42042
 fi
-CHUDP_sources=`cat cbridge.conf | grep -v ';' | grep 'link chudp' | awk '{ print $3 }'`
+CHUDP_sources=`cat $CBCONF | grep -v ';' | grep 'link chudp' | awk '{ print $3 }'`
 if [ "x$CHUDP_sources" = "x" ]; then
     # No chudp links, done
     exit

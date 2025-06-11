@@ -25,9 +25,9 @@ For convenient Chaosnet DNS use on macOS 15.4 (and perhaps higher), install `lib
 
 # Usage
 
-The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/PDP-10/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](finger.py)) to try a simple stream protocol, and [an example server program](named.py). Additionally there is also [a little demonstration program](bhostat.py) for the broadcast packet API (see below).
+The NCP opens a named local ("unix") socket for letting user programs interact with Chaosnet.  To try it out, use `nc -U /tmp/chaos_stream`. There is also [a special verion of supdup.c](https://github.com/PDP-10/supdup) to try a "real" protocol,  [a simple demo program for connectionless protocols](hostat.c), and [a finger program](finger.c) (also [in python](../tools/finger.py)) to try a simple stream protocol, and [an example server program](../tools/named.py). Additionally there is also [a little demonstration program](../tools/bhostat.py) for the broadcast packet API (see below).
 
-There is also [a simple client program for the FILE protocol](file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems, and a server for the [DOMAIN](domain.py) contact name, which responds to DNS queries over a stream connection (cbridge already handles queries on a simple protocol, but response sizes are limited by the Chaosnet packet size.) A [Telnet](telnet.py) client is also available, and a [HOSTAB](hostabd.py) server.
+There is also [a simple client program for the FILE protocol](../tools/file.py), which can list directories, read and write files etc, to and from LISPM and ITS systems, and a server for the [DOMAIN](../tools/domain.py) contact name, which responds to DNS queries over a stream connection (cbridge already handles queries on a simple protocol, but response sizes are limited by the Chaosnet packet size.) A [Telnet](../tools/telnet.py) client is also available, and a [HOSTAB](../tools/hostabd.py) server.
 
 
 Example:
@@ -110,7 +110,7 @@ The *CSL* can also be `all` to broadcast on all (reachable) subnets, or `local` 
 For a simple protocol, you can read multiple `ANS` responses.
 When the timeout expires, a `LOS Connection timed out` response is given to the user program (as described above for `RFC`).
 
-Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://chaosnet.net/amber.html#Broadcast) for how this works. There is also [a little demonstration program](bhostat.py) for the packet API (see below).
+Example: `BRD [timeout=3] 6,7,11 STATUS` sends a STATUS broadcast (BRD) packet to subnets 6, 7 and 11, with a timeout of 3 seconds. Please read [the spec](https://chaosnet.net/amber.html#Broadcast) for how this works. There is also [a little demonstration program](../tools/bhostat.py) for the packet API (see below).
 
 #### Responses
 
@@ -170,7 +170,7 @@ where *len* is the length in bytes (max 488) of the following *data* (which may 
 #### `FWD `*addr* *newcontact*
 where *addr* is an octal address and *newcontact* is the new contact to refer to, results in a FWD packet to the remote host, indicating it should instead send its RFC to that address and contact.
 
-To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](named.py).
+To handle new RFCs (while handling one, or after) your user program needs to open the `chaos_stream` socket again. See [an example server program](../tools/named.py).
 
 ## chaos_packet
 
@@ -242,7 +242,7 @@ The data part of `RFC`, `OPN`, `ANS`, `FWD`, and `UNC` packets are non-standard:
 - for OPN (received), it includes the remote host (see above)
 - for ANS (received), it includes the remote host (see above)
 - for FWD, it is two bytes of host address [lsb, msb] (which gets put in the ack field of the actual packet) immediately followed by the new contact name (ascii).
-- for UNC, it includes the packetno (2 bytes) and ackno (2 bytes) fields, which are not used for their normal purposes, but by the protocol using UNC. See [Using Foreign Protocols in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet), and for example the "screen SPY" protocol for LispM (cf `spy.py` in this repo).
+- for UNC, it includes the packetno (2 bytes) and ackno (2 bytes) fields, which are not used for their normal purposes, but by the protocol using UNC. See [Using Foreign Protocols in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet), and for example the "screen SPY" protocol for LispM (cf [spy.py](../tools/spy.py) in this repo).
 
 #### NOTE further
 If an `EOF` packet sent from the user program to the NCP has the data "wait" (four bytes), the NCP will send the EOF packet (without data) on the Chaosnet, await the packet to be acked, and send a special `ACK` packet (opcode 0177) to the user program when either the EOF packet is acked, or the `eofwait` timeout occurs. 
@@ -266,7 +266,7 @@ Tons of locking, but possibly not enough.
 
 ## Caveats
 
-The foreign protocol type (see [Section 6 in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_packet`).
+The foreign protocol type (see [Section 6 in Chaosnet](https://chaosnet.net/amber.html#Using-Foreign-Protocols-in-Chaosnet)) is not even tried, but should be tested (using `chaos_packet`). Note: UNC packets are now used by the [SPY](tools/spy.py) protocol client, but that isn't really the same as Foreign Protocols.
 
 There are remains of code for a `chaos_simple` socket type, an early idea which is not needed with how `chaos_stream` now works.
 
@@ -279,9 +279,9 @@ There are remains of code for a `chaos_simple` socket type, an early idea which 
 ### Applications:
 - [ ] Implement a PEEK protocol to show the state of conns and cbridge (including the things reported by the `-s` command line option). (This needs to be done in cbridge itself, to have access the internal data structures. Having only 488 bytes for a Simple protocol is limiting, but implementing a "shortcut" Stream protocol directly is a nice challenge.)
 - [ ] Implement a new CONFIG stream command for interacting with the configuration and state. Avoids the 488 byte problem, and would not allow remote access meaning a more limited security issue (only local).
-- [ ] Implement a fabulous web-based Chaosnet display using STATUS, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME...
-- [x] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection). Done, see [here](domain.py).
+- [x] Implement a fabulous web-based Chaosnet display using STATUS, LASTCN, DUMP-ROUTING-TABLE, UPTIME, TIME... Done, see [here](https://up.dfupdate.se/cha/hinfo.py).
+- [x] Implement a proper DOMAIN server (same as the non-standard simple DNS but over a Stream connection). Done, see [here](../tools/domain.py).
 - [x] Implement a [HOSTAB server](https://chaosnet.net/amber.html#Host-Table). This is useful for CADR systems (using the `:CHAOS-HOST-TABLE-SERVER-HOSTS` site option). (There is a HOSTAB server in ITS, but it only uses the local host table, not DNS.)
 - [x] Port the old FILE server from MIT to use this (see https://tumbleweed.nu/r/chaos/dir?ci=tip&name=chcbridge).
-- [ ] Implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server (and client) in a modern programming language.  A sketch of a client for FILE is now done, in Python.
+- [ ] Implement a new [FILE](https://github.com/PDP-10/its/blob/master/doc/sysdoc/chaos.file) (or [NFILE](https://tools.ietf.org/html/rfc1037)) server (and client) in a modern programming language.  A sketch of [a client for FILE](../tools/file.py) is now done, in Python.
 - [ ] Implement UDP over Foreign/UNC, then CHUDP over that. :-) Using `chaos_packet` it should be straight-forward.

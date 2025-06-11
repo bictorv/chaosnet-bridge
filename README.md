@@ -10,13 +10,14 @@ This program is a bridge between Chaosnet implementations. It supports different
 It also implements the transport layer of Chaosnet (using any of the above link layers), see [NCP](NCP.md).
 
 ## See also
-- [CONTACTS](CONTACTS.md) for info about which Chaosnet application protocols are supported - see also NCP (below) for how to add your own.
-- [CONFIGURATION](CONFIGURATION.md) for how to configure the bridge program.
-- [EXAMPLES](EXAMPLES.md) for some example configurations.
-- [TLS](TLS.md) for how to get a certificate for Chaosnet-over-TLS.
-- [NCP](NCP.md) for how to connect a user program to Chaosnet.
-- [FIREWALL](FIREWALL.md) for how to configure the built-in firewall. 
-- [HISTORY](HISTORY.md) for some historic notes.
+- [INSTALLATION](doc/INSTALLATION.md) for info about how to get cbridge running.
+- [CONTACTS](doc/CONTACTS.md) for info about which Chaosnet application protocols are supported - see also NCP (below) for how to add your own.
+- [CONFIGURATION](doc/CONFIGURATION.md) for how to configure the bridge program.
+- [EXAMPLES](doc/EXAMPLES.md) for some example configurations.
+- [TLS](doc/TLS.md) for how to get a certificate for Chaosnet-over-TLS.
+- [NCP](doc/NCP.md) for how to connect a user program to Chaosnet.
+- [FIREWALL](doc/FIREWALL.md) for how to configure the built-in firewall. 
+- [HISTORY](doc/HISTORY.md) for some historic notes.
 - [COPYRIGHT](COPYRIGHT.md) for copyright notice and acknowledgements.
 
 ## Use cases
@@ -31,10 +32,10 @@ Use cases could be
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
-  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS or -over-IP
+  others using LambdaDelta (use a Chaos-over-TLS or -over-UDP or -over-IP
   link between them). 
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
-  with others using usim (use a Chaos-over-UDP or -over-TLS or
+  with others using usim (use a Chaos-over-TLS or -over-UDP or
   -over-IP link between them). 
 - connecting remote Chaosnet-over-IP networks, e.g. in case you run [TOPS-20 with Chaosnet](https://github.com/bictorv/tops20-chaos), or a
   [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
@@ -56,7 +57,66 @@ For macOS:
 - xcode command line tools, of course
 - `libpcap`, `openssl`, sometimes `libbind` (which needs `groff`)
 
+There are reports that cbridge also works on NetBSD and OpenBSD, but [YMMV](https://en.wiktionary.org/wiki/your_mileage_may_vary).
+
 ## Features
+
+### Chaos-over-Ethernet
+
+Chaosnet packets are sent using the standard Ethernet protocol
+[0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
+No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
+628](https://chaosnet.net/amber.html#Hardware-Protocols)), since the
+Ethernet header does the corresponding job. Packets are sent in
+"big-endian" order.
+
+When configured to use Ethernet, ARP for Chaosnet is used: 
+- ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
+- Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
+
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](support/chaos.lua).
+
+### Chaos-over-IP
+
+Chaosnet packets are sent in IP/IPv6 packets, using the standard
+[IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
+Packets are sent in "big-endian" order, most often (but **not always**) with a ["hardware
+trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
+
+Chaosnet addresses are mapped to IP/IPv6 addresses either
+individually, or for a whole subnet (see
+[configuration](doc/CONFIGURATION.md)).
+
+Chaosnet addresses where the host byte is 0xFF cannot be used with
+subnet mappings on IPv4, since they map to the broadcast address. 
+Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
+Yet Implemented.
+
+Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` (on macOS, using `port`).
+
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](support/chaos.lua).
+
+### Chaos-over-TLS
+
+Chaosnet packets are sent over TLS, with a 2-byte header (length MSB,
+length LSB). Packets are sent in "big-endian" order, with a ["hardware
+trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
+
+There are different reasons to want to use TLS:
+- one is for improved security (confidentiality, authenticity), and
+- another is for clients which don't have externally reachable and
+  stable IP addresses and thus are not reachable by UDP. TCP would
+  suffice, but since clients don't have stable IPs, it would be hard to
+  firewall - instead you need an open server which is not so
+  nice/secure. TLS helps with the authentication. 
+
+When configured to use Chaos-over-TLS, it needs some certificate
+infrastructure. There is one for the Global Chaosnet, see [TLS](doc/TLS.md) 
+
+TLS is asymmetric, in the sense that one end is the server which the
+clients connect to.
+
+Requires `libssl-dev` to compile on Linux; on macOS with `port`, install `openssl`.
 
 ### Chaos-over-UDP
 
@@ -72,17 +132,17 @@ significant byte. (I'm really sorry about this, and might develop
 version 2 of the protocol with the only change being big-endian byte
 order.)
 
-When configured to use Chaos-over-UDP ("chudp", see the [configuration](CONFIGURATION.md) section)
+When configured to use Chaos-over-UDP ("chudp", see the [configuration](doc/CONFIGURATION.md) section)
 - the `dynamic` keyword can be used to allow new hosts to be added to
   the configuration by simply sending a chudp packet to us.
   This feature is not as useful here as in klh10, since it's easy
   to configure new links and fast to restart the bridge, as opposed to
   a whole ITS system.
-- host names given in chudp links (see [configuration](CONFIGURATION.md)) are re-parsed every five
+- host names given in chudp links (see [configuration](doc/CONFIGURATION.md)) are re-parsed every five
   minutes or so, to support dynamic DNS entries (hosts changing
   addresses). (Maybe this should be configurable.)
 
-For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](support/chaos.lua).
 
 ### Chaos-over-Unix-sockets
 
@@ -101,66 +161,9 @@ the bridge) since the named socket of the server is constant.
 need the "chaosd" server, but can connect directly to cbridge using
 Chaos-over-UDP.)
 
-### Chaos-over-Ethernet
-
-Chaosnet packets are sent using the standard Ethernet protocol
-[0x0804](https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml).
-No "hardware trailer" is used (cf [Section 2.5 of MIT AI Memo
-628](https://chaosnet.net/amber.html#Hardware-Protocols)), since the
-Ethernet header does the corresponding job. Packets are sent in
-"big-endian" order.
-
-When configured to use Ethernet, ARP for Chaosnet is used: 
-- ARP packets are sent and received in a standard manner to find ethernet-chaos mappings
-- Proxy ARP is used to inform the Ether hosts about non-Ethernet hosts (e.g chudp or unix-socket hosts)
-
-For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
-
-### Chaos-over-IP
-
-Chaosnet packets are sent in IP/IPv6 packets, using the standard
-[IP protocol 16](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml).
-Packets are sent in "big-endian" order, most often (but **not always**) with a ["hardware
-trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
-
-Chaosnet addresses are mapped to IP/IPv6 addresses either
-individually, or for a whole subnet (see
-[configuration](CONFIGURATION.md)).
-
-Chaosnet addresses where the host byte is 0xFF cannot be used with
-subnet mappings on IPv4, since they map to the broadcast address. 
-Broadcast on IPv6 (e.g for sending routing packets on a subnet) is Not
-Yet Implemented.
-
-Requires `libpcap-dev` and `libnet1-dev` (on Linux) or `libpcap` (on macOS, using `port`).
-
-For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](chaos.lua).
-
-### Chaos-over-TLS
-
-Chaosnet packets are sent over TLS, with a 2-byte header (length MSB,
-length LSB). Packets are sent in "big-endian" order, with a ["hardware
-trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
-
-There are different reasons to want to use TLS:
-- one is for improved security (confidentiality, authenticity), and
-- another is for clients which don't have externally reachable and
-  stable IP addresses and thus are not reachable by UDP. TCP would
-  suffice, but since clients don't have stable IPs, it would be hard to
-  firewall - instead you need an open server which is not so
-  nice/secure. TLS helps with the authentication. 
-
-When configured to use Chaos-over-TLS, it needs some certificate
-infrastructure. There is one for the Global Chaosnet, see [TLS](TLS.md) 
-
-TLS is asymmetric, in the sense that one end is the server which the
-clients connect to.
-
-Requires `libssl-dev` to compile on Linux; on macOS with `port`, install `openssl`.
-
 ### Network Control Program
 
-A simple unix sockets interface ("API") for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup). There is also a higher-level Python library.
+A simple unix sockets interface ("API") for connecting "any old program" to Chaosnet, e.g. Supdup. See [the docs](doc/NCP.md) and [Supdup for Chaosnet](https://github.com/PDP-10/supdup). There is also a higher-level Python library.
 
 For convenient Chaosnet DNS use on macOS 15.4 (and perhaps higher), some people need to install `libbind` (which needs `tbl` which comes with `groff`).
 
@@ -173,7 +176,7 @@ interconnecting two different subnets. Attaching single hosts to a
 subnet through this bridge is more doable.
 
 A bridge between two subnets needs an address on each one of them. In
-the [configuration](CONFIGURATION.md), see the `myaddr` parameter for
+the [configuration](doc/CONFIGURATION.md), see the `myaddr` parameter for
 links.
 
 ### Private non-routed subnet
@@ -187,7 +190,7 @@ subnet should be dropped. This is similar to the IP private networks
 such as 10.x.y.z or 192.168.x.y.
 
 Additional private non-routed subnets can be defined using the
-`private` keyword in the [configuration](CONFIGURATION.md), which can
+`private` keyword in the [configuration](doc/CONFIGURATION.md), which can
 also define a file for hostname-address mappings for private
 networks. (Such networks typically do not have DNS entries.)
 
