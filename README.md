@@ -10,6 +10,7 @@ This program is a bridge between Chaosnet implementations. It supports different
 It also implements the transport layer of Chaosnet (using any of the above link layers), see [NCP](NCP.md).
 
 ## See also
+- [INSTALLATION](doc/INSTALLATION.md) for info about how to get cbridge running.
 - [CONTACTS](doc/CONTACTS.md) for info about which Chaosnet application protocols are supported - see also NCP (below) for how to add your own.
 - [CONFIGURATION](doc/CONFIGURATION.md) for how to configure the bridge program.
 - [EXAMPLES](doc/EXAMPLES.md) for some example configurations.
