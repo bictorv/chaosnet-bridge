@@ -18,6 +18,15 @@ Keeping the CRL (certificate revocation list) up-to-date. These may also **NEED 
 - cbridge-crl-update.service - systemd service, which is run by cbridge-crl-update.timer
 - crl-update.sh - script which updates the CRL file, run by cbridge-crl-update.service
 
+Services. You will need to **READ AND EDIT** these to your local circumstances.
+- cbfile-server.service - runs the FILE server provided [here](https://tumbleweed.nu/r/chaos/dir?ci=tip&name=chcbridge).
+- chaosnet-rtape.service - runs the RTAPE server provided [here](https://github.com/Chaosnet/chaosnet-tools).
+- nft-dnschaos.service - runs an [NFT packet filtering](https://wiki.nftables.org/wiki-nftables) script to support Chaosnet DNS (e.g. from TOPS-20)
+  - nft-dnschaos.sh - runs the DNS NFT program, see below
+  - nft-dnschaos.py - Python program to set up DNS packet filtering to send Chaosnet-class DNS queries to a separate DNS server
+- klh10-nftables.service - installs another NFT packet filtering program to support running multiple klh10 instances on one machine, and to support/use the nft-dnschaos program (otherwise not very related to Chaosnet).
+  - klh10-nftables.conf - the NFT program.
+
 Other
 - chaos.lua - a "dissector" which can be used to show Chaosnet packets in [Wireshark/tshark](https://www.wireshark.org/). Needs to be installed in the right place, see comment at start.
 

@@ -1,0 +1,18 @@
+# /etc/systemd/system/nft-dnschaos.service
+[Unit]
+Description=Chaosnet DNS mangling
+Documentation=https://github.com/bictorv/chaosnet-bridge
+Requires=network-online.target
+RequiresMountsFor=/mnt/tm/siv /home/klh10
+Wants=nss-lookup.target
+After=network-online.target
+After=nss-lookup.target
+
+[Service]
+# YOU NEED TO UPDATE THE PATHS HERE MANUALLY
+Type=simple
+WorkingDirectory=/home/klh10/
+ExecStart=/home/klh10/nft-dnschaos.sh
+
+[Install]
+WantedBy=multi-user.target
