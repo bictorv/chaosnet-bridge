@@ -1,3 +1,5 @@
+# Tools
+
 This directory contains various tools to use with cbridge.
 
 C language programs:
@@ -13,7 +15,7 @@ Servers, written in Python using the NCP "API" of cbridge:
 - named.py - a server for the NAME protocol (used by finger.c, or :NAME or :F in ITS)
 
 Clients, written in Python using the NCP "API" of cbridge:
-- echotest.py - a client for the ECHO or BABEL protocols, for testing/debugging purposes.
+- echotest.py - a client for the ECHO and BABEL protocols, for testing/debugging purposes.
 - evactest.py - a client for the EVACUATE protocol (a very simple file transfer protocol)
 - file.py - a client for the FILE protocol (a nontrivial file transfer protocol). This is a gross hack.
 - finger.py - a client for the NAME protocol (no, not the FINGER protocol...)
@@ -22,5 +24,5 @@ Clients, written in Python using the NCP "API" of cbridge:
 - telnet.py - a client for the TELNET protocol (not SUPDUP, yet).
 - bhostat.py - a program which can use broadcast packets to quickly get information about the hosts on Chaosnet.
 
-The Python servers and clients use support libraries
+The Python servers and clients use support libraries:
 - chaosnet.py - basic Chaosnet access. See the classes PacketConn, BroadcastConn, StreamConn, and Simple for "simple" protocols. It also has some DNS support functions.

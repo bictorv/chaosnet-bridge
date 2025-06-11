@@ -1,3 +1,5 @@
+# Support files
+
 This directory contains support files for cbridge.
 
 General configuration
@@ -5,15 +7,15 @@ General configuration
 
 Starting cbridge - these files **NEED EDITING** for your local path to cbridge
 - cbridge.service - systemd service (for e.g. Linux)
-- cbridge-starter.sh - starter script used by cbridge.service
-  - cbridge-starter-services.sh - service starter script used by cbridge-starter.sh
-  - cbridge-services.conf - config file used by cbridge-starter-services.sh
-- firewall.sh - a script which adds simple packet filtering using iptables, run by cbridge.service
+  - cbridge-starter.sh - starter script used by cbridge.service
+    - cbridge-starter-services.sh - service starter script used by cbridge-starter.sh
+    - cbridge-services.conf - config file used by cbridge-starter-services.sh
+  - firewall.sh - a script which adds simple packet filtering using iptables, run by cbridge.service
 - net.chaosnet.cbridge.plist - plist for launchd (for e.g. macOS)
 
 Keeping the CRL (certificate revocation list) up-to-date. These may also **NEED EDITING**.
-- cbridge-crl-update.service - systemd service, which is run by cbridge-crl-update.timer
 - cbridge-crl-update.timer - systemd timer, which periodically runs cbridge-crl-update.service
+- cbridge-crl-update.service - systemd service, which is run by cbridge-crl-update.timer
 - crl-update.sh - script which updates the CRL file, run by cbridge-crl-update.service
 
 Other
