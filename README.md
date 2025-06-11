@@ -32,10 +32,10 @@ Use cases could be
   program. Adding new chudp hosts now doesn't require klh10
   configuration. 
 - connecting remote Chaosnet-over-Ethernets, e.g. to communicate with
-  others using LambdaDelta (use a Chaos-over-UDP or -over-TLS or -over-IP
+  others using LambdaDelta (use a Chaos-over-TLS or -over-UDP or -over-IP
   link between them). 
 - connecting remote Chaosnet-over-Unix-sockets, e.g. to communicate
-  with others using usim (use a Chaos-over-UDP or -over-TLS or
+  with others using usim (use a Chaos-over-TLS or -over-UDP or
   -over-IP link between them). 
 - connecting remote Chaosnet-over-IP networks, e.g. in case you run [TOPS-20 with Chaosnet](https://github.com/bictorv/tops20-chaos), or a
   [PDP-10/X](http://www.fpgaretrocomputing.org/pdp10x/).
@@ -57,50 +57,9 @@ For macOS:
 - xcode command line tools, of course
 - `libpcap`, `openssl`, sometimes `libbind` (which needs `groff`)
 
+There are reports that cbridge also works on NetBSD and OpenBSD, but [YMMV](https://en.wiktionary.org/wiki/your_mileage_may_vary).
+
 ## Features
-
-### Chaos-over-UDP
-
-Chaosnet packets are encapsulated in UDP packets, using a four-byte
-header (version=1, function=1, 0, 0), and with a "hardware
-trailer" (cf [Section 2.5 of MIT AI Memo 628](https://chaosnet.net/amber.html#Hardware-Protocols))
-containing the destination and source addresses and an [Internet
-Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
-["little-endian"
-order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
-i.e. with the least significant byte of a 16-bit word before the most
-significant byte. (I'm really sorry about this, and might develop
-version 2 of the protocol with the only change being big-endian byte
-order.)
-
-When configured to use Chaos-over-UDP ("chudp", see the [configuration](doc/CONFIGURATION.md) section)
-- the `dynamic` keyword can be used to allow new hosts to be added to
-  the configuration by simply sending a chudp packet to us.
-  This feature is not as useful here as in klh10, since it's easy
-  to configure new links and fast to restart the bridge, as opposed to
-  a whole ITS system.
-- host names given in chudp links (see [configuration](doc/CONFIGURATION.md)) are re-parsed every five
-  minutes or so, to support dynamic DNS entries (hosts changing
-  addresses). (Maybe this should be configurable.)
-
-For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](support/chaos.lua).
-
-### Chaos-over-Unix-sockets
-
-Chaosnet packets are sent over a named Unix socket, with a 4-byte
-header (length MSB, length LSB, 1, 0). Packets are sent in
-"big-endian" order, with a ["hardware
-trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
-
-When configured to use Chaos-over-unix-sockets, you need to also run
-the "chaosd" server (found with the usim CADR emulator, see
-http://www.unlambda.com/cadr/, or at https://tumbleweed.nu/lm-3/).
-There can be only one such server per host system (on the same host as
-the bridge) since the named socket of the server is constant.
-
-(Note that the modern usim at https://tumbleweed.nu/lm-3/ does not
-need the "chaosd" server, but can connect directly to cbridge using
-Chaos-over-UDP.)
 
 ### Chaos-over-Ethernet
 
@@ -158,6 +117,49 @@ TLS is asymmetric, in the sense that one end is the server which the
 clients connect to.
 
 Requires `libssl-dev` to compile on Linux; on macOS with `port`, install `openssl`.
+
+### Chaos-over-UDP
+
+Chaosnet packets are encapsulated in UDP packets, using a four-byte
+header (version=1, function=1, 0, 0), and with a "hardware
+trailer" (cf [Section 2.5 of MIT AI Memo 628](https://chaosnet.net/amber.html#Hardware-Protocols))
+containing the destination and source addresses and an [Internet
+Checksum](https://tools.ietf.org/html/rfc1071). Packets are sent in
+["little-endian"
+order](https://en.wikipedia.org/wiki/Endianness#Mapping_multi-byte_binary_values_to_memory),
+i.e. with the least significant byte of a 16-bit word before the most
+significant byte. (I'm really sorry about this, and might develop
+version 2 of the protocol with the only change being big-endian byte
+order.)
+
+When configured to use Chaos-over-UDP ("chudp", see the [configuration](doc/CONFIGURATION.md) section)
+- the `dynamic` keyword can be used to allow new hosts to be added to
+  the configuration by simply sending a chudp packet to us.
+  This feature is not as useful here as in klh10, since it's easy
+  to configure new links and fast to restart the bridge, as opposed to
+  a whole ITS system.
+- host names given in chudp links (see [configuration](doc/CONFIGURATION.md)) are re-parsed every five
+  minutes or so, to support dynamic DNS entries (hosts changing
+  addresses). (Maybe this should be configurable.)
+
+For tracing traffic, you might want to use [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) (or Wireshark) with the provided [dissector script](support/chaos.lua).
+
+### Chaos-over-Unix-sockets
+
+Chaosnet packets are sent over a named Unix socket, with a 4-byte
+header (length MSB, length LSB, 1, 0). Packets are sent in
+"big-endian" order, with a ["hardware
+trailer"](https://chaosnet.net/amber.html#Hardware-Protocols).
+
+When configured to use Chaos-over-unix-sockets, you need to also run
+the "chaosd" server (found with the usim CADR emulator, see
+http://www.unlambda.com/cadr/, or at https://tumbleweed.nu/lm-3/).
+There can be only one such server per host system (on the same host as
+the bridge) since the named socket of the server is constant.
+
+(Note that the modern usim at https://tumbleweed.nu/lm-3/ does not
+need the "chaosd" server, but can connect directly to cbridge using
+Chaos-over-UDP.)
 
 ### Network Control Program
 
