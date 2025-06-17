@@ -11,7 +11,9 @@ Optionally compile some tools.
 make -C tools
 ```
 
-In a directory of your choice, install
+(There is a top-level Makefile to do those two things.)
+
+In a directory of your choice (perhaps `/opt/cbridge`, perhaps something else), install
 - a cbridge.conf file (see [EXAMPLES](EXAMPLES.md) for examples),
 - the support/ca-chain.cert.pem file, and your own certificates and keys, and
 - the other cbridge [support files](../support). You can use the ```support``` directory itself, of course.
