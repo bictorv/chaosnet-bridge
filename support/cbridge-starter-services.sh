@@ -31,25 +31,25 @@ while [ ! -S /tmp/chaos_stream ]; do
     sleep 2;
 done
 # Run anyway, but notify user
-./hostat -q -t 3 3040 || echo FYI: No route to Router.Chaosnet.NET?
+$CBRIDGE_TOOLS/hostat -q -t 3 3040 || echo FYI: No route to Router.Chaosnet.NET?
 
 if [ $DOMAINP -gt 0 ]; then
-    python3 domain.py &
+    python3 $CBRIDGE_TOOLS/domain.py &
 fi
 if [ $NAMEDP -gt 0 ]; then
-    python3 named.py &
+    python3 $CBRIDGE_TOOLS/named.py &
 fi
 if [ $FINGERDP -gt 0 ]; then
     if [ "$AFFILIATION" != "" ]; then
-	python3 fingerd.py -a $AFFILIATION &
+	python3 $CBRIDGE_TOOLS/fingerd.py -a $AFFILIATION &
     else
-	python3 fingerd.py &
+	python3 $CBRIDGE_TOOLS/fingerd.py &
     fi
 fi
 if [ $LOADDP -gt 0 ]; then
-    python3 loadd.py &
+    python3 $CBRIDGE_TOOLS/loadd.py &
 fi
 
 if [ $HOSTABP -gt 0 ]; then
-    python3 hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN &
+    python3 $CBRIDGE_TOOLS/hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN &
 fi
