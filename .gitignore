@@ -63,6 +63,7 @@ finger
 
 # Python cache
 __pycache__/**
+*.pyc
 
 # temp stuff
 tmp/**

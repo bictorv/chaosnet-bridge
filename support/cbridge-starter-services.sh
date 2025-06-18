@@ -1,8 +1,9 @@
 #!/bin/sh
 # Starter script for Chaosnet services not already built-in in cbridge (typically stream services).
 
-# Make sure the chaosnet library is found
-PYTHONPATH=.:$PYTHONPATH
+# Make sure the chaosnet library is found - YOU MAY NEED TO EDIT THIS
+CBRIDGE_TOOLS=../tools
+PYTHONPATH=$CBRIDGE_TOOLS:$PYTHONPATH
 
 # Start DOMAIN server (the stream protocol; cbridge has the simple DNS protocol built-in)
 DOMAINP=0
@@ -13,6 +14,7 @@ FINGERDP=0
 # The LOAD protocol
 LOADDP=0
 # The HOSTAB protocol
+HOSTABP=0
 
 # Read config file
 [ -f ./cbridge-services.conf ] && . ./cbridge-services.conf
@@ -32,22 +34,22 @@ done
 ./hostat -q -t 3 3040 || echo FYI: No route to Router.Chaosnet.NET?
 
 if [ $DOMAINP -gt 0 ]; then
-    python3 ./domain.py &
+    python3 domain.py &
 fi
 if [ $NAMEDP -gt 0 ]; then
-    python3 ./named.py &
+    python3 named.py &
 fi
 if [ $FINGERDP -gt 0 ]; then
     if [ "$AFFILIATION" != "" ]; then
-	python3 ./fingerd.py -a $AFFILIATION &
+	python3 fingerd.py -a $AFFILIATION &
     else
-	python3 ./fingerd.py &
+	python3 fingerd.py &
     fi
 fi
 if [ $LOADDP -gt 0 ]; then
-    python3 ./loadd.py &
+    python3 loadd.py &
 fi
 
 if [ $HOSTABP -gt 0 ]; then
-    python3 ./hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN &
+    python3 hostabd.py -s $HOSTAB_DNS -D $HOSTAB_DOMAIN &
 fi

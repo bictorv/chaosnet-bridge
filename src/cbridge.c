@@ -79,6 +79,7 @@
 #include <signal.h>
 #include <ctype.h>
 
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/poll.h>
