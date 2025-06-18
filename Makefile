@@ -1,7 +1,9 @@
 all:	cbridge tools
 
-cbridge:
+cbridge:	.FORCE
 	make -C src
 
-tools:
+tools:	.FORCE
 	make -C tools
+
+.FORCE:
