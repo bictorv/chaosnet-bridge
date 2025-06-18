@@ -937,6 +937,54 @@ void *tls_connector(void *arg)
 	      fprintf(stderr,"%#o ", claddrs[i]);
 	    fprintf(stderr,"\n");
 	  }
+	  // if no addr was given for the tls link, initiate it to the address it has on the same subnet as I
+	  if (td->tls_addr == 0) {
+	    for (i = 0; i < naddrs; i++) {
+	      u_short my = my_tls_myaddr(claddrs[i]);
+	      if (my) {
+		fprintf(stderr,"TLS: initiating remote addr of TLS link to %s to %#o (from DNS addr of server CN %s).\n",
+			td->tls_name, claddrs[i], server_cn);
+		td->tls_addr = claddrs[i];
+		// update routing table entry too
+		int updated = 0;
+		struct chroute *zrt = NULL;
+		for (int j = 0; j < rttbl_host_len; j++) {
+		  struct chroute *rt = &rttbl_host[j];
+		  if ((rt->rt_link == LINK_TLS) && (rt->rt_type == RT_STATIC) && (rt->rt_dest == 0)) {
+		    // This is a TLS route which is half-setup by config
+		    if (rt->rt_myaddr == my) { // entry with matching myaddr, clearly a win
+		      if (tls_debug) {
+			fprintf(stderr,"TLS: using route with matching myaddr %#o\n", rt->rt_myaddr);
+		      }
+		      rt->rt_dest = td->tls_addr;
+		      updated = 1;
+		      break;
+		    } else if (rt->rt_myaddr == 0) {
+		      // else save possible match in case we don't find one with matching myaddr.
+		      // Note that it doesn't matter if we find more than one, they are equivalent.
+		      zrt = rt;
+		    }
+		  }
+		}
+		if (!updated) {
+		  if (zrt != NULL) {
+		    if (tls_debug) {
+		      fprintf(stderr,"TLS: using route with zero myaddr\n");
+		    }
+		    zrt->rt_dest = td->tls_addr;
+		  } else {
+		    fprintf(stderr,"%%%% TLS: Can't find routing table entry to update for %s link to %s (%#o). This TLS dest will not work.\n",
+			    td->tls_name, server_cn, claddrs[i]);
+		  }
+		}
+		break;
+	      }
+	    }
+	    if (td->tls_addr == 0) {
+	      fprintf(stderr,"%%%% TLS: failed to find a matching addr for TLS link to %s from DNS addrs of server CN %s.\n",
+		      td->tls_name, server_cn);
+	    }
+	  }
 	  int found = 0;
 	  // @@@@ check for private subnet addresses, which should not be in DNS?
 	  for (i = 0; i < naddrs; i++) {
@@ -949,9 +997,10 @@ void *tls_connector(void *arg)
 	    if (tls_debug || verbose || debug) {
 	      if (naddrs < -1) 
 		fprintf(stderr,"%%%% TLS: DNS error while looking up server CN:\n");
-	      fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
-	      // one day, do something
 	    }
+	    // warn visibly (to explain why the connection isn't coming up)
+	    fprintf(stderr, "%% Warning: TLS server CN %s doesn't match Chaos address in TLS dest (%#o)\n", server_cn, td->tls_addr);
+	    // one day, do something
 	    X509_free(ssl_server_cert);
 	    // just sleep and retry - maybe temporary DNS failure?
 	    // @@@@ count the number of times, and warn occasionally
@@ -966,7 +1015,7 @@ void *tls_connector(void *arg)
 	  }
 	} else {
 	  if (1 || tls_debug || verbose || debug) {
-	    fprintf(stderr, "%%%% Error: TLS server has no CN in cert, for TLS dest %#o\n", td->tls_addr);
+	    fprintf(stderr, "%%%% Error: TLS server has no CN in cert, for TLS dest %s (%#o)\n", td->tls_name, td->tls_addr);
 	  }
 	  X509_free(ssl_server_cert);
 	  // close and terminate

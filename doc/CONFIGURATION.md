@@ -75,7 +75,11 @@ You can define links of two types: for whole subnets, and for individual hosts.
     configures a subnet (one octal byte) 
 - `link` *LINKTYPE* `host` *%o* *ROUTEARGS*
 
-	configures an individual host (octal 16-bit address)
+	configures an individual host (octal 16-bit address). 
+	For TLS links, the address can be the string `unknown` (but only if cbridge is configured to use DNS). 
+	In this case, the address is discovered dynamically from the DNS addresses of the server CN, which is found in its TLS certificate. 
+	This is mainly useful when the server might occasionally change addresses, like the central hub for [the Global Chaosnet](https://chaosnet.net/global).
+	For `unknown` to work, the server must have an address on a subnet which matches the `myaddr` link parameter (or the `chaddr` global parameter).
 
 ### ROUTEDEF:
 

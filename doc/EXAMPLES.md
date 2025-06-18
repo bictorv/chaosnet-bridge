@@ -13,8 +13,8 @@ In this example, you connect to the Global Chaosnet [over TLS](TLS.md), and you 
     chaddr 6001
 	; Configure my TLS key and cert (see TLS.md)
 	tls key private/my.key.pem cert certs/my.cert.pem
-    ; Define a Chaos-over-TLS link to the Global Chaosnet router, which has address 3040
-    link tls router.chaosnet.net host 3040 myaddr 3171
+    ; Define a Chaos-over-TLS link to the Global Chaosnet router. Its address might occasionally change, so keep it unspecified.
+    link tls router.chaosnet.net host unknown myaddr 3171
     ; Define a local Chaos-over-Ether on the eth0 interface, for subnet nr 14 (hosts 6001-6376)
     link ether eth0 subnet 14
     ; A chaos-over-udp link to the ITS configured below
@@ -53,7 +53,7 @@ For cbridge, you can use the following (after [getting yourself a cerificate](TL
     ; FIRST define the link to my KLH10
     link chudp localhost:42043 host 3172 myaddr 3171
     ; THEN define the link to the central, with the mux parameter
-    link tls router.chaosnet.net host 3040 myaddr 3171 mux 3072
+    link tls router.chaosnet.net host unknown myaddr 3171 mux 3072
 
 (The "mux" setup works not only for a single klh10, but also up to four local hosts.)
 
@@ -70,7 +70,7 @@ First, [create a certificate request](TLS.md) and get a certificate back. Then, 
 	; Configure my TLS key and cert (see TLS.md)
 	tls key private/my.key.pem cert certs/my.cert.pem
 	; Define a TLS link to the main router over IPv6
-	link tls router.chaosnet.net host 3040 myaddr 3077
+	link tls router.chaosnet.net host unknown myaddr 3077
 
 This should enable you to use e.g. [supdup](https://github.com/PDP-10/supdup) to connect to ITS systems,  [hostat](hostat.c) to check the status of systems, or [finger](finger.py) to check who is logged in.
 
@@ -189,7 +189,7 @@ use) an address specific to each net.
     link ether eth0 subnet 1 myaddr 440
 
 To tell cbridge to send routing info about net 6, which only has
-individual host links, a route declaration is necessary. You will probably never need this.
+individual host links, a route declaration is necessary. You will probably never need this, and it is a bug that it is sometimes needed.
 
     route subnet 6 bridge 3040 cost asynch
 

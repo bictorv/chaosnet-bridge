@@ -1642,23 +1642,33 @@ parse_link_config()
     fprintf(stderr,"bad link config: no %s addr\n", (subnetp ? "subnet" : "host"));
     return -1;
   }
-  if (sscanf(tok,"%ho",&addr) != 1) {
-    fprintf(stderr,"bad octal value %s\n", tok);
-    return -1;
-  }
-  if (subnetp) {
-    if ((addr == 0) || (addr > 0xff)) {
-      fprintf(stderr,"bad subnet number \"%s\"\n", tok);
-      return -1;
-    }
-    rt->rt_dest = addr<<8;
+#if CHAOS_TLS && CHAOS_DNS
+  // This hack will only work for TLS links, and only if DNS is being used
+  if ((rt->rt_link == LINK_TLS) && (strcasecmp(tok, "unknown") == 0)) {
+    addr = 0;
+    rt->rt_dest = 0;
   } else {
-    if (!valid_chaos_host_address(addr)) {
-      fprintf(stderr,"bad host address \"%s\"\n", tok);
+#endif
+    if (sscanf(tok,"%ho",&addr) != 1) {
+      fprintf(stderr,"bad octal value %s\n", tok);
       return -1;
     }
-    rt->rt_dest = addr;
+    if (subnetp) {
+      if ((addr == 0) || (addr > 0xff)) {
+	fprintf(stderr,"bad subnet number \"%s\"\n", tok);
+	return -1;
+      }
+      rt->rt_dest = addr<<8;
+    } else {
+      if (!valid_chaos_host_address(addr)) {
+	fprintf(stderr,"bad host address \"%s\"\n", tok);
+	return -1;
+      }
+      rt->rt_dest = addr;
+    }
+#if CHAOS_TLS && CHAOS_DNS
   }
+#endif
   if (parse_link_args(rt, addr) < 0)
     return -1;
 
@@ -1705,7 +1715,7 @@ parse_link_config()
       } else
 	found = 0;		// look for next mux address
     }
-    if ((addr >> 8) != (rt->rt_myaddr >> 8)) {
+    if ((addr != 0) && ((addr >> 8) != (rt->rt_myaddr >> 8))) {
       fprintf(stderr,"Error: TLS destination address %o must be on same subnet as TLS \"myaddr\" %o\n",
 	      addr, rt->rt_myaddr);
 	return -1;
