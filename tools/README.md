@@ -26,3 +26,4 @@ Clients, written in Python using the NCP "API" of cbridge:
 
 The Python servers and clients use support libraries:
 - chaosnet.py - basic Chaosnet access. See the classes PacketConn, BroadcastConn, StreamConn, and Simple for "simple" protocols. It also has some DNS support functions.
+- dnspython - library for low-level DNS, see [documentation](https://dnspython.readthedocs.io/en/latest/). Install by e.g. `pip3 install dnspython`.
