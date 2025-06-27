@@ -18,7 +18,7 @@ In a directory of your choice (perhaps `/opt/cbridge`, perhaps something else), 
 - the support/ca-chain.cert.pem file, and your own certificates and keys, and
 - the other cbridge [support files](../support). You can use the ```support``` directory itself, of course.
 
-You probably need to edit the other [support scripts](../support) to reflect what your directory of choice is. You should read these files and try to understand them.
+You probably **need to edit** the other [support scripts](../support) to reflect what your directory of choice is. You should read these files and try to understand them. See also [support documentation](support/README.md].
 
 Copy the cbridge binary to the directory of choice. Optionally install the compiled tools/clients in your PATH.
 

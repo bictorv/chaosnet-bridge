@@ -1,8 +1,8 @@
 #!/bin/sh
 # Firewall script for cbridge, to avoid having the world access your Chaosnet over UDP
 
-# Where is the cbridge.conf file?
-CBCONF ?= cbridge.conf
+# Where is the cbridge.conf file? @@@@ YOU MAY NEED TO EDIT THIS
+CBCONF=cbridge.conf
 # Name of the iptables input chain to use (don't use INPUT, more work to clean up)
 CHAIN=Cbridge_INPUT
 
