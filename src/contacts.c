@@ -50,6 +50,9 @@ static struct rfc_handler mycontacts[] = {
   { NULL, NULL}			/* end marker */
 };
 
+// @@@@ Also make RUT and DUMP-ROUTING-TABLE do the right thing.
+// @@@@ I.e. not announce the subnet route until the host link to the bridge is up, but then announce it.
+
 // Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.
 int
 make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
