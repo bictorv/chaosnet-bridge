@@ -108,6 +108,11 @@ Link and route defs take optional arguments.
     For TLS links *only*, an additional parameter `mux` can be used to multiplex more hosts (e.g. a KLH10) over a single TLS connection, without requiring a separate subnet to be allocated. See [an example config](EXAMPLES.md). The argument *%o-list* is a comma-separated list of octal Chaosnet addresses (note: no spaces allowed, only commas). A maximum limit for the number of multiplexed addresses exists (currently 16, see `CHTLS_MAXMUX`).
     **NOTE** that the "muxed" addresses *must* be on the same subnet as the TLS link, and *each* must be directly reachable through (individual) links, defined *before* the TLS link. *Note*: If the link to the muxed address is a `subnet` link (rather than a `host` link), routing might break.
 
+- `link` *LINKTYPE*
+
+  Sets the link type of the route. This is useful when the bridge of the route might not always be connected/available.
+  If unspecified, the link type is taken from the currently available link to the bridge, or is left as "no link", making it useless.
+
 ### LINKTYPE:
 
 For links, you need to specify what link layer implementation is used for it.
@@ -165,3 +170,30 @@ subnet.
 Dynamic routes are also defined automatically by incoming TLS
 connections (to the server) and when using `dynamic` chudp/chip,
 unless there is an existing static route.
+
+## Using a TLS "hub" network
+
+The Global Chaosnet until 2025 used a central hub for subnet 6 which is a TLS server, and clients with a proper certificate can connect to it, adding connectivity to their local subnets.
+This made the network structure contradictory to the Chaosnet principle of "[no central control](https://chaosnet.net/amber.html#Introduction)", and sensitive to crashes or errors at the central hub.
+
+For increased redundancy, the dependence on a central hub can be removed. Two (or more) TLS servers for a subnet can cooperate, all of them accepting clients. If a packet arrives at one of them, but the server does not have a direct TLS link to the destination, it can send it to another of the subnet servers. The next server might have a direct link to the destination, or pass the packet along to another server. If none have a direct link to the destination, the [forwarding count](https://chaosnet.net/amber.html#Routing) for the packet will eventually reach its maximum and the packet is dropped.
+
+For servers with only incoming TLS links, the route to the "next" subnet server needs to be configured manually using e.g.
+
+    route subnet 6 bridge NNNN link tls
+
+(where *NNNN* is the Chaosnet address of the "next" subnet server). Note that `link tls` is necessary for the route to be used also before/when the TLS link to *NNNN* is not up (yet).
+
+Other servers, with active/client TLS links to its "next" server, e.g. with
+
+    link tls next.chaosnet.net host MMMM myaddr NNNN
+
+will dynamically/automatically configure their routes when (a) the TLS connection is up, and (b) the other server sends routing info about the net.
+
+**Normal (non-server) TLS clients** connecting to any of the servers will also dynamically/automatically configure their routes, so no manual `route` config is needed.
+
+For added convenience, if the host name used in a `link tls` configuration has more than one IPv4/IPv6 address, they will be tried in a round-robin manner when connecting. This e.g. means that if/when `router.chaosnet.net` has the addresses of all the subnet servers for net 6, a client needs only use
+
+    link tls router.chaosnet.net host unknown myaddr NNNN
+
+(where *NNNN* is the client's Chaosnet address) and will be connected to the first of the subnet servers that is available (in case they are not all available).
