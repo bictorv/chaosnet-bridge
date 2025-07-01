@@ -174,6 +174,74 @@ parse_tls_config_line()
   return 0;
 }
 
+void reparse_tls_names(void)
+{
+  int res;
+  struct addrinfo *he, hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = PF_UNSPEC;
+  hints.ai_protocol = IPPROTO_IP; // any IP version
+  hints.ai_socktype = SOCK_DGRAM; // ask for UDP to avoid getting duplicates for UDP+TCP
+#ifdef AI_ADDRCONFIG		// Use AI_ADDRCONFIG if appropriate
+#ifdef AI_MASK			// and it is a valid flag
+  if (AI_MASK & AI_ADDRCONFIG)
+#endif
+    hints.ai_flags = AI_ADDRCONFIG;
+#endif
+  
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
+  for (int i = 0; i < tlsdest_len; i++) {
+    struct in_addr in;
+    struct in6_addr in6;
+    if ((tlsdest[i].tls_name[0] != '\0') // have a name
+	&& (inet_aton(tlsdest[i].tls_name, &in) == 0) // it's not an explicit v4 addr
+	&& (inet_pton(AF_INET6, tlsdest[i].tls_name, &in6) == 0)) { // and not an explicit v6 addr
+      if (tls_debug) fprintf(stderr,"tls: reparsing destination %s\n", tlsdest[i].tls_name);
+      struct sockaddr *sa = &tlsdest[i].tls_saddr[0];
+      int max_addr = sizeof(tlsdest[i].tls_saddr)/sizeof(struct sockaddr);
+      int nparsed = 0;
+      if ((res = getaddrinfo(tlsdest[i].tls_name, NULL, &hints, &he)) == 0) {
+	struct addrinfo *first_he = he;
+	do {
+	  sa->sa_family = he->ai_family;
+	  if (he->ai_family == AF_INET) {
+	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	    struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+	    sin->sin_port = tlsdest[i].tls_port;
+	    memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
+	  } else if (he->ai_family == AF_INET6) {
+	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	    struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
+	    sin->sin6_port = tlsdest[i].tls_port;
+	    memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
+	  } else {
+	    fprintf(stderr,"error parsing TLS host %s: unknown address family %d\n",
+		    tlsdest[i].tls_name, he->ai_family);
+	    return;
+	  }
+	  he = he->ai_next;
+	  sa++;
+	  max_addr--;
+	  nparsed++;
+	}
+	// If we should parse multiple addresses, go on
+	while ((he != NULL) && (max_addr > 0));
+	freeaddrinfo(first_he);
+      } else {
+	if (tls_debug) fprintf(stderr,"%%%% TLS: can't reparse tls destination name %s, keeping old results\n",
+			       tlsdest[i].tls_name);
+	continue;
+      }
+      if (nparsed != tlsdest[i].tls_n_saddr) {
+	if (tls_debug) fprintf(stderr,"tls: reparsing %s gives %d addresses, previously %d\n", 
+			       tlsdest[i].tls_name, nparsed, tlsdest[i].tls_n_saddr);
+	tlsdest[i].tls_n_saddr = nparsed;
+      }
+    } else if (tls_debug) fprintf(stderr,"tls: not reparsing tls dest %s\n", tlsdest[i].tls_name);
+  }
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
+}
+
 // send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
 void
 send_empty_sns(struct tls_dest *td, u_short onbehalfof)
@@ -452,6 +520,7 @@ void print_tlsdest_config()
 	   tlsdest[i].tls_myaddr);
     if (tlsdest[i].tls_serverp) printf("(server) ");
     // could be more than one addr
+    printf("port %d ", ntohs(tlsdest[i].tls_port));
     for (j = 0; j < tlsdest[i].tls_n_saddr; j++) {
       if (tlsdest[i].tls_saddr[j].sa_family != 0) {
 	ip46_ntoa(&tlsdest[i].tls_saddr[j], ip, sizeof(ip));

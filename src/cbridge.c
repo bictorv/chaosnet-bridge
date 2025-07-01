@@ -218,6 +218,7 @@ int postparse_ether_link_config(struct chroute *rt);
 // chtls
 void init_chaos_tls();
 void print_tlsdest_config(void);
+void reparse_tls_names(void);
 #endif
 
 #if CHAOS_IP
@@ -499,6 +500,9 @@ reparse_link_host_names_thread(void *v)
     reparse_chudp_names();   // occasionally re-parse chu_name strings
 #if CHAOS_IP
     reparse_chip_names();
+#endif
+#if CHAOS_TLS
+    reparse_tls_names();
 #endif
   }
 }
@@ -1575,6 +1579,7 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
 
   if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
     int nparsed = 0;
+    struct addrinfo *first_he = he;
     do {
       sa->sa_family = he->ai_family;
       if (he->ai_family == AF_INET) {
@@ -1599,6 +1604,7 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
     }
     // If we should parse multiple addresses, go on
     while ((he != NULL) && (multiple_addrs > 0));
+    freeaddrinfo(first_he);
     strncpy(nameptr, tok, nameptr_len);
     return nparsed;
   } else {
@@ -1671,6 +1677,8 @@ parse_link_config()
 			     (char *)&tlsdest[tlsdest_len].tls_name, TLSDEST_NAME_LEN, TLSDEST_MAX);
     if (np < 0)
       return -1;
+    else if (np > 0)
+      tlsdest[tlsdest_len].tls_port = ((struct sockaddr_in *)&tlsdest[tlsdest_len].tls_saddr)->sin_port; // make it handy
     tlsdest[tlsdest_len].tls_n_saddr = np;
     do_tls = 1;
     tlsdest_len++;

@@ -215,6 +215,7 @@ struct chudest {
 struct tls_dest {
   u_short tls_addr;		/* remote chaos address */
   int tls_dwild;	// destination is initially "wild", unspecific
+  u_short tls_port;	// port to use
   u_short tls_myaddr;		/* my address on this link */
   char tls_name[TLSDEST_NAME_LEN]; /* name given in (client) config or from CN (in servers) */
   int tls_serverp; /* 1 if server end - don't bother with mutex/cond stuff */
