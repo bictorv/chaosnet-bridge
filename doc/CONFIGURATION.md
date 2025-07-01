@@ -178,11 +178,12 @@ This made the network structure contradictory to the Chaosnet principle of "[no 
 
 For increased redundancy, the dependence on a central hub can be removed. Two (or more) TLS servers for a subnet can cooperate, all of them accepting clients. If a packet arrives at one of them, but the server does not have a direct TLS link to the destination, it can send it to another of the subnet servers. The next server might have a direct link to the destination, or pass the packet along to another server. If none have a direct link to the destination, the [forwarding count](https://chaosnet.net/amber.html#Routing) for the packet will eventually reach its maximum and the packet is dropped.
 
-For servers with only incoming TLS links, the route to the "next" subnet server needs to be configured manually using e.g.
+### Server configuration
+For servers with only incoming TLS links *but are part of such a set of subnet servers*, the route to the "next" subnet server needs to be configured manually using e.g.
 
     route subnet 6 bridge NNNN link tls
 
-(where *NNNN* is the Chaosnet address of the "next" subnet server). Note that `link tls` is necessary for the route to be used also before/when the TLS link to *NNNN* is not up (yet).
+(where *NNNN* is the Chaosnet address of the "next" subnet server). Note that `link tls` is necessary for the route to be used also before/when the TLS link to *NNNN* is not up (yet). Note also that if the server is the only TLS server for a subnet, no such manual `route` configuration is necessary or desired.
 
 Other servers, with active/client TLS links to its "next" server, e.g. with
 
@@ -190,6 +191,7 @@ Other servers, with active/client TLS links to its "next" server, e.g. with
 
 will dynamically/automatically configure their routes when (a) the TLS connection is up, and (b) the other server sends routing info about the net.
 
+### Client configuration
 **Normal (non-server) TLS clients** connecting to any of the servers will also dynamically/automatically configure their routes, so no manual `route` config is needed.
 
 For added convenience, if the host name used in a `link tls` configuration has more than one IPv4/IPv6 address, they will be tried in a round-robin manner when connecting. This e.g. means that if/when `router.chaosnet.net` has the addresses of all the subnet servers for net 6, a client needs only use
@@ -197,3 +199,6 @@ For added convenience, if the host name used in a `link tls` configuration has m
     link tls router.chaosnet.net host unknown myaddr NNNN
 
 (where *NNNN* is the client's Chaosnet address) and will be connected to the first of the subnet servers that is available (in case they are not all available).
+
+### If you find this confusing
+Please let me know so I can explain better! :-)
