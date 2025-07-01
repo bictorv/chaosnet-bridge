@@ -188,11 +188,6 @@ use) an address specific to each net.
 
     link ether eth0 subnet 1 myaddr 440
 
-To tell cbridge to send routing info about net 6, which only has
-individual host links, a route declaration is necessary. You will probably never need this, and it is a bug that it is sometimes needed.
-
-    route subnet 6 bridge 3040 cost asynch
-
 ## Example: Chaos-over-IP
 
 To set up an individual link to another host (a chaosnet bridge, or perhaps a PDP-10/X) using Chaos-over-IP, use
