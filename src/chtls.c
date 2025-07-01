@@ -519,6 +519,7 @@ void print_tlsdest_config()
 	   tlsdest[i].tls_name,
 	   tlsdest[i].tls_myaddr);
     if (tlsdest[i].tls_serverp) printf("(server) ");
+    if (tlsdest[i].tls_sock > 0) printf("[connected] ");
     // could be more than one addr
     printf("port %d ", ntohs(tlsdest[i].tls_port));
     for (j = 0; j < tlsdest[i].tls_n_saddr; j++) {

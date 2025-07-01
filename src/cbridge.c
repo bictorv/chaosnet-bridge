@@ -402,6 +402,7 @@ char *rt_linkname(u_char linktype)
 #if CHAOS_ETHERP
   case LINK_ETHER: return "Ether";
 #endif
+  case LINK_NOLINK: return "[no link]";
   default: return "Unknown?";
   }
 }
