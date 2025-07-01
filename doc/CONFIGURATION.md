@@ -179,7 +179,7 @@ This made the network structure contradictory to the Chaosnet principle of "[no 
 For increased redundancy, the dependence on a central hub can be removed. Two (or more) TLS servers for a subnet can cooperate, all of them accepting clients. If a packet arrives at one of them, but the server does not have a direct TLS link to the destination, it can send it to another of the subnet servers. The next server might have a direct link to the destination, or pass the packet along to another server. If none have a direct link to the destination, the [forwarding count](https://chaosnet.net/amber.html#Routing) for the packet will eventually reach its maximum and the packet is dropped.
 
 ### Server configuration
-For servers with only incoming TLS links *but are part of such a set of subnet servers*, the route to the "next" subnet server needs to be configured manually using e.g.
+For servers with only incoming TLS links for the particular subnet, and have "secondary" servers for the subnet (see "Other servers" below), the route to the "next" subnet server needs to be configured manually using e.g.
 
     route subnet 6 bridge NNNN link tls
 
