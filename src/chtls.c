@@ -196,7 +196,7 @@ void reparse_tls_names(void)
     if ((tlsdest[i].tls_name[0] != '\0') // have a name
 	&& (inet_aton(tlsdest[i].tls_name, &in) == 0) // it's not an explicit v4 addr
 	&& (inet_pton(AF_INET6, tlsdest[i].tls_name, &in6) == 0)) { // and not an explicit v6 addr
-      if (tls_debug) fprintf(stderr,"tls: reparsing destination %s\n", tlsdest[i].tls_name);
+      // if (tls_debug) fprintf(stderr,"tls: reparsing destination %s\n", tlsdest[i].tls_name);
       struct sockaddr *sa = &tlsdest[i].tls_saddr[0];
       int max_addr = sizeof(tlsdest[i].tls_saddr)/sizeof(struct sockaddr);
       int nparsed = 0;
@@ -237,7 +237,7 @@ void reparse_tls_names(void)
 			       tlsdest[i].tls_name, nparsed, tlsdest[i].tls_n_saddr);
 	tlsdest[i].tls_n_saddr = nparsed;
       }
-    } else if (tls_debug) fprintf(stderr,"tls: not reparsing tls dest %s\n", tlsdest[i].tls_name);
+    } // else if (tls_debug) fprintf(stderr,"tls: not reparsing tls dest %s\n", tlsdest[i].tls_name);
   }
   PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
 }
