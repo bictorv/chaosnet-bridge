@@ -194,6 +194,7 @@ void reparse_tls_names(void)
     struct in_addr in;
     struct in6_addr in6;
     if ((tlsdest[i].tls_name[0] != '\0') // have a name
+	&& (!tlsdest[i].tls_serverp)	 // not a server end
 	&& (inet_aton(tlsdest[i].tls_name, &in) == 0) // it's not an explicit v4 addr
 	&& (inet_pton(AF_INET6, tlsdest[i].tls_name, &in6) == 0)) { // and not an explicit v6 addr
       // if (tls_debug) fprintf(stderr,"tls: reparsing destination %s\n", tlsdest[i].tls_name);
