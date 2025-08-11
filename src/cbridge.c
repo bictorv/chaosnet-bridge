@@ -1261,9 +1261,10 @@ parse_route_params(struct chroute *rt, u_short addr)
   rt->rt_cost = RTCOST_ETHER;	/* default */
   rt->rt_link = LINK_NOLINK;
 
-#if 0				// allow (subnet) routes where the bridge is not (yet) reachable
+  // find (individual) host route to the bridge specified
   struct chroute *brt = find_in_routing_table(rt->rt_braddr, 1, 1);
   if (brt != NULL) {
+    // copy the link and cost
     rt->rt_link = brt->rt_link;
     rt->rt_cost = brt->rt_cost;
   } else if (is_mychaddr(rt->rt_braddr) && RT_SUBNETP(rt)) {
@@ -1282,6 +1283,7 @@ parse_route_params(struct chroute *rt, u_short addr)
       }
     }
     PTUNLOCKN(rttbl_lock,"rttbl_lock");
+#if 0				// allow (subnet) routes where the bridge is not (yet) reachable
     if (rt->rt_link == LINK_NOLINK) {
       fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n"
 	      "%%%% No route added! Maybe you need to reorder your config?\n",
@@ -1291,8 +1293,8 @@ parse_route_params(struct chroute *rt, u_short addr)
     fprintf(stderr,"route to %#o: can't find route to its bridge %#o, thus link is unknown.\n"
 	    "%%%% No route added! Try to reorder your config - put \"route\" definitions after \"link\" definitions.\n",
 	    rt->rt_dest, rt->rt_braddr);
-  }
 #endif
+  }
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
     if (strcasecmp(tok, "myaddr") == 0) {
@@ -1303,7 +1305,7 @@ parse_route_params(struct chroute *rt, u_short addr)
       }
       rt->rt_myaddr = sval;
       add_mychaddr(sval);
-#if 0
+#if 0				// don't allow type, it's static
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -1356,7 +1358,7 @@ parse_route_params(struct chroute *rt, u_short addr)
 	if (strcasecmp(tok, "chudp") == 0)
 	  rt->rt_link = LINK_CHUDP;
       else {
-	fprintf(stderr,"bad cost %s for link to %#o\n", tok, addr);
+	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
 	return -1;
       }
     } else {
