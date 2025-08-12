@@ -1352,19 +1352,19 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     return 0;
   } else if (cnt != 2) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: record len not 2: %d\n", cnt);
+      fprintf(stderr,"TLS read record (%s): record len not 2: %d\n", td->tls_name, cnt);
     return 0;
   }
   rlen = reclen[0] << 8 | reclen[1]; //ntohs(reclen[0] << 8 || reclen[1]);
   if (rlen == 0) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: MARK read (no data)\n");
+      fprintf(stderr,"TLS read record (%s): MARK read (no data)\n", td->tls_name);
     return 0;
   }
   if (tls_debug > 1)
     fprintf(stderr,"TLS read record: record len %d\n", rlen);
   if (rlen > blen) {
-    fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
+    fprintf(stderr,"TLS read record (%s): record too long for buffer: %d > %d\n", td->tls_name, rlen, blen);
     tls_please_reopen_tcp(td, 1);
     return -1;
   }
@@ -1372,7 +1372,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((ssl = td->tls_ssl) == NULL) {
     PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
-    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
+    if (tls_debug) fprintf(stderr,"TLS read record (%s): SSL is null, please reopen\n", td->tls_name);
     tls_please_reopen_tcp(td, 1);
     return 0;
   }
@@ -1386,7 +1386,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   }
   if (actual < rlen) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: read less than record: %d < %d\n", actual, rlen);
+      fprintf(stderr,"TLS read record (%s): read less than record: %d < %d\n", td->tls_name, actual, rlen);
     // read the remaining data
     int p = actual;
     while (rlen - p > 0) {
