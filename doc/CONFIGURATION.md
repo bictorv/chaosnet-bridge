@@ -68,7 +68,7 @@ Below, *%o* means an octal number, and square brackets [ ] are around optional p
 	Configures the firewall - see [FIREWALL](FIREWALL.md) for more info.
 
 ### LINKDEF:
-You can define links of two types: for whole subnets, and for individual hosts.
+You can define links of two types: for whole subnets, and for individual hosts. Here, *LINKTYPE* is one of several possible link types, see [below](#linktype).
 
 - `link` *LINKTYPE* `subnet` *%o* *ROUTEARGS*
 
