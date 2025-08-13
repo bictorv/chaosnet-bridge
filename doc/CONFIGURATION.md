@@ -173,8 +173,8 @@ unless there is an existing static route.
 
 ## Using a TLS "hub" network
 
-Until August 2025, the Global Chaosnet used a central hub for subnet 6 which is a TLS server, and clients with a proper certificate can connect to it, adding connectivity to their local subnets.
-The use of a central hub made the network structure contradictory to the Chaosnet principle of "[no central control](https://chaosnet.net/amber.html#Introduction)", and sensitive to crashes or errors at the central hub.
+Until August 2025, the Global Chaosnet used a central hub for subnet 6, which ties together all the other subnets. 
+The use of a central hub made the network structure contradictory to the Chaosnet principle of "[no central control](https://chaosnet.net/amber.html#Introduction)", and has periodically been problematic, e.g. when there were hardware problems or the hub moved or changed addresses.
 
 For increased redundancy, the dependence on a central hub can be removed. Two (or more) TLS servers for a subnet can cooperate, all of them accepting clients. If a packet arrives at one of them, but the server does not have a direct TLS link to the destination, it can send it to another of the subnet servers. The next server might have a direct link to the destination, or pass the packet along to another server. If none have a direct link to the destination, the [forwarding count](https://chaosnet.net/amber.html#Routing) for the packet will eventually reach its maximum and the packet is dropped.
 
