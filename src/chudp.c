@@ -98,7 +98,6 @@ void reparse_chudp_names()
   hi.ai_family = PF_UNSPEC;
   hi.ai_flags = AI_ADDRCONFIG;
 
-  // @@@@ also reparse TLS hosts?
   PTLOCKN(chudp_lock,"chudp_lock");
   for (i = 0; i < chudpdest_len; i++) {
     if (chudpdest[i].chu_name[0] != '\0'  /* have a name */

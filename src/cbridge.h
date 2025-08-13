@@ -148,6 +148,9 @@ typedef enum linktype {
 // Route configuration entry
 struct chroute {
   u_short rt_dest;		/* destination addr (subnet<<8 or host) - NOT redundant for subnets, we might not know the index in rttbl_host */
+#if CHAOS_TLS
+  int rt_dwild;			// destination is initially "wild", unspecific
+#endif
   u_short rt_braddr;		/* bridge address */
   u_short rt_myaddr;		/* my specific address (on that subnet), or use mychaddr */
   rttype_t rt_type;		/* connection type */
@@ -164,6 +167,7 @@ struct chroute {
 #define RT_DIRECT(rt) ((rt)->rt_braddr == 0)
 #define RT_SUBNETP(rt) (((rt)->rt_dest & 0xff) == 0)
 #define RT_PATHP(rt) ((rt)->rt_type != RT_NOPATH)
+#define RT_DOWNP(rt) (((rt)->rt_dest == 0) && ((rt)->rt_braddr == 0))
 
 // STATUS protocol, MIT AIM 628.
 // Info on this host's direct connection to a subnet. 
@@ -210,14 +214,14 @@ struct chudest {
 // here is a TLS destination
 struct tls_dest {
   u_short tls_addr;		/* remote chaos address */
+  int tls_dwild;	// destination is initially "wild", unspecific
+  u_short tls_port;	// port to use
   u_short tls_myaddr;		/* my address on this link */
   char tls_name[TLSDEST_NAME_LEN]; /* name given in (client) config or from CN (in servers) */
   int tls_serverp; /* 1 if server end - don't bother with mutex/cond stuff */
-  union {			/* The IP of the other end */
-    struct sockaddr tls_saddr;	/* generic sockaddr */
-    struct sockaddr_in tls_sin;	/* IP addr */
-    struct sockaddr_in6 tls_sin6;  /* IPv6 addr */
-  } tls_sa;
+  // @@@@ do this for chudp and chip too?
+  struct sockaddr tls_saddr[TLSDEST_MAX]; /* generic sockaddr for the IP v4/v6 addresses of the other end */
+  int tls_n_saddr;
   pthread_mutex_t tcp_reconnect_mutex;  /* would you please reconnect me? */
   pthread_cond_t tcp_reconnect_cond;
   int tls_sock;			/* TCP socket */

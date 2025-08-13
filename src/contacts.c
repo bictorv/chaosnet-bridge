@@ -20,6 +20,9 @@
 
 extern time_t boottime;
 extern char myname[32];
+#if CHAOS_TLS
+extern int do_tls_server;
+#endif
 
 // RFC handler struct (the contacts this process handles)
 struct rfc_handler {
@@ -85,7 +88,8 @@ make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
 	       && (((rttbl_net[i].rt_braddr >> 8) == (dest >> 8)) &&
 		   !directdestp &&
 		   // and we have a host route to the bridge
-		   ((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) == NULL))
+		   (((hostpath = find_in_routing_table(rttbl_net[i].rt_braddr, 1, 0)) == NULL)
+		    || (hostpath->rt_dest == 0))) // which is connected
 	       ))
 	) {
       if (is_private_subnet(i)) {
@@ -146,13 +150,20 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
 
   PTLOCKN(rttbl_lock,"rttbl_lock");
   for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
-    struct chroute *rt = &rttbl_net[sub];
+    struct chroute *hostr, *rt = &rttbl_net[sub];
     if (is_private_subnet(sub)) {
       if (debug || verbose) 
 	fprintf(stderr," NOT adding routing for private subnet %#o\n", sub);
       continue;
     }
-    if (rt->rt_type != RT_NOPATH) {
+    if ((rt->rt_type != RT_NOPATH) &&
+#if CHAOS_TLS
+	(rt->rt_type == RT_STATIC) && (rt->rt_link == LINK_TLS) // manually configured TLS route
+	? ((rt->rt_braddr != 0) // using a bridge 
+	   // with a host route which is up/connected
+	   && ((hostr = find_in_routing_table(rt->rt_braddr,1,0)) != 0) && (hostr->rt_dest != 0)) : 
+#endif
+	 1) {
       // Method: if < 0400: interface number; otherwise next hop address
       if (RT_DIRECT(rt) || (is_mychaddr(rt->rt_braddr))) {
 	// interface nr - use link type
@@ -168,6 +179,26 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
     }
   }
   PTUNLOCKN(rttbl_lock,"rttbl_lock");
+#if CHAOS_TLS
+  // Now check if we're a tls server and have active tls links to us, for a subnet we didn't already note above
+  if (do_tls_server) {
+    PTLOCKN(tlsdest_lock,"tlsdest_lock");
+    for (int i = 0; i < tlsdest_len; i++) {
+      struct tls_dest *td = &tlsdest[i];
+      sub = (td->tls_addr >> 8);
+      if (sub >= maxroutes)
+	continue;		// skip it if it doesn't fit
+      if ((td->tls_serverp == 1) && (td->tls_addr != 0) && (data[sub*2] == 0)) {
+	if (debug) fprintf(stderr," Adding TLS server subnet %#o\n", sub);
+	data[sub*2] = htons(LINK_TLS); // method: interface number
+	data[sub*2+1] = htons(RTCOST_ASYNCH); // cost: asynch
+	if (sub > nroutes)
+	  nroutes = sub;
+      }
+    }
+    PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
+  }
+#endif
 
   if (debug) fprintf(stderr," Max net in pkt %#o, i.e. %d bytes data\n", nroutes, (nroutes+1)*4);
   return (nroutes+1)*4;

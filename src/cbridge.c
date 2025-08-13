@@ -218,6 +218,7 @@ int postparse_ether_link_config(struct chroute *rt);
 // chtls
 void init_chaos_tls();
 void print_tlsdest_config(void);
+void reparse_tls_names(void);
 #endif
 
 #if CHAOS_IP
@@ -401,6 +402,7 @@ char *rt_linkname(u_char linktype)
 #if CHAOS_ETHERP
   case LINK_ETHER: return "Ether";
 #endif
+  case LINK_NOLINK: return "[no link]";
   default: return "Unknown?";
   }
 }
@@ -499,6 +501,9 @@ reparse_link_host_names_thread(void *v)
     reparse_chudp_names();   // occasionally re-parse chu_name strings
 #if CHAOS_IP
     reparse_chip_names();
+#endif
+#if CHAOS_TLS
+    reparse_tls_names();
 #endif
   }
 }
@@ -852,33 +857,38 @@ forward_chaos_pkt_on_route(struct chroute *rt, u_char *data, int dlen)
 void 
 forward_chaos_broadcast_on_route(struct chroute *rt, int sn, u_char *data, int dlen) 
 {
-  u_char copy[CH_PK_MAXLEN];
-  struct chaos_header *ch = (struct chaos_header *)data;
-  u_char mask[32];
-  memset(mask, 0, sizeof(mask));
-  htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
-  if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
-		       ch_opcode_name(ch_opcode(ch)),
-		       ch_fc(ch),
-		       ch_srcaddr(ch),
-		       sn, rt->rt_dest, rt->rt_braddr,
-		       rt_linkname(rt->rt_link));
+  if (RT_DOWNP(rt)) { // is there really somewhere to send it?
+    // @@@@ This should be handled differently. Let the route be NOPATH and update it when the link to the bridge comes up.
+    if (verbose) fprintf(stderr,"Not forwarding pkt: route is not up (no dest or bridge)\n");
+  } else {
+    u_char copy[CH_PK_MAXLEN];
+    struct chaos_header *ch = (struct chaos_header *)data;
+    u_char mask[32];
+    memset(mask, 0, sizeof(mask));
+    htons_buf((u_short *)&data[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
+    if (verbose) fprintf(stderr,"Forwarding %s (fc %d) from %#o to subnet %#o on %#o bridge/subnet %#o (%s)\n",
+			 ch_opcode_name(ch_opcode(ch)),
+			 ch_fc(ch),
+			 ch_srcaddr(ch),
+			 sn, rt->rt_dest, rt->rt_braddr,
+			 rt_linkname(rt->rt_link));
 #if 0
-  // @@@@ instead: clear bit N when receiving from subnet link for N
-  // clear bit if we're sending to a subnet link,
-  // but if it's a host link, keep it and let the other end resend it if it has further host links to that subnet
-  if (RT_SUBNETP(rt) && (sn < ch_ackno(ch)*8)) {
-    mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
-    ntohs_buf((u_short *)mask, (u_short *)&data[CHAOS_HEADERSIZE], ch_ackno(ch));
-  }
+    // @@@@ instead: clear bit N when receiving from subnet link for N
+    // clear bit if we're sending to a subnet link,
+    // but if it's a host link, keep it and let the other end resend it if it has further host links to that subnet
+    if (RT_SUBNETP(rt) && (sn < ch_ackno(ch)*8)) {
+      mask[sn/8] = mask[sn/8] & ~(1<<(sn % 8));
+      ntohs_buf((u_short *)mask, (u_short *)&data[CHAOS_HEADERSIZE], ch_ackno(ch));
+    }
 #endif
-  // forward
-  PTLOCKN(linktab_lock,"linktab_lock");
-  linktab[rt->rt_dest >>8 ].pkt_out++;
-  PTUNLOCKN(linktab_lock,"linktab_lock");
-  // send a copy, since it may be swapped in the process of sending
-  memcpy(copy, data, dlen);
-  forward_chaos_pkt_on_route(rt, copy, dlen);
+    // forward
+    PTLOCKN(linktab_lock,"linktab_lock");
+    linktab[rt->rt_dest >>8 ].pkt_out++;
+    PTUNLOCKN(linktab_lock,"linktab_lock");
+    // send a copy, since it may be swapped in the process of sending
+    memcpy(copy, data, dlen);
+    forward_chaos_pkt_on_route(rt, copy, dlen);
+  }
 }
 
 
@@ -1118,8 +1128,13 @@ void send_rut_pkt(struct chroute *rt, u_char *pkt, int c)
 
   if (rt->rt_link == LINK_NOLINK) {
     if (debug) fprintf(stderr,"%%%% Not sending RUT on %s link to %#o\n",
-		       rt_typename(rt->rt_link), rt->rt_dest);
+		       rt_linkname(rt->rt_link), rt->rt_dest);
     return;			/* ignore */
+  } else if (RT_DOWNP(rt)) {
+    // @@@@ This should be handled differently. Let the route be NOPATH and update it when the link to the bridge comes up.
+    if (debug) fprintf(stderr,"%%%% Not sending RUT on %s link: no dest or bridge address (yet)\n",
+		       rt_linkname(rt->rt_link));
+    return;
   }
   // Destination of RUT packets should always be 0
   set_ch_destaddr(cha, 0);	/* broadcast */
@@ -1154,7 +1169,8 @@ rut_sender(void *v)
     /* Send to all subnets which are not through a bridge */
     for (i = 0; i < 256; i++) {
       struct chroute *rt = &rttbl_net[i];
-      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)) {
+      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)
+	  && !RT_DOWNP(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for net %#o\n", i);
 	if ((c = make_routing_table_pkt(i<<8, &pkt[0], sizeof(pkt))) > 0) {
 	  send_rut_pkt(rt, pkt, c);
@@ -1165,7 +1181,8 @@ rut_sender(void *v)
     /* And to all individual hosts */
     for (i = 0; i < rttbl_host_len; i++) {
       struct chroute *rt = &rttbl_host[i];
-      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)) {
+      if ((rt->rt_type != RT_NOPATH) && RT_DIRECT(rt)
+	  && !RT_DOWNP(rt)) {
 	if (debug) fprintf(stderr,"Making RUT pkt for link %d bridge %#o dest %#o => %#o\n", i,
 			     rt->rt_braddr, rt->rt_dest,
 			     rt->rt_braddr == 0 ? rt->rt_dest : rt->rt_braddr);
@@ -1211,6 +1228,12 @@ void send_chaos_pkt(u_char *pkt, int len)
   if (ch_srcaddr(cha) == 0)
     set_ch_srcaddr(cha, (rt->rt_myaddr == 0 ? mychaddr[0] : rt->rt_myaddr));
 
+  if (RT_DOWNP(rt)) {
+    // @@@@ This should be handled differently. Let the route be NOPATH and update it when the link to the bridge comes up.
+    if (debug) fprintf(stderr,"Can't send pkt to %#o: no dest or bridge addr in route (yet)\n", dchad);
+    return;
+  }
+
   if (verbose) fprintf(stderr,"Sending pkt %#x (%s) from me (%#o) to %#o (pkt dest %#o) %s dest %#o %s bridge %#o myaddr %#o\n",
 		       ch_packetno(cha), ch_opcode_name(ch_opcode(cha)),
 		       ch_srcaddr(cha), dchad,
@@ -1238,8 +1261,10 @@ parse_route_params(struct chroute *rt, u_short addr)
   rt->rt_cost = RTCOST_ETHER;	/* default */
   rt->rt_link = LINK_NOLINK;
 
+  // find (individual) host route to the bridge specified
   struct chroute *brt = find_in_routing_table(rt->rt_braddr, 1, 1);
   if (brt != NULL) {
+    // copy the link and cost
     rt->rt_link = brt->rt_link;
     rt->rt_cost = brt->rt_cost;
   } else if (is_mychaddr(rt->rt_braddr) && RT_SUBNETP(rt)) {
@@ -1258,6 +1283,7 @@ parse_route_params(struct chroute *rt, u_short addr)
       }
     }
     PTUNLOCKN(rttbl_lock,"rttbl_lock");
+#if 0				// allow (subnet) routes where the bridge is not (yet) reachable
     if (rt->rt_link == LINK_NOLINK) {
       fprintf(stderr,"route to %#o: can't find matching link, thus link implementation is unknown.\n"
 	      "%%%% No route added! Maybe you need to reorder your config?\n",
@@ -1267,6 +1293,7 @@ parse_route_params(struct chroute *rt, u_short addr)
     fprintf(stderr,"route to %#o: can't find route to its bridge %#o, thus link is unknown.\n"
 	    "%%%% No route added! Try to reorder your config - put \"route\" definitions after \"link\" definitions.\n",
 	    rt->rt_dest, rt->rt_braddr);
+#endif
   }
 
   while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
@@ -1278,7 +1305,7 @@ parse_route_params(struct chroute *rt, u_short addr)
       }
       rt->rt_myaddr = sval;
       add_mychaddr(sval);
-#if 0
+#if 0				// don't allow type, it's static
     } else if (strcasecmp(tok, "type") == 0) {
       tok = strtok(NULL," \t\r\n");
       if (strcasecmp(tok, "direct") == 0) {
@@ -1309,6 +1336,29 @@ parse_route_params(struct chroute *rt, u_short addr)
 	rt->rt_cost = RTCOST_ASYNCH;
       else {
 	fprintf(stderr,"bad cost %s for link to %#o\n", tok, addr);
+	return -1;
+      }
+    } else if (strcasecmp(tok, "link") == 0) {
+      tok = strtok(NULL," \t\r\n");
+#ifdef CHAOS_TLS
+      if (strcasecmp(tok, "tls") == 0)
+	rt->rt_link = LINK_TLS;
+      else 
+#endif
+#ifdef CHAOS_IP
+	if (strcasecmp(tok, "ip") == 0)
+	  rt->rt_link = LINK_IP;
+      else
+#endif
+#ifdef CHAOS_ETHERP
+	if (strcasecmp(tok, "ether") == 0)
+	  rt->rt_link = LINK_ETHER;
+      else
+#endif
+	if (strcasecmp(tok, "chudp") == 0)
+	  rt->rt_link = LINK_CHUDP;
+      else {
+	fprintf(stderr,"bad link type %s for link to %#o\n", tok, addr);
 	return -1;
       }
     } else {
@@ -1383,6 +1433,11 @@ parse_route_config()
 
   if (parse_route_params(rt, addr) < 0)
     return -1;
+  if (debug || verbose) {
+    printf("Added route: %s to dest %#o bridge %#o type %s link %s myaddr %#o cost %#o\n",
+	   subnetp ? "subnet" : "host", rt->rt_dest, rt->rt_braddr, rt_typename(rt->rt_type), rt_linkname(rt->rt_link),
+	   rt->rt_myaddr, rt->rt_cost);
+  }
   return 0;
 }
 
@@ -1472,8 +1527,9 @@ parse_link_args(struct chroute *rt, u_short addr)
   return 0;
 }
 
+// The sa arg can be a single sockaddr, or if multiple_addrs>0, the first of an array of sockaddrs
 static int
-parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr, int nameptr_len)
+parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr, int nameptr_len, int multiple_addrs)
 {
   char *tok;
   int res;
@@ -1482,6 +1538,8 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
   struct addrinfo *he, hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = PF_UNSPEC;
+  hints.ai_protocol = IPPROTO_IP; // any IP version @@@@ maybe let this be an arg?
+  hints.ai_socktype = SOCK_DGRAM; // ask for UDP to avoid getting duplicates for UDP+TCP
 #ifdef AI_ADDRCONFIG		// Use AI_ADDRCONFIG if appropriate
 #ifdef AI_MASK			// and it is a valid flag
   if (AI_MASK & AI_ADDRCONFIG)
@@ -1523,23 +1581,35 @@ parse_ip_params(char *type, struct sockaddr *sa, int default_port, char *nameptr
   }
 
   if ((res = getaddrinfo(tok, NULL, &hints, &he)) == 0) {
-    sa->sa_family = he->ai_family;
-    if (he->ai_family == AF_INET) {
-      struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
-      struct sockaddr_in *sin = (struct sockaddr_in *)sa;
-      sin->sin_port = htons(port);
-      memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
-    } else if (he->ai_family == AF_INET6) {
-      struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
-      struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
-      sin->sin6_port = htons(port);
-      memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
-    } else {
-      fprintf(stderr,"error parsing %s host %s: unknown address family %d\n",
-	      type, tok, he->ai_family);
-      return -1;
+    int nparsed = 0;
+    struct addrinfo *first_he = he;
+    do {
+      sa->sa_family = he->ai_family;
+      if (he->ai_family == AF_INET) {
+	struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+	sin->sin_port = htons(port);
+	memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
+      } else if (he->ai_family == AF_INET6) {
+	struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
+	sin->sin6_port = htons(port);
+	memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
+      } else {
+	fprintf(stderr,"error parsing %s host %s: unknown address family %d\n",
+		type, tok, he->ai_family);
+	return -1;
+      }
+      he = he->ai_next;
+      sa++;
+      multiple_addrs--;
+      nparsed++;
     }
+    // If we should parse multiple addresses, go on
+    while ((he != NULL) && (multiple_addrs > 0));
+    freeaddrinfo(first_he);
     strncpy(nameptr, tok, nameptr_len);
+    return nparsed;
   } else {
     if (sep != NULL)
       *sep = sepchar;		/* put separator back for error messages */
@@ -1574,7 +1644,7 @@ parse_link_config()
     rt->rt_cost_updated = time(NULL);
 
     if (parse_ip_params("chudp", &chudpdest[chudpdest_len].chu_sa.chu_saddr, CHUDP_PORT,
-			(char *)&chudpdest[chudpdest_len].chu_name, CHUDPDEST_NAME_LEN) < 0)
+			(char *)&chudpdest[chudpdest_len].chu_name, CHUDPDEST_NAME_LEN, 0) < 0)
       return -1;
     // @@@@ don't do it separately for ipv6/v4
     if (chudpdest[chudpdest_len].chu_sa.chu_saddr.sa_family == AF_INET)
@@ -1605,9 +1675,14 @@ parse_link_config()
     rt->rt_cost = RTCOST_ASYNCH;
     rt->rt_cost_updated = time(NULL);
 
-    if (parse_ip_params("tls", &tlsdest[tlsdest_len].tls_sa.tls_saddr, CHAOS_TLS_PORT,
-			(char *)&tlsdest[tlsdest_len].tls_name, TLSDEST_NAME_LEN) < 0)
+    // allow more than one address
+    int np = parse_ip_params("tls", &tlsdest[tlsdest_len].tls_saddr[0], CHAOS_TLS_PORT,
+			     (char *)&tlsdest[tlsdest_len].tls_name, TLSDEST_NAME_LEN, TLSDEST_MAX);
+    if (np < 0)
       return -1;
+    else if (np > 0)
+      tlsdest[tlsdest_len].tls_port = ((struct sockaddr_in *)&tlsdest[tlsdest_len].tls_saddr)->sin_port; // make it handy
+    tlsdest[tlsdest_len].tls_n_saddr = np;
     do_tls = 1;
     tlsdest_len++;
 #endif // CHAOS_TLS
@@ -1620,7 +1695,7 @@ parse_link_config()
     rt->rt_cost_updated = time(NULL);
 
     if (parse_ip_params("chip", &chipdest[chipdest_len].chip_sa.chip_saddr, 0,
-			(char *)&chipdest[chipdest_len].chip_name, CHIPDEST_NAME_LEN) < 0)
+			(char *)&chipdest[chipdest_len].chip_name, CHIPDEST_NAME_LEN, 0) < 0)
       return -1;
     do_chip = 1;
     chipdest_len++;
@@ -1647,6 +1722,7 @@ parse_link_config()
   if ((rt->rt_link == LINK_TLS) && (strcasecmp(tok, "unknown") == 0)) {
     addr = 0;
     rt->rt_dest = 0;
+    rt->rt_dwild = 1;		// note this so rt_dest can be restored to 0 when link goes down
   } else {
 #endif
     if (sscanf(tok,"%ho",&addr) != 1) {
@@ -1715,24 +1791,25 @@ parse_link_config()
       } else
 	found = 0;		// look for next mux address
     }
-    if ((addr != 0) && ((addr >> 8) != (rt->rt_myaddr >> 8))) {
+    if ((addr != 0) && ((addr >> 8) != (rt->rt_myaddr >> 8))) { // note: 0 is OK for "unknown" addresses
       fprintf(stderr,"Error: TLS destination address %o must be on same subnet as TLS \"myaddr\" %o\n",
 	      addr, rt->rt_myaddr);
 	return -1;
     }
     tlsdest[tlsdest_len - 1].tls_addr = addr;
+    if (addr == 0) tlsdest[tlsdest_len - 1].tls_dwild = 1; // remember it's a "wild" address (cf tls_connector)
     tlsdest[tlsdest_len - 1].tls_myaddr = rt->rt_myaddr;
     if (subnetp) {
       fprintf(stderr,"Error: TLS links must be to hosts, not subnets.\n"
 	      "Change\n"
-	      " link tls %s:%d subnet %o\n"
+	      " link tls %s subnet %o\n"
 	      "to\n"
-	      " link tls %s:%d host NN\n"
+	      " link tls %s host NN\n"
 	      " route subnet %o bridge NN\n"
 	      "where NN is the actual tls host\n",
-	      tlsdest[tlsdest_len -1].tls_name, ntohs(tlsdest[tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      tlsdest[tlsdest_len -1].tls_name, 
 	      addr,
-	      tlsdest[tlsdest_len -1].tls_name, ntohs(tlsdest[tlsdest_len -1].tls_sa.tls_sin.sin_port),
+	      tlsdest[tlsdest_len -1].tls_name, 
 	      addr);
       return -1;
     }

@@ -174,6 +174,75 @@ parse_tls_config_line()
   return 0;
 }
 
+void reparse_tls_names(void)
+{
+  int res;
+  struct addrinfo *he, hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = PF_UNSPEC;
+  hints.ai_protocol = IPPROTO_IP; // any IP version
+  hints.ai_socktype = SOCK_DGRAM; // ask for UDP to avoid getting duplicates for UDP+TCP
+#ifdef AI_ADDRCONFIG		// Use AI_ADDRCONFIG if appropriate
+#ifdef AI_MASK			// and it is a valid flag
+  if (AI_MASK & AI_ADDRCONFIG)
+#endif
+    hints.ai_flags = AI_ADDRCONFIG;
+#endif
+  
+  PTLOCKN(tlsdest_lock,"tlsdest_lock");
+  for (int i = 0; i < tlsdest_len; i++) {
+    struct in_addr in;
+    struct in6_addr in6;
+    if ((tlsdest[i].tls_name[0] != '\0') // have a name
+	&& (!tlsdest[i].tls_serverp)	 // not a server end
+	&& (inet_aton(tlsdest[i].tls_name, &in) == 0) // it's not an explicit v4 addr
+	&& (inet_pton(AF_INET6, tlsdest[i].tls_name, &in6) == 0)) { // and not an explicit v6 addr
+      // if (tls_debug) fprintf(stderr,"tls: reparsing destination %s\n", tlsdest[i].tls_name);
+      struct sockaddr *sa = &tlsdest[i].tls_saddr[0];
+      int max_addr = sizeof(tlsdest[i].tls_saddr)/sizeof(struct sockaddr);
+      int nparsed = 0;
+      if ((res = getaddrinfo(tlsdest[i].tls_name, NULL, &hints, &he)) == 0) {
+	struct addrinfo *first_he = he;
+	do {
+	  sa->sa_family = he->ai_family;
+	  if (he->ai_family == AF_INET) {
+	    struct sockaddr_in *s = (struct sockaddr_in *)he->ai_addr;
+	    struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+	    sin->sin_port = tlsdest[i].tls_port;
+	    memcpy(&sin->sin_addr, &s->sin_addr, sizeof(struct in_addr));
+	  } else if (he->ai_family == AF_INET6) {
+	    struct sockaddr_in6 *s = (struct sockaddr_in6 *)he->ai_addr;
+	    struct sockaddr_in6 *sin = (struct sockaddr_in6 *)sa;
+	    sin->sin6_port = tlsdest[i].tls_port;
+	    memcpy(&sin->sin6_addr, &s->sin6_addr, sizeof(struct in6_addr));
+	  } else {
+	    fprintf(stderr,"error parsing TLS host %s: unknown address family %d\n",
+		    tlsdest[i].tls_name, he->ai_family);
+	    return;
+	  }
+	  he = he->ai_next;
+	  sa++;
+	  max_addr--;
+	  nparsed++;
+	}
+	// If we should parse multiple addresses, go on
+	while ((he != NULL) && (max_addr > 0));
+	freeaddrinfo(first_he);
+      } else {
+	if (tls_debug) fprintf(stderr,"%%%% TLS: can't reparse tls destination name %s, keeping old results\n",
+			       tlsdest[i].tls_name);
+	continue;
+      }
+      if (nparsed != tlsdest[i].tls_n_saddr) {
+	if (tls_debug) fprintf(stderr,"tls: reparsing %s gives %d addresses, previously %d\n", 
+			       tlsdest[i].tls_name, nparsed, tlsdest[i].tls_n_saddr);
+	tlsdest[i].tls_n_saddr = nparsed;
+      }
+    } // else if (tls_debug) fprintf(stderr,"tls: not reparsing tls dest %s\n", tlsdest[i].tls_name);
+  }
+  PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
+}
+
 // send an empty SNS packet, just to let the other (server) end know our Chaos address and set up the route
 void
 send_empty_sns(struct tls_dest *td, u_short onbehalfof)
@@ -446,20 +515,25 @@ void print_tlsdest_config()
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   printf("TLS destination config: %d links\n", tlsdest_len);
   for (i = 0; i < tlsdest_len; i++) {
-    if (tlsdest[i].tls_sa.tls_saddr.sa_family != 0) {
-      ip46_ntoa(&tlsdest[i].tls_sa.tls_saddr, ip, sizeof(ip));
-    } else
-      strcpy(ip, "[none]");
     printf(" dest %#o, name %s, myaddr %#o, ",
 	   tlsdest[i].tls_addr, 
 	   tlsdest[i].tls_name,
 	   tlsdest[i].tls_myaddr);
     if (tlsdest[i].tls_serverp) printf("(server) ");
-    printf("host %s port %d",
-	   ip,
-	   ntohs((tlsdest[i].tls_sa.tls_saddr.sa_family == AF_INET
-		  ? tlsdest[i].tls_sa.tls_sin.sin_port
-		  : tlsdest[i].tls_sa.tls_sin6.sin6_port)));
+    if (tlsdest[i].tls_sock > 0) printf("[connected] ");
+    // could be more than one addr
+    printf("port %d ", ntohs(tlsdest[i].tls_port));
+    for (j = 0; j < tlsdest[i].tls_n_saddr; j++) {
+      if (tlsdest[i].tls_saddr[j].sa_family != 0) {
+	ip46_ntoa(&tlsdest[i].tls_saddr[j], ip, sizeof(ip));
+      } else
+	strcpy(ip, "[none]");
+      printf("host %s port %d, ",
+	     ip,
+	     ntohs((tlsdest[i].tls_saddr[j].sa_family == AF_INET
+		    ? ((struct sockaddr_in *)(&tlsdest[i].tls_saddr[j]))->sin_port
+		    : ((struct sockaddr_in6 *)(&tlsdest[i].tls_saddr[j]))->sin6_port)));
+    }
     if (tlsdest[i].tls_muxed[0] != 0) {
       printf(" mux %o",tlsdest[i].tls_muxed[0]);
       for (j = 1; j < CHTLS_MAXMUX && tlsdest[i].tls_muxed[j] != 0; j++)
@@ -530,9 +604,8 @@ add_tls_route(int tindex, u_short srcaddr)
     } else
       fprintf(stderr,"%%%% Warning: Can not add %#o to mux list of tlsdest %d - list full, increase CHTLS_MAXMUX?\n", srcaddr, tindex);
   } else if ((tlsdest[tindex].tls_addr != 0) && (tlsdest[tindex].tls_addr != srcaddr)) {
-    char ip[INET6_ADDRSTRLEN];
-    fprintf(stderr,"%%%% TLS link %d %s (%s) chaos address already known but route not found - updating from %#o to %#o\n",
-	    tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
+    fprintf(stderr,"%%%% TLS link %d %s: chaos address already known but route not found - updating from %#o to %#o\n",
+	    tindex, tlsdest[tindex].tls_name, 
 	    tlsdest[tindex].tls_addr, srcaddr);
     // This is OK. Use the most recent.
     tlsdest[tindex].tls_addr = srcaddr;
@@ -549,17 +622,48 @@ close_tlsdest(struct tls_dest *td)
 {
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((td->tls_sock != 0) && td->tls_serverp) {
+    struct sockaddr sa;
+    socklen_t socklen;
+    if (td->tls_n_saddr == 1) {
+      // simple case, only one possible IP addr
       char ip6[INET6_ADDRSTRLEN];
-      fprintf(stderr,"TLS client %s connection closing: IP %s\n", 
-	      td->tls_name, ip46_ntoa(&td->tls_sa.tls_saddr, ip6, sizeof(ip6)));
+      fprintf(stderr,"TLS client %s connection closing: IP addr %s\n", td->tls_name,
+	      ip46_ntoa(&td->tls_saddr[0], ip6, sizeof(ip6)));
+    } else if (getpeername(td->tls_sock, &sa, &socklen) == 0) {
+      // try to find the name of the other end
+      char ip6[INET6_ADDRSTRLEN];
+      fprintf(stderr,"TLS client %s connection closing: IP addr %s\n", td->tls_name,
+	      ip46_ntoa(&sa, ip6, sizeof(ip6)));
+    } else {
+      // or just don't report IP
+      fprintf(stderr,"TLS client %s connection closing\n", td->tls_name);
+    }
   }
   if (td->tls_serverp) {
     // forget remote sockaddr
-    memset((void *)&td->tls_sa.tls_saddr, 0, sizeof(td->tls_sa.tls_saddr));
+    memset((void *)&td->tls_saddr, 0, sizeof(td->tls_saddr));
     // forget remote chaos addr
     td->tls_addr = 0;
     // forget any mux list
     memset((void *)&td->tls_muxed, 0, sizeof(td->tls_muxed));
+  } else if (td->tls_dwild) {
+    // This tlsdest/route is configured with "unknown" host, so we need to reset also the corresponding route.
+    int found = 0;
+    // @@@@ nested locking, hope it works out.
+    PTLOCKN(rttbl_lock,"rttbl_lock");
+    for (int i = 0; i < rttbl_host_len; i++) {
+      struct chroute *rt = &rttbl_host[i];
+      if ((rt->rt_link == LINK_TLS) && (rt->rt_type == RT_STATIC) && (rt->rt_dest == td->tls_addr)) {
+	if (tls_debug) fprintf(stderr,"tls: found old TLS route for %#o, resetting tls_addr to 0\n", td->tls_addr);
+	rt->rt_dest = 0;
+	found = 1;
+	break;
+      }
+    }
+    PTUNLOCKN(rttbl_lock,"rttbl_lock");
+    if (!found) fprintf(stderr,"%%%% TLS: can't find route for tlsdest %s (with \"unknown\" host)\n", td->tls_name);
+    // reset tlsdest addr
+    td->tls_addr = 0;
   }
   if (td->tls_ssl != NULL) {
     SSL_free(td->tls_ssl);
@@ -652,7 +756,8 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
     td->tls_sock = sock;
     td->tls_ssl = ssl;
     // get sockaddr
-    memcpy((void *)&td->tls_sa.tls_saddr, sa, sa_len);
+    memcpy((void *)&td->tls_saddr[0], sa, sa_len);
+    td->tls_n_saddr = 1;
   } else {
     // crete a new entry
     if (tlsdest_len >= TLSDEST_MAX) {
@@ -672,7 +777,8 @@ add_server_tlsdest(u_char *name, int sock, SSL *ssl, struct sockaddr *sa, int sa
 
     memset(&tlsdest[tlsdest_len], 0, sizeof(struct tls_dest));
     // get sockaddr
-    memcpy(&tlsdest[tlsdest_len].tls_sa, sa, sa_len);
+    memcpy(&tlsdest[tlsdest_len].tls_saddr[0], sa, sa_len);
+    tlsdest[tlsdest_len].tls_n_saddr = 1;
     if (name != NULL)
       strncpy((char *)&tlsdest[tlsdest_len].tls_name, (char *)name, TLSDEST_NAME_LEN);
     tlsdest[tlsdest_len].tls_serverp = 1;
@@ -768,15 +874,18 @@ static int tcp_bind_socket(int type, u_short port)
 }
 
 // TCP connector, with backoff
-static int tcp_client_connect(struct sockaddr *sin)
+static int tcp_client_connect(struct sockaddr sin_arr[], int n_sa)
 {
   int sock, unlucky = 1, foo;
+  int sa_index = 0;
   u_long ntimes = 0;
   char ip[INET6_ADDRSTRLEN];
-  
-  (void)ip46_ntoa(sin, ip, sizeof(ip));
+  struct sockaddr *sin;
 
   while (unlucky) {
+    sin = &sin_arr[sa_index];	// pick one
+    sa_index = (sa_index+1) % n_sa; // next time, use the next
+    (void)ip46_ntoa(sin, ip, sizeof(ip));
     if (tls_debug) fprintf(stderr,"TCP connect: socket family %d (%s)\n",
 			   sin->sa_family,
 			   (sin->sa_family == AF_INET ? "IPv4" :
@@ -851,26 +960,8 @@ void *tls_connector(void *arg)
 
   int crl_expiry_warned = 0;
   while (1) {
-    // @@@@ re-parse tlsdest?
-    if (tls_debug) {
-      char ip[INET6_ADDRSTRLEN];
-      fprintf(stderr,"TLS client: connecting to %s port %d\n",
-	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)),
-	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
-		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
-		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
-    }
     // connect to server
-    int tsock = tcp_client_connect((struct sockaddr *)(td->tls_sa.tls_saddr.sa_family == AF_INET ? (void *)&td->tls_sa.tls_sin : (void *)&td->tls_sa.tls_sin6));
-
-    if (tls_debug) {
-      char ip[INET6_ADDRSTRLEN];
-      fprintf(stderr,"TLS client: connected to %s (%s port %d)\n", td->tls_name,
-	      ip46_ntoa(&td->tls_sa.tls_saddr, ip, sizeof(ip)),
-	      ntohs((td->tls_sa.tls_saddr.sa_family == AF_INET
-		     ? ((struct sockaddr_in *)&td->tls_sa.tls_sin)->sin_port
-		     : ((struct sockaddr_in6 *)&td->tls_sa.tls_sin6)->sin6_port)));
-    }
+    int tsock = tcp_client_connect(td->tls_saddr, td->tls_n_saddr);
 
     if (strlen(tls_crl_file) > 0) {
       // Validate the CRL file. If it has expired, don't open the connection since validation will fail anyway.
@@ -937,7 +1028,16 @@ void *tls_connector(void *arg)
 	      fprintf(stderr,"%#o ", claddrs[i]);
 	    fprintf(stderr,"\n");
 	  }
-	  // if no addr was given for the tls link, initiate it to the address it has on the same subnet as I
+	  // If no addr was given for the tls link, initiate it to the address it has on the same subnet as I.
+	  // Typical use: "link tls rtr.chaosnet.net host unknown", gives tls_addr==0 initially.
+	  // When link comes up we come here, and set tls_addr and rt->dest to a good address from server CN in DNS.
+	  // When link goes down, close_tlsdest can clear tls_addr if it has a new field tls_dwild to note it should.
+	  // (What happens to the route when the link goes down? Nothing, it is used to find the tlsdest and open it.)
+	  // When the link comes up again we get back here, but perhaps with another actual server which has other addrs
+	  // in DNS. The search for claddrs will still find a my_tls_myaddr, but the routing table will have the old address.
+	  // In case we have other TLS links (static tls routes), there is a risk of reusing the wrong route.
+	  // So close_tlsdest needs to also clear rt_dest. But it only knows the tlsdest, not the route.
+	  // Before tls_addr is cleared, it can find the route though!
 	  if (td->tls_addr == 0) {
 	    for (i = 0; i < naddrs; i++) {
 	      u_short my = my_tls_myaddr(claddrs[i]);
@@ -1113,9 +1213,9 @@ static void tls_please_reopen_tcp(struct tls_dest *td, int inputp)
       rt->rt_type = RT_NOPATH;
     }
     else if (tls_debug) fprintf(stderr,"TLS please reopen: can't find route for %#o to disable!\n", td->tls_addr);
-    // need to also disable network routes this is a bridge for
+    // need to also disable dynamic network routes this is a bridge for
     for (i = 0; i < 0xff; i++) {
-      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr))
+      if ((rttbl_net[i].rt_link == LINK_TLS) && (rttbl_net[i].rt_braddr == chaddr) && (rttbl_net[i].rt_type != RT_STATIC))
 	rttbl_net[i].rt_type = RT_NOPATH;
     }
     // and multiplexed routes
@@ -1252,19 +1352,19 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
     return 0;
   } else if (cnt != 2) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: record len not 2: %d\n", cnt);
+      fprintf(stderr,"TLS read record (%s): record len not 2: %d\n", td->tls_name, cnt);
     return 0;
   }
   rlen = reclen[0] << 8 | reclen[1]; //ntohs(reclen[0] << 8 || reclen[1]);
   if (rlen == 0) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: MARK read (no data)\n");
+      fprintf(stderr,"TLS read record (%s): MARK read (no data)\n", td->tls_name);
     return 0;
   }
   if (tls_debug > 1)
     fprintf(stderr,"TLS read record: record len %d\n", rlen);
   if (rlen > blen) {
-    fprintf(stderr,"TLS read record: record too long for buffer: %d > %d\n", rlen, blen);
+    fprintf(stderr,"TLS read record (%s): record too long for buffer: %d > %d\n", td->tls_name, rlen, blen);
     tls_please_reopen_tcp(td, 1);
     return -1;
   }
@@ -1272,7 +1372,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   PTLOCKN(tlsdest_lock,"tlsdest_lock");
   if ((ssl = td->tls_ssl) == NULL) {
     PTUNLOCKN(tlsdest_lock,"tlsdest_lock");
-    if (tls_debug) fprintf(stderr,"TLS read record: SSL is null, please reopen\n");
+    if (tls_debug) fprintf(stderr,"TLS read record (%s): SSL is null, please reopen\n", td->tls_name);
     tls_please_reopen_tcp(td, 1);
     return 0;
   }
@@ -1286,7 +1386,7 @@ tls_read_record(struct tls_dest *td, u_char *buf, int blen)
   }
   if (actual < rlen) {
     if (tls_debug)
-      fprintf(stderr,"TLS read record: read less than record: %d < %d\n", actual, rlen);
+      fprintf(stderr,"TLS read record (%s): read less than record: %d < %d\n", td->tls_name, actual, rlen);
     // read the remaining data
     int p = actual;
     while (rlen - p > 0) {
@@ -1542,17 +1642,16 @@ tls_server(void *v)
 static void
 print_tls_warning(int tindex, struct chaos_header *cha, char *header)
 {
-  char ip[INET6_ADDRSTRLEN];
   u_char *data = (u_char *)cha;
   int len = ch_nbytes(cha) + CHAOS_HEADERSIZE;
   len += (len % 2);
   struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(data+len);
   u_short srcaddr = ntohs(tr->ch_hw_srcaddr);
 
-  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s %s addr %#o myaddr %#o\n",
+  fprintf(stderr,"%%%% TLS: %s for %s from <%#o,%#x> hw %#o on tlsdest %d %s addr %#o myaddr %#o\n",
 	  header, ch_opcode_name(ch_opcode(cha)), ch_srcaddr(cha), ch_srcindex(cha), 
 	  srcaddr, 
-	  tindex, tlsdest[tindex].tls_name, ip46_ntoa(&tlsdest[tindex].tls_sa.tls_saddr, ip, sizeof(ip)),
+	  tindex, tlsdest[tindex].tls_name, 
 	  tlsdest[tindex].tls_addr, tlsdest[tindex].tls_myaddr);
 }
 
