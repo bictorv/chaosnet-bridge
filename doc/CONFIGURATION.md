@@ -110,8 +110,8 @@ Link and route defs take optional arguments.
 
 - `link` *LINKTYPE*
 
-  Sets the link type of the route. This is useful when the bridge of the route might not always be connected/available.
-  If unspecified, the link type is taken from the currently available link to the bridge, or is left as "no link", making it useless.
+  Sets the link type of the route (see below). This is useful when the bridge of the route might not always be connected/available.
+  If unspecified, the link type is taken from the currently available link to the bridge (e.g. when used in a `route` definition), or is left as "no link" (making it useless).
 
 ### LINKTYPE:
 
