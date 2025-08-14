@@ -1,0 +1,33 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html>
+<head>
+  <title>Chaosnet routing</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<!-- see https://www.kryogenix.org/code/browser/sorttable/ -->
+  <script src="sorttable.js"></script>
+  <link rel="stylesheet" type="text/css" href="tty.css" />
+</head>
+
+<body>
+<a href="hostat.html">Status</a>&nbsp;<a class="current" href="time.html">Time</a>&nbsp;<a href="uptime.html">Uptime</a>&nbsp;<a href="finger.html">Finger</a>
+<h1>Chaosnet routing</h1>
+
+<span id='main'>Checking tables...</span><span class='cursor'>&nbsp;</span>
+
+<script>
+function fixup(ht) {
+  $('#main').html(ht+"<br />");
+  var tbl = document.getElementById('routing_table');
+  sorttable.makeSortable(tbl);
+  // madness - but Firefox says a title attribute is illegal for th?
+  var hr = tbl.tHead.rows[0].cells;
+  for (var i=0; i < hr.length; i++) {
+    hr[i].title = "Click to sort";
+  }
+}
+fetch('routing-html-data.py')
+ .then(x => x.text())
+ .then(y => fixup(y))
+</script>
+</body>
+</html>

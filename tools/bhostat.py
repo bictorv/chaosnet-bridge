@@ -23,7 +23,7 @@ from struct import unpack
 from datetime import datetime, timedelta
 
 from chaosnet import BroadcastSimple, Simple, BroadcastConn, StreamConn, ChaosError
-from chaosnet import dns_name_of_address, dns_resolver_name, dns_resolver_address, set_dns_resolver_address
+from chaosnet import dns_name_of_address, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, dns_addr_of_name
 
 # pip3 install dnspython
 import dns.resolver
@@ -102,21 +102,44 @@ class SimpleProtocol:
         # Allow mix of subnets (for broadcast) and host/addresses (for unicast)
         snargs = list(filter(lambda x: isinstance(x,int) and x < 0o400,subnets))
         hargs = list(filter(lambda x: not(isinstance(x,int) and x < 0o400),subnets))
+        nargs = list(filter(lambda x: not(isinstance(x,str)),subnets))
         hdr = self.header() if callable(getattr(self.__class__,'header',None)) else None
         ftr = self.footer() if callable(getattr(self.__class__,'footer',None)) else None
         prtr = self.printer if callable(getattr(self.__class__,'printer',None)) else None
         nprtr = self.nonprinter if callable(getattr(self.__class__,'nonprinter',None)) else None
         s = None
+        # parse any host names and add their addresses @@@@ should prefer my subnet?
+        if len(nargs) > 0:
+            for n in nargs:
+                if isinstance(n,str):
+                    ha =  dns_addr_of_name(n, timeout=2)
+                    print("ha {!r} n {!r}".format(ha,n), file=sys.stderr)
+                    hargs.extend(ha)
         # First do unicast, if any
         if len(hargs) > 0:
-            s = Simple(hargs,self.contact,options=options,header=hdr,footer=ftr,printer=prtr,nonprinter=nprtr)
+            if debug:
+                print("Doing unicast {} for {}".format(self.contact,hargs), file=sys.stderr)
+            try:
+                s = Simple(hargs,self.contact,options=options,header=hdr,footer=ftr if len(snargs)==0 else None,
+                           printer=prtr,nonprinter=nprtr if len(snargs)==0 else None)
+            except ChaosError as m:
+                # @@@@ LOS handled in Simple (in chaosnet.py), other errors here (but could be for just one of the hargs)
+                if prtr:
+                    print(m)
+                elif debug:
+                    print("<!-- ")
+                    print(m)
+                    print(" -->")
         # then do broadcast, if any
         if len(snargs) > 0:
+            if debug:
+                print("Doing broadcast {} for {} (s is {})".format(self.contact,snargs,s), file=sys.stderr)
             # Avoid printing the header twice and repeating unicast hosts in the broadcast results
             BroadcastSimple(snargs,self.contact,options=options,
                                 header=hdr if s is None or s.hdr_printed is False else None,
                                 footer=ftr,
                                 printer=prtr,nonprinter=nprtr,
+                                header_printed=False if s is None else s.hdr_printed,
                                 already_printed=None if s is None else s.printed_sources)
 
 # The STATUS protocol
@@ -173,35 +196,64 @@ class Status(SimpleProtocol):
         else:
             print("{} not responding".format(first))
 
+
+# Just collect addresses and subnets
+class ChaosSimpleStatus(Status):
+    hosts = set()
+    haddrs = set()
+    hname_addrs = set()
+    subnets = set()
+    def printer(self,src,data):
+        hname,statuses = self.parse_status_data(src,data)
+        # self.hosts.add(hname)   # @@@@ consider using dns_name_of_address, but that gives more overhead? Not much, it turns out.
+        hn = dns_name_of_address(src,timeout=2)
+        self.hosts.add(hn)
+        self.haddrs.add(src)
+        self.hname_addrs.add((hn, src)) # would have used a dict but that isn't hashable
+        self.subnets.update(list(statuses.keys()))
+    def header(self):
+        pass
+
 # The TIME protocol
 class ChaosTime(SimpleProtocol):
     contact = "TIME"
-    def printer(self,src,data):
+    def parse_time_data(self,data):
         # cf RFC 868
         t = unpack("I",data[0:4])[0]-2208988800
         dt = t-time.time()
+        return datetime.fromtimestamp(t),t,dt
+    def printer(self,src,data):
+        ts,t,dt = self.parse_time_data(data)
         hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
         if verbose:
-            print("{:16} {} (delta {}{})".format(hname,datetime.fromtimestamp(t),"+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))))
+            print("{:16} {} (delta {}{})".format(hname,ts,"+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))))
         else:
-            print("{:16} {}".format(hname,datetime.fromtimestamp(t)))
+            print("{:16} {}".format(hname,ts))
 
 # The UPTIME protocol
 class ChaosUptime(SimpleProtocol):
     contact = "UPTIME"
+    def parse_uptime_data(self,data):
+        # cf RFC 868
+        s = int(unpack("I",data[0:4])[0]/60)
+        return timedelta(seconds=s),s
     def printer(self, src, data):
         hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
-        # cf RFC 868
-        print("{:16} {}".format(hname,timedelta(seconds=int(unpack("I",data[0:4])[0]/60))))
+        ts,s = self.parse_uptime_data(data)
+        print("{:16} {}".format(hname,ts))
 
 # The FINGER protocol (note: not NAME)
 class ChaosFinger(SimpleProtocol):
     contact = "FINGER"
     def header(self):
         return "{:15s} {:1s} {:22s} {:10s} {:5s}    {:s}".format("User","","Name","Host","Idle","Location")
+    def parse_finger_data(self,data):
+        flds = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
+        # @@@@ should parse idle to a number (and consider weird representations like *:**)
+        return flds,flds[2]
     def printer(self,src,data):
         hname = host_name("{:o}".format(src))
-        fields = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
+        fields,x = self.parse_finger_data(data)
         if fields[0] == "":
             return False
         # uname affiliation pname hname idle loc
@@ -231,6 +283,28 @@ class ChaosLoad(SimpleProtocol):
 # Hack: use LOAD to see if it's worth fingering (with NAME)
 class ChaosLoadName(SimpleProtocol):
     contact = "LOAD"
+    def n_users(self, data):
+        # Parse the second line of LOAD
+        nmatch = re.match(r"Users: (\d+)", str(data.split(b"\r\n")[1],"ascii"))
+        if nmatch:
+            return int(nmatch.group(1))
+        elif debug:
+            print("Can't parse LOAD output from {}: {!r}".format(src,data), file=sys.stderr)
+        return 0
+    def call_name(self, hname, options=None):
+        try:
+            self.print_header(hname)
+            s = SimpleStreamProtocol(hname,"NAME",options=self.options)
+            return s.copy_until_eof()
+        except ChaosError as msg:
+            if debug:
+                print(msg, file=sys.stderr)
+            return 0
+    def print_header(self, hname):
+        # Print a header to show what's about to happen
+        print("[{:s}]".format(hname))
+    def print_n_users(self, n):
+        print("Users: {}".format(n))
     def printer(self, src, data):
         try:
             # Get full name, for this purpose
@@ -239,26 +313,12 @@ class ChaosLoadName(SimpleProtocol):
                 hname = "{:o}".format(src)
         except:
             hname = src
-        # Parse the second line of LOAD
-        nmatch = re.match(r"Users: (\d+)", str(data.split(b"\r\n")[1],"ascii"))
-        if nmatch:
-            n = int(nmatch.group(1))
-            if n == 0:
-                # No users, just report it's empty
-                return False
-            # Print a header to show what's about to happen
-            print("[{:s}]".format(hname))
-            nout = 0
-            try:
-                s = SimpleStreamProtocol(hname,"NAME",options=self.options)
-                nout = s.copy_until_eof()
-            except ChaosError as msg:
-                if debug:
-                    print(msg, file=sys.stderr)
-                return False
+        n = self.n_users(data)
+        if n > 0:
+            nout = self.call_name(hname, options=self.options)
             # In case there was a response to LOAD, but nothing from NAME, give *some* info.
             if nout == 0:
-                print("Users: {}".format(n))
+                self.print_n_users(n)
             return True
         elif debug:
             print("Can't parse LOAD output from {}: {!r}".format(src,data), file=sys.stderr)
@@ -271,20 +331,35 @@ class ChaosLoadName(SimpleProtocol):
             # Report it.
             print("\nNo users on "+", ".join(hnames)+".")
 
+class ChaosName(SimpleStreamProtocol):
+    def __init__(self, hosts, options=None, args=[]):
+        for host in hosts:
+            try:
+                print("[{}]".format(host))
+                p = SimpleStreamProtocol(host,"NAME",options=options,args=args)
+                p.copy_until_eof()
+            except ChaosError:
+                pass
+
+
+
 # The DUMP-ROUTING-TABLE protocol
 class ChaosDumpRoutingTable(SimpleProtocol):
     contact = "DUMP-ROUTING-TABLE"
-    def header(self):
-        return "{:<20} {:>6} {:>6} {}".format("Host","Net","Meth","Cost")
-    def printer(self, src, data):
-        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
+    def parse_routing_data(self,data):
         rtt = dict()
         # Parse routing table info
         for sub in range(0,int(len(data)/4)):
             sn = unpack('H',data[sub*4:sub*4+2])[0]
             if sn != 0:
                 rtt[sub] = dict(zip(('method','cost'),unpack('H'*2,data[sub*4:sub*4+4])))
+        return rtt
+    def header(self):
+        return "{:<20} {:>6} {:>6} {}".format("Host","Net","Meth","Cost")
+    def printer(self, src, data):
+        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
         first = hname
+        rtt = self.parse_routing_data(data)
         for sub in rtt:
             print("{:<20} {:>6o} {:>6o} {}".format(first,sub,rtt[sub]['method'],rtt[sub]['cost']))
             first = ""
@@ -292,13 +367,7 @@ class ChaosDumpRoutingTable(SimpleProtocol):
 # The LASTCN protocol
 class ChaosLastSeen(SimpleProtocol):
     contact = "LASTCN"
-    def header(self):
-        if not no_host_names:
-            return("{:<20} {:20} {:>8} {:10} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
-        else:
-            return("{:<20} {:>8} {:>8} {:>8} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
-    def printer(self, src, data):
-        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) if not(no_host_names) else "{:o}".format(src)
+    def parse_lastcn_data(self,data):
         cn = dict()
         i = 0
         while i < int(len(data)/2):
@@ -314,7 +383,16 @@ class ChaosLastSeen(SimpleProtocol):
             else:
                 cn[addr] = dict(input=inp,via=via,age=age,fc='')
             i += flen
+        return cn
+    def header(self):
+        if not no_host_names:
+            return("{:<20} {:20} {:>8} {:10} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
+        else:
+            return("{:<20} {:>8} {:>8} {:>8} {:>2} {}".format("Host","Seen","#in","Via","FC","Age"))
+    def printer(self, src, data):
+        hname = "{} ({:o})".format(host_name("{:o}".format(src)), src) if not(no_host_names) else "{:o}".format(src)
         first = hname
+        cn = self.parse_lastcn_data(data)
         for addr in cn:
             e = cn[addr]
             a = timedelta(seconds=e['age'])

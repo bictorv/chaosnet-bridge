@@ -18,6 +18,7 @@
 # - let debug be connection-local and initable
 
 import socket, sys, time, re
+import functools
 from enum import IntEnum, auto
 
 # The directories of these need to match the "socketdir" ncp setting in cbridge.
@@ -130,11 +131,12 @@ class NCPConn:
         # Read an OPN/CLS in response to our RFC
         rline = b""
         b = self.get_bytes(1)
-        while b != b"\r" and b != b"\n" and b != b"":
+        while b != b"\r" and b != b"\n" and b != b"\215" and b != b"":
             rline += b
             b = self.get_bytes(1)
         if rline == b"":
-            raise ChaosError("got no data in get_line for {}".format(self))
+            raise EOFError("got no data in get_line for {}".format(self))
+            # raise ChaosError("got no data in get_line for {}".format(self))
         if b == b"\r":
             b = self.get_bytes(1)
             if b != b"\n":
@@ -345,7 +347,7 @@ class BroadcastConn(PacketConn):
         if opc == Opcode.ANS:
             src = data[0] + data[1]*256
             if debug:
-                print("Got ANS from {:o} len {}".format(src,len(data)), file=sys.stderr)
+                print("Got ANS from {:o} len {} for {}".format(src,len(data),self.contact), file=sys.stderr)
             return src,data[2:]
         elif opc == Opcode.LOS or opc == Opcode.CLS:
             # LOS from cbridge after BRD time-outs, CLS from buggy BSD
@@ -466,7 +468,8 @@ class Simple:
     # To support chaining with broadcast
     hdr_printed = False
     printed_sources = []
-    def __init__(self, hnames, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None):
+    def __init__(self, hnames, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None, header_printed=False):
+        self.hdr_printed = header_printed
         if already_printed is not None:
             self.printed_sources = already_printed
         # Accept a list of host names to contact
@@ -482,7 +485,7 @@ class Simple:
                 self.conn.connect(hname, contact, args, options, simple=True)
                 if printer is not None:
                     src, data = self.result()
-                    if not self.hdr_printed and header is not None:
+                    if src is not None and data is not None and not self.hdr_printed and header is not None:
                         print(header)
                         self.hdr_printed = True
                     if data is not None and not printer(src,data):
@@ -491,6 +494,16 @@ class Simple:
                     self.printed_sources.append(src)
                 else:
                     return None
+            except LOSError as m:
+                # handle LOS for timeout etc
+                # hard to handle better here?
+                if printer is not None:
+                    print(m)
+                nonprinted.append([src,m])
+                if debug:
+                    print("<!--") 
+                    print(m)
+                    print(" -->")
             except socket.error:
                 pass
         if footer and self.hdr_printed:
@@ -506,6 +519,10 @@ class Simple:
             if debug:
                 print("Simple ANS len {} from {:o}".format(len(data)-2,src), file=sys.stderr)
             return src, data[2:]
+        elif opc == Opcode.CLS:
+            if debug:
+                print("CLS (from {}): {}".format(self.hname, data), file=sys.stderr)
+            return None,None
         elif opc == Opcode.LOS:
             if debug:
                 print("LOS (from {}): {}".format(self.hname, data), file=sys.stderr)
@@ -526,20 +543,33 @@ class BroadcastSimple:
     # To support chaining with unicast
     hdr_printed = False
     printed_sources = []
-    def __init__(self, subnets, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None):
+    def __init__(self, subnets, contact, args=[], options=None, header=None, footer=None, printer=None, nonprinter=None, already_printed=None, header_printed=False):
         nonprinted = []
+        self.hdr_printed = header_printed
         if already_printed is not None:
             self.printed_sources = already_printed
+        else:
+            self.printed_sources = []
+        if debug:
+            print("{}: already printed {}, printed {}".format(self,already_printed, self.printed_sources), file=sys.stderr)
         for src,data in BroadcastConn(subnets, contact, options=options, args=args):
             if src in self.printed_sources:
+                if debug:
+                    print("Already printed {:o} for {}".format(src, contact), file=sys.stderr)
                 continue                  # already handled
             self.printed_sources.append(src)
             if not self.hdr_printed and header is not None:
                 print(header)               # print header
                 self.hdr_printed = True
+            elif debug:
+                print("hdr_printed {} and header {}".format(self.hdr_printed, header), file=sys.stderr)
             if not printer(src,data):
                 # Save this if it wasn't printed now (e.g. Free lispm)
+                if debug:
+                    print("src {:o} wasn't printed".format(src), file=sys.stderr)
                 nonprinted.append([src,data])
+        if debug:
+            print("Done with subnets {} for {}".format(subnets, contact), file=sys.stderr)
         if footer and self.hdr_printed:
             print(footer)
         # At the end, maybe print those not printed earlier
@@ -563,123 +593,131 @@ def set_dns_resolver_address(adorname):
         return None
     return dns_resolver_address
 
+class DNSRecord:
+    result = None
+    def __init__(self, rr, namestring, parser, timeout=2, options=None):
+        try:
+            if debug:
+                print("DNS query for {} to resolver address {}".format(name, dns_resolver_address), file=sys.stderr)
+            h = dns.query.udp(dns.message.make_query(namestring, rr, rdclass=dns.rdataclass.CH),
+                                  dns_resolver_address, timeout=timeout)
+            result = []
+            for t in h.answer:
+                if t.rdtype == rr:
+                    for d in t:
+                        result.append(parser(d, options))
+            if len(result) > 0:
+                self.result = result
+        except AttributeError as e:
+            # dnspython not updated with support for Chaos records?
+            pass
+            # print("Error", e, file=sys.stderr)
+        except dns.exception.Timeout as e:
+            if debug:
+                print("Timeout error:", e, file=sys.stderr)
+        except dns.exception.DNSException as e:
+            print("Error:", e, file=sys.stderr)
+
+@functools.cache
 def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
     if type(addrstring) is int:
         name = "{:o}.CH-ADDR.NET.".format(addrstring)
         addrstring = "{:o}".format(addrstring)
     else:
         name = "{}.CH-ADDR.NET.".format(addrstring)
-    try:
-        if debug:
-            print("DNS query for {} to resolver address {}".format(name, dns_resolver_address), file=sys.stderr)
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH),
-                              dns_resolver_address, timeout=timeout)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.PTR:
-                    for d in t:
-                        n = d.target.to_text(omit_final_dot=True)
-                        if onlyfirst:
-                            return n.split('.',maxsplit=1)[0]
-                        else:
-                            return n
-                        # return d.target_to_text()
-        return addrstring
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.Timeout as e:
-        if debug:
-            print("Timeout error:", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error:", e, file=sys.stderr)
-
-def get_dns_host_info(name, timeout=5, rclass="CH"):
-    # If it's an address given, look up the name first
-    if isinstance(name,int):
-        name = dns_name_of_address(name, timeout=timeout) or name
-    elif isinstance(name,str) and re.match("^[0-7]+$",name):
-        name = dns_name_of_address(int(name,8), timeout=timeout) or name
-    try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.from_text(rclass)),
-                              dns_resolver_address, timeout=timeout)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.HINFO:
-                for d in t:
-                    return dict(os= str(d.os.decode()), cpu= str(d.cpu.decode()))
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
-
-def dns_addr_of_name(name, timeout=5, rclass="CH"):
-    # If it's an address given, look up the name first, to collect all its addresses
-    if isinstance(name,int):
-        name = dns_name_of_address(name, timeout=timeout) or name
-    elif isinstance(name,str) and re.match("^[0-7]+$",name):
-        name = dns_name_of_address(int(name,8), timeout=timeout) or name
-    addrs = []
-    try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.from_text(rclass)),
-                              dns_resolver_address, timeout=timeout)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.A:
-                    for d in t:
-                        addrs.append(d.address)
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
-    return addrs
-
-# Get all info
-def dns_info_for(nameoraddr, timeout=5, dns_address=dns_resolver_address, default_domain=None, rclass="CH"):
+    def parse_ptr(d, options=None):
+        n = d.target.to_text(omit_final_dot=True)
+        if options and 'onlyfirst' in options and options['onlyfirst']:
+            return n.split(".",maxsplit=1)[0]
+        else:
+            return n
+    r = DNSRecord(dns.rdatatype.PTR, name, parse_ptr, timeout=timeout, options=dict(onlyfirst=onlyfirst)).result
+    return r[0] if r and len(r) > 0 else r
+@functools.cache
+def get_dns_host_info(name, timeout=5):
+    def parse_hinfo(d, options=None):
+        return dict(os=str(d.os.decode()), cpu=str(d.cpu.decode()))
+    r = DNSRecord(dns.rdatatype.HINFO, name, parse_hinfo, timeout=timeout).result
+    return r[0] if r and len(r) > 0 else r
+@functools.cache
+def dns_addr_of_name(name, timeout=5):
+    def parse_addr(d, options=None):
+        return d.address
+    def parse_cname(d, options=None):
+        return dns_addr_of_name(d.target.to_text(), timeout=timeout)
+    r = DNSRecord(dns.rdatatype.A, name, parse_addr, timeout=timeout).result
+    if r is None:
+        r = DNSRecord(dns.rdatatype.CNAME, name, parse_cname, timeout=timeout).result
+        return r[0] if r and len(r) > 0 else r
+    else:
+        return r
+@functools.cache
+def dns_responsible(name, timeout=2):
+    def parse_rp(d, options=None):
+        m = d.mbox
+        maddr = str(m.labels[0],"ascii")+"@"+m.parent().to_text(omit_final_dot=True)
+        tx = d.txt
+        if tx != dns.name.root:
+            # texts = DNSRecord(dns.rdatatype.TXT, tx.to_text(), lambda d,o=None: list(map(lambda x: str(x,"ascii"),d.strings))).result
+            texts = dns_text(tx.to_text(), timeout=timeout)
+        else:
+            texts = None
+        return dict(mbox=maddr, text=texts)
+    return DNSRecord(dns.rdatatype.RP, name, parse_rp, timeout=timeout).result
+@functools.cache
+def dns_text(name, timeout=2):
+    def parse_txt(d, options=None):
+        return [str(x,"utf8") for x in d.strings]
+    return DNSRecord(dns.rdatatype.TXT, name, parse_txt, timeout=timeout).result
+@functools.cache
+def dns_netname(subnet, timeout=2):
+    def parse_ptr(d, options=None):
+        return d.target.to_text(omit_final_dot=True)
+    r = DNSRecord(dns.rdatatype.PTR, "{:o}.CH-ADDR.NET.".format(subnet*256), parse_ptr, timeout=timeout).result
+    return r[0] if r and len(r) > 0 else r
+@functools.cache
+def dns_info_for(name, timeout=2, dns_address=dns_resolver_address, default_domain=None):
     if dns_address:
         set_dns_resolver_address(dns_address)
-    isnum = False
-    extra = None
-    if isinstance(nameoraddr,int):
-        name = dns_name_of_address(nameoraddr,timeout=timeout)
-        isnum = nameoraddr
-    elif isinstance(nameoraddr,str) and re.match("^[0-7]+$",nameoraddr):
-        name = dns_name_of_address(int(nameoraddr,8),timeout=timeout)
-        isnum = int(nameoraddr,8)
-    else:
-        name = nameoraddr.strip()
-    if name:
-        if "." not in name:
-            # Try each domain in the list
-            if isinstance(default_domain,list) and len(default_domain) > 0:
-                extra = name
-                for d in default_domain:
-                    n = name+"."+d
-                    addrs = dns_addr_of_name(n,timeout=timeout,rclass=rclass)
-                    if addrs is not None and len(addrs) > 0:
-                        name = n
-                        break
-            # Try the given domain
-            elif isinstance(default_domain,str):
-                extra = name
-                name = name+"."+default_domain
-                addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
-            # Well try it anyway
-            else:
-                addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
-        else:
-            addrs = dns_addr_of_name(name,timeout=timeout,rclass=rclass)
-        if addrs is None or len(addrs) == 0:
-            return None
-        hinfo = get_dns_host_info(name,timeout=timeout,rclass=rclass)
-        names = [name] if not extra else [name,extra]
-        if not isnum and rclass == "CH":
-            # Got a name for nameoraddr, check its reverse mapping
-            if debug:
-                print("Trying name of addr {}".format(addrs[0]), file=sys.stderr)
-            canonical = dns_name_of_address(addrs[0],timeout=timeout)
+    if isinstance(name, str):
+        addrs = dns_addr_of_name(name, timeout=timeout)
+        canonical = None
+        if addrs and len(addrs) > 0:
+            c = dns_name_of_address(addrs[0], timeout=timeout)
+            if c != name:
+                canonical = c
+                name = canonical
+        hinfo = get_dns_host_info(name, timeout=timeout)
+        rp = dns_responsible(name, timeout=timeout)
+        txt = dns_text(name, timeout=timeout)
+        d = {}
+        if addrs:
+            d['addrs'] = addrs
             if canonical:
-                names = [canonical]+names  if canonical.lower() != name.lower() else [canonical,extra] if extra else [canonical]
-        return dict(name=names, addrs=addrs, os=None if hinfo == None else hinfo['os'], cpu=None if hinfo == None else hinfo['cpu'])
+                d['canonical'] = canonical
+        if hinfo:
+            d['hinfo'] = hinfo
+            d['os'] = hinfo['os']
+            d['cpu'] = hinfo['cpu']
+        if rp:
+            d['responsible'] = rp
+        if txt:
+            d['txt'] = txt
+        return d
+    elif isinstance(name, int):
+        if (name <= 0xff):
+            nn = dns_netname(name, timeout=timeout)
+            if nn:
+                rp = dns_responsible(nn, timeout=timeout)
+                if rp:
+                    return dict(netname=nn,responsible=rp)
+                else:
+                    return dict(netname=nn)
+        else:
+            n = dns_name_of_address(name, timeout=timeout)
+            if n:
+                d = dns_info_for(n, timeout=timeout)
+                if d:
+                    return dict(name=n)|d
+                else:
+                    return dict(name=n)

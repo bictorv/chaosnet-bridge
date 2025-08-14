@@ -1,0 +1,158 @@
+/* Based on https://css-tricks.com/old-timey-terminal-styling/ */
+body {
+  background-color: black;
+  background-image: radial-gradient(
+    rgba(150, 150, 150, 0.7), black 120%
+  );
+  height: 100vh;
+  color: rgb(0,180,0);
+  font: 1.3rem Inconsolata, monospace;
+  text-shadow: 0 0 4px #C8C8C8;
+}
+a:link, a:visited {
+    text-decoration-line: underline overline;
+    text-decoration-color: rgb(0,180,0);
+    color: rgb(0,180,0);
+}
+a:hover {
+    background-color: rgb(0,180,0);
+    color: #454545;
+    text-shadow: 0 0 4px #00e800;
+}
+a.current {
+    text-decoration-line: none;
+}
+.cursor {
+    animation: cursor 1s linear infinite;
+}
+/* @keyframes blinker { */
+/*     50% { */
+/*         opacity: 0; */
+/*     } */
+/* } */
+/* @@@@ Should hack text color but since it's just a cursor it's ok */
+@keyframes cursor {
+    0% {
+        background: transparent;
+    }
+    50% {
+	background-color: rgb(0,180,0);
+    }
+    100% {
+        background: transparent;
+    }
+}
+object, svg, g {
+    filter: drop-shadow(0 0 5px #c8c8c8);
+    /* how to make these take effect? */
+    stroke-width: 2;
+    color: rgb(0,180,0);
+    fill: rgb(0,180,0);
+    stroke: rgb(0,180,0);
+}
+/* Upcase, not large */
+h1 {
+    font-size: inherit;
+    font-weight: inherit;
+    text-transform: uppercase;
+}
+h2 {
+    font-size: inherit;
+    font-weight: inherit;
+    text-decoration: underline;
+}
+h3, h4 {
+    font-size: inherit;
+    font-weight: inherit;
+    margin-bottom: 2px;
+}
+select {
+    background-color: #bbb;
+    color: black;
+    font: 1rem Inconsolata, monospace;
+    /* fix the Blue for selected things */
+}
+/* for some reason this doesn't work? */
+input[type=button]:disabled, input[type=button,disabled], input[type=button,disabled=disabled], input:disabled {
+    background-color: #bbb;
+    cursor: not-allowed;
+}
+input[type=button], input[type=submit], input[type=reset] {
+    font: 1rem Inconsolata, monospace;
+    &:disabled { /* but this seems to work (firefox) */
+	background-color: #bbb;
+	cursor: not-allowed;
+    }
+}
+button[type=button] {
+    background-color: rgb(0,180,0);
+    color: black;
+}
+/* https://stackoverflow.com/a/27779075 */
+/* https://stackoverflow.com/a/58570835 */
+input[type=checkbox] {
+    accent-color: rgb(0,242,0);
+}
+label {
+    display: inline-block;
+    white-space: nowrap;
+    margin-left: 5px;
+}
+
+::selection {
+  /* background: #0080FF; */
+    background: black;
+  text-shadow: none;
+}
+table {
+    font-size: inherit;
+    font-weight: inherit;
+}
+th {
+    font-weight: inherit;
+}
+td.status_name, th.status_name {
+    padding-left: 0px;
+    padding-right: 2ex;
+    padding-bottom: 0px;
+    text-align: left;
+}
+th.status_num, td.status_num {
+    /* padding-left: 2ex; */
+    padding-right: 2ex;
+    padding-bottom: 0px;
+    text-align: right;
+}
+th.status_center, td.status_center {
+    padding-left: 2ex;
+    padding-right: 2ex;
+    padding-bottom: 0px;
+    text-align: center;
+}
+table.sortable tr:first-child {
+    title: "Click to sort";
+}
+table.sortable th.sortable_sorted:hover {
+    title: "Click for descending sort";
+}
+table.sortable th.sortable_sorted_reverse:hover, table.sortable th:hover {
+    title: "Click for ascending sort";
+}
+
+/* table.sortable th::after, th.sorttable_sorted::after, th.sorttable_sorted_reverse::after { */
+/*   content: " "; */
+/*   display: inline-block; */
+/*   width: 24px; */
+/*   height: 24px; */
+/* } */
+/* th.sorttable_sorted::after { */
+/*     content: "↓" */
+  /* background: "↓" */
+  /* background-size: contain; */
+/* } */
+/* th.sorttable_sorted_reverse::after { */
+/*     content: "↑" */
+  /* background: "↑" */
+  /* background-size: cover; */
+/* } */
+/* #sorttable_sortfwdind, #sorttable_sortrevind { display: none; } */

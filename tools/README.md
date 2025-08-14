@@ -23,6 +23,7 @@ Clients, written in Python using the NCP "API" of cbridge:
 - spy.py - a client for the SPY protocol (which shows the screen of a Lisp Machine that allows it).
 - telnet.py - a client for the TELNET protocol (not SUPDUP, yet).
 - bhostat.py - a program which can use broadcast packets to quickly get information about the hosts on Chaosnet.
+- bhostat_html.py - similar but generates HTML output, see also [the web folder](web) for example usage.
 
 The Python servers and clients use support libraries:
 - chaosnet.py - basic Chaosnet access. See the classes PacketConn, BroadcastConn, StreamConn, and Simple for "simple" protocols. It also has some DNS support functions.
