@@ -53,6 +53,50 @@ static struct rfc_handler mycontacts[] = {
   { NULL, NULL}			/* end marker */
 };
 
+
+// Return the "best" response address for a BRD request
+static u_short 
+brd_response_addr(u_char *rfc, int len)
+{
+  struct chaos_header *ch = (struct chaos_header *)rfc;
+  u_short src = ch_srcaddr(ch);
+  u_short dst = ch_destaddr(ch);
+
+  // Initial attempt: find the one closest to the sender
+  if (len >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
+    // If there is a trailer, use it - it should be closer
+    struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(rfc+len-CHAOS_HW_TRAILERSIZE);
+    dst = find_my_closest_addr(htons(tr->ch_hw_srcaddr));
+  } else
+    dst = find_my_closest_addr(src);
+
+  if (ch_opcode(ch) != CHOP_BRD)
+    return dst;
+
+  // Now for the overkill: check if we can find one that is "more friendly" to the recipient.
+  // This is just to make displays of BRD responses for specific subnets easier to read/understand.
+  u_int masksize = ch_ackno(ch)*8;
+  u_char mask[32];
+  // broadcast mask (unswapped)
+  htons_buf((u_short *)&rfc[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
+  u_int sn = dst>>8;
+  if ((sn >= masksize) // sn can't be in mask, or
+      || !(mask[sn/8] & (1<<(sn % 8)))) { // it fits, but isn't set
+    // If "my closest addr" is not on a requested subnet,
+    // but I have an address on a/the requested one, use that instead
+    for (int i = 0; i < nchaddr; i++) {
+      sn = mychaddr[i]>>8;
+      // check if this one fits in the mask and is set
+      if ((sn < masksize) && (mask[sn/8] & (1<<(sn % 8)))) {
+	// then pick it
+	dst = mychaddr[i];
+	break;
+      }
+    }
+  }
+  return dst;
+}
+
 // Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.
 int
 make_routing_table_pkt(u_short dest, u_char *pkt, int pklen)
@@ -226,7 +270,7 @@ dump_routing_table_responder(u_char *rfc, int len)
   set_ch_destindex(ap, ch_srcindex(ch));
   if (dst == 0)
     // broadcast
-    dst = find_my_closest_addr(src);
+    dst = brd_response_addr(rfc, len);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -276,7 +320,7 @@ uptime_responder(u_char *rfc, int len)
   set_ch_destindex(ap, ch_srcindex(ch));
   if (dst == 0)
     // broadcast
-    dst = find_my_closest_addr(src);
+    dst = brd_response_addr(rfc, len);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -311,7 +355,7 @@ time_responder(u_char *rfc, int len)
   set_ch_destindex(ap, ch_srcindex(ch));
   if (dst == 0)
     // broadcast
-    dst = find_my_closest_addr(src);
+    dst = brd_response_addr(rfc, len);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -341,7 +385,7 @@ status_responder(u_char *rfc, int len)
   set_ch_destindex(ap, ch_srcindex(ch));
   if (dst == 0)
     // broadcast
-    dst = find_my_closest_addr(src);
+    dst = brd_response_addr(rfc, len);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
@@ -414,7 +458,7 @@ lastcn_responder(u_char *rfc, int len)
   set_ch_destindex(ap, ch_srcindex(ch));
   if (dst == 0)
     // broadcast
-    dst = find_my_closest_addr(src);
+    dst = brd_response_addr(rfc, len);
   set_ch_srcaddr(ap, dst);
   set_ch_srcindex(ap, ch_destindex(ch));
 
