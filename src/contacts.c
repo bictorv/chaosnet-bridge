@@ -64,13 +64,14 @@ brd_response_addr(u_char *rfc, int len)
 
   // Initial attempt: find the one closest to the sender
   if (len >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
-    // If there is a trailer, use it - it should be closer
+    // If there is a trailer, use it - we'll most likely send the response in that direction
     struct chaos_hw_trailer *tr = (struct chaos_hw_trailer *)(rfc+len-CHAOS_HW_TRAILERSIZE);
     dst = find_my_closest_addr(htons(tr->ch_hw_srcaddr));
   } else
     dst = find_my_closest_addr(src);
 
-  if (ch_opcode(ch) != CHOP_BRD)
+  if ((ch_opcode(ch) != CHOP_BRD) // only BRD has mask
+      || (nchaddr == 1))   // if we have only one address just use it.
     return dst;
 
   // Now for the overkill: check if we can find one that is "more friendly" to the recipient.
