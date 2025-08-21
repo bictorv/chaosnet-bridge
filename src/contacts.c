@@ -59,8 +59,7 @@ static u_short
 brd_response_addr(u_char *rfc, int len)
 {
   struct chaos_header *ch = (struct chaos_header *)rfc;
-  u_short src = ch_srcaddr(ch);
-  u_short dst = ch_destaddr(ch);
+  u_short dst, src = ch_srcaddr(ch);
 
   // Initial attempt: find the one closest to the sender
   if (len >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
@@ -89,9 +88,9 @@ brd_response_addr(u_char *rfc, int len)
       sn = mychaddr[i]>>8;
       // check if this one fits in the mask and is set
       if ((sn < masksize) && (mask[sn/8] & (1<<(sn % 8)))) {
-	// then pick it
-	dst = mychaddr[i];
-	break;
+        // then pick it
+        dst = mychaddr[i];
+        break;
       }
     }
   }
