@@ -328,7 +328,7 @@ myaddr_for_subnet_mask(u_short candidate, u_char *mask, int masksize)
       if ((sn < masksize) && (mask[sn/8] & (1<<(sn % 8)))) {
         // then pick it
         candidate = mychaddr[i];
-	break;
+        break;
       }
     }
   }
