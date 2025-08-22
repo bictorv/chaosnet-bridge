@@ -1275,9 +1275,12 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   if ((cs->state != CS_Open_Sent) || (opcode != CHOP_OPN)) {
     // When resending an OPN, don't re-initialize the conn
     PTLOCKN(c->conn_lock,"conn_lock");
-    c->conn_lhost = find_my_closest_addr(c->conn_rhost);
-    if (ncp_debug) printf("NCP: my closest addr to %#o (%#x) is %#o (%#x)\n",
-			  c->conn_rhost, c->conn_rhost, c->conn_lhost, c->conn_lhost);
+    if (opcode != CHOP_BRD) {
+      // for BRD conn, rhost is 0. Pick the address below.
+      c->conn_lhost = find_my_closest_addr(c->conn_rhost);
+      if (ncp_debug) printf("NCP: my closest addr to %#o (%#x) is %#o (%#x)\n",
+			    c->conn_rhost, c->conn_rhost, c->conn_lhost, c->conn_lhost);
+    }
     if (c->conn_lidx == 0)
       c->conn_lidx = make_fresh_index();
     PTUNLOCKN(c->conn_lock,"conn_lock");
@@ -1301,6 +1304,12 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
   // construct pkt from conn
   pklen = make_pkt_from_conn(opcode, c, (u_char *)&pkt);
   if (opcode == CHOP_BRD) {
+    // Use default myaddr as candidate.
+    struct chaos_header *ch = (struct chaos_header *)pkt;
+    c->conn_lhost = myaddr_for_subnet_mask(mychaddr[0], subnet_mask, ch_ackno(ch)*8);
+    set_ch_srcaddr(ch, c->conn_lhost);
+    if (ncp_debug) printf("NCP: BRD using my addr %#o (%#x)\n",
+			  c->conn_lhost, c->conn_lhost);
     // add subnet mask
     if (subnet_mask != NULL) {
       struct chaos_header *ch = (struct chaos_header *)pkt;
@@ -1316,7 +1325,9 @@ send_first_pkt(struct conn *c, int opcode, connstate_t newstate, u_char *subnet_
       if (ncp_debug)
 	ch_dumpkt(pkt, ch_nbytes(ch));
     } else if (ncp_debug) {
-      printf("NCP: making BRD pkt but no subnet mask given!\n");
+      printf("%%%% NCP: making BRD pkt but no subnet mask given! Not sending it.\n");
+      PTUNLOCKN(cs->conn_state_lock,"conn_state_lock");
+      return;
     }
   }
 

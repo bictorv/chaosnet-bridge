@@ -61,6 +61,9 @@ brd_response_addr(u_char *rfc, int len)
   struct chaos_header *ch = (struct chaos_header *)rfc;
   u_short dst, src = ch_srcaddr(ch);
 
+  if (nchaddr == 1)		// There can be only one!
+    return mychaddr[0];
+
   // Initial attempt: find the one closest to the sender
   if (len >= CHAOS_HEADERSIZE + ch_nbytes(ch) + CHAOS_HW_TRAILERSIZE) {
     // If there is a trailer, use it - we'll most likely send the response in that direction
@@ -69,8 +72,7 @@ brd_response_addr(u_char *rfc, int len)
   } else
     dst = find_my_closest_addr(src);
 
-  if ((ch_opcode(ch) != CHOP_BRD) // only BRD has mask
-      || (nchaddr == 1))   // if we have only one address just use it.
+  if (ch_opcode(ch) != CHOP_BRD) // only BRD has mask
     return dst;
 
   // Now for the overkill: check if we can find one that is "more friendly" to the recipient.
@@ -79,22 +81,9 @@ brd_response_addr(u_char *rfc, int len)
   u_char mask[32];
   // broadcast mask (unswapped)
   htons_buf((u_short *)&rfc[CHAOS_HEADERSIZE], (u_short *)mask, ch_ackno(ch));
-  u_int sn = dst>>8;
-  if ((sn >= masksize) // sn can't be in mask, or
-      || !(mask[sn/8] & (1<<(sn % 8)))) { // it fits, but isn't set
-    // If "my closest addr" is not on a requested subnet,
-    // but I have an address on a/the requested one, use that instead
-    for (int i = 0; i < nchaddr; i++) {
-      sn = mychaddr[i]>>8;
-      // check if this one fits in the mask and is set
-      if ((sn < masksize) && (mask[sn/8] & (1<<(sn % 8)))) {
-        // then pick it
-        dst = mychaddr[i];
-        break;
-      }
-    }
-  }
-  return dst;
+  // If "my closest addr" is not on a requested subnet,
+  // but I have an address on a/the requested one, use that instead
+  return myaddr_for_subnet_mask(dst, mask, masksize);
 }
 
 // Make a RUT pkt for someone (dest), filtering out its own subnet and nets it is the bridge for already.

@@ -308,6 +308,33 @@ u_short find_my_closest_addr(u_short addr)
   return mychaddr[0];
 }
 
+// If the candidate (sender) address is not on a requested subnet,
+// but I have an address on a/the requested one, use that instead
+u_short
+myaddr_for_subnet_mask(u_short candidate, u_char *mask, int masksize)
+{
+  if (nchaddr == 1) 
+    return candidate;
+  if (mask == NULL)		// illegal, but...
+    return candidate;
+
+  u_int sn = candidate>>8;
+  if ((sn >= masksize) // sn can't be in mask, or
+      || !(mask[sn/8] & (1<<(sn % 8)))) { // it fits, but isn't set
+    // Find an address which is in the one of the subnets in the mask
+    for (int i = 0; i < nchaddr; i++) {
+      sn = mychaddr[i]>>8;
+      // check if this one fits in the mask and is set
+      if ((sn < masksize) && (mask[sn/8] & (1<<(sn % 8)))) {
+        // then pick it
+        candidate = mychaddr[i];
+	break;
+      }
+    }
+  }
+  return candidate;
+}
+
 void add_mychaddr(u_short addr)
 {
   if (!is_mychaddr(addr)) {
