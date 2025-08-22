@@ -306,6 +306,7 @@ int is_mychaddr(u_short addr);
 int mychaddr_on_net(u_short addr);
 u_short find_closest_addr(u_short addrs[], int naddrs);
 u_short find_my_closest_addr(u_short addr);
+u_short myaddr_for_subnet_mask(u_short candidate, u_char *mask, int masksize);
 void add_mychaddr(u_short addr);
 int valid_chaos_host_address(u_short addr);
 int is_private_subnet(u_short subnet);
