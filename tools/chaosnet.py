@@ -598,7 +598,7 @@ class DNSRecord:
     def __init__(self, rr, namestring, parser, timeout=2, options=None):
         try:
             if debug:
-                print("DNS query for {} to resolver address {}".format(name, dns_resolver_address), file=sys.stderr)
+                print("DNS query for {} to resolver address {}".format(namestring, dns_resolver_address), file=sys.stderr)
             h = dns.query.udp(dns.message.make_query(namestring, rr, rdclass=dns.rdataclass.CH),
                                   dns_resolver_address, timeout=timeout)
             result = []
@@ -675,12 +675,23 @@ def dns_netname(subnet, timeout=2):
         return d.target.to_text(omit_final_dot=True)
     r = DNSRecord(dns.rdatatype.PTR, "{:o}.CH-ADDR.NET.".format(subnet*256), parse_ptr, timeout=timeout).result
     return r[0] if r and len(r) > 0 else r
-@functools.cache
+
+# Since default_domain can be a list, we can't cache this.
+# @functools.cache
 def dns_info_for(name, timeout=2, dns_address=dns_resolver_address, default_domain=None):
     if dns_address:
         set_dns_resolver_address(dns_address)
     if isinstance(name, str):
-        addrs = dns_addr_of_name(name, timeout=timeout)
+        oname = None
+        if "." in name or default_domain is None:
+            addrs = dns_addr_of_name(name, timeout=timeout)
+        elif "." not in name and default_domain:
+            oname = name
+            for dd in default_domain:
+                name = oname+"."+dd
+                addrs = dns_addr_of_name(name, timeout=timeout)
+                if addrs:
+                    break
         canonical = None
         if addrs and len(addrs) > 0:
             c = dns_name_of_address(addrs[0], timeout=timeout)
@@ -691,6 +702,7 @@ def dns_info_for(name, timeout=2, dns_address=dns_resolver_address, default_doma
         rp = dns_responsible(name, timeout=timeout)
         txt = dns_text(name, timeout=timeout)
         d = {}
+        d['name'] = [name] if oname is None else [name,oname]
         if addrs:
             d['addrs'] = addrs
             if canonical:

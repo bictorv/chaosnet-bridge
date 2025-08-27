@@ -125,7 +125,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
         for k in keynames.keys():
             if k in info and info[k]:
                 resp.append("{} {}".format(keynames[k],info[k].upper()))
-        if info['addrs']:
+        if 'addrs' in info and info['addrs']:
             for a in info['addrs']:
                 if isinstance(a,int):
                     resp.append("CHAOS {:o}".format(a))
