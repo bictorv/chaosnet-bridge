@@ -142,28 +142,28 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
 {
   u_short *data = (u_short *)&pkt[CHAOS_HEADERSIZE];
   int sub, cost, nroutes = 0;
-  int maxroutes = (pklen-CHAOS_HEADERSIZE)/4;  /* that fit in this pkt, max 122 */
+  int maxroutes = CH_PK_MAX_DATALEN/4;  /* that fit in this pkt, max 122 */
   if (maxroutes > 122)
     maxroutes = 122;
 
   memset(data, 0, pklen-CHAOS_HEADERSIZE);
 
   PTLOCKN(rttbl_lock,"rttbl_lock");
-  for (sub = 0; (sub < 0xff) && (sub <= maxroutes); sub++) {
+  for (sub = 0; (sub < 0xff) && (sub < maxroutes); sub++) {
     struct chroute *hostr, *rt = &rttbl_net[sub];
     if (is_private_subnet(sub)) {
       if (debug || verbose) 
 	fprintf(stderr," NOT adding routing for private subnet %#o\n", sub);
       continue;
     }
-    if ((rt->rt_type != RT_NOPATH) &&
+    if (RT_PATHP(rt)
 #if CHAOS_TLS
-	(rt->rt_type == RT_STATIC) && (rt->rt_link == LINK_TLS) // manually configured TLS route
-	? ((rt->rt_braddr != 0) // using a bridge 
-	   // with a host route which is up/connected
-	   && ((hostr = find_in_routing_table(rt->rt_braddr,1,0)) != 0) && (hostr->rt_dest != 0)) : 
+	&& ((rt->rt_type == RT_STATIC) && (rt->rt_link == LINK_TLS) // manually configured TLS route
+	    ? ((rt->rt_braddr != 0) // using a bridge 
+	       // with a host route which is up/connected
+	       && ((hostr = find_in_routing_table(rt->rt_braddr,1,0)) != 0) && (hostr->rt_dest != 0)) : 1)
 #endif
-	 1) {
+	) {
       // Method: if < 0400: interface number; otherwise next hop address
       if (RT_DIRECT(rt) || (is_mychaddr(rt->rt_braddr))) {
 	// interface nr - use link type
@@ -174,7 +174,7 @@ make_dump_routing_table_pkt(u_char *pkt, int pklen)
       cost = rt->rt_cost;
       data[sub*2+1] = htons(cost);
       if (debug) fprintf(stderr," Adding routing for subnet %#o (meth %#o, cost %d)\n",
-			 sub, data[sub*2], cost);
+			 sub, ntohs(data[sub*2]), cost);
       nroutes = sub;
     }
   }
