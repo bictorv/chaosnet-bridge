@@ -702,7 +702,8 @@ def dns_info_for(name, timeout=2, dns_address=dns_resolver_address, default_doma
         rp = dns_responsible(name, timeout=timeout)
         txt = dns_text(name, timeout=timeout)
         d = {}
-        d['name'] = [name] if oname is None else [name,oname]
+        if addrs or hinfo or rp or txt:
+            d['name'] = [name] if oname is None else [name,oname]
         if addrs:
             d['addrs'] = addrs
             if canonical:

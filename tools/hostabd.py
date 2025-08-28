@@ -119,7 +119,7 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
     if debug:
         print("Got info {}".format(info), file=sys.stderr)
     resp = []
-    if info:
+    if info and 'addrs' in info and info['addrs']:
         for n in info['name']:
             resp.append("NAME {}".format(n))
         for k in keynames.keys():
