@@ -103,15 +103,19 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
             # Last resort: try gethostbyname_ex - the given DNS server might not serve the IN class to us
             try:
                 hname,aliases,ips = socket.gethostbyname_ex(name)
-                gotip = True
                 info = dict()
-                if hname.upper() != name:
-                    info['name'] = [hname,name]
-                else:
-                    info['name'] = [hname]
-                info['name'] += aliases
+                if ips and '127.0.1.1' in ips:
+                    ips.remove('127.0.1.1')
+                    if len(ips) == 0:
+                        ips = None
                 if ips:
                     info['addrs'] = ips
+                    gotip = True
+                    if hname.upper() != name:
+                        info['name'] = [hname,name]
+                    else:
+                        info['name'] = [hname]
+                    info['name'] += aliases
             except socket.error as msg:
                 if debug:
                     print("gethostbyname_ex: {}".format(msg), file=sys.stderr)
@@ -135,6 +139,10 @@ def hostab_server_response(name,timeout=2,dns_address=None,default_domain=None):
             try:
                 # If we didn't already get some IP address info, get it now
                 hname,aliases,ips = socket.gethostbyname_ex(info['name'][0] if 'name' in info else name)
+                if ips and '127.0.1.1' in ips:
+                    ips.remove('127.0.1.1')
+                    if len(ips) == 0:
+                        ips = None
                 if ips:
                     for ip in ips:
                         resp.append("INTERNET {}".format(ip))
