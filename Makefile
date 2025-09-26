@@ -6,4 +6,8 @@ cbridge:	.FORCE
 tools:	.FORCE
 	make -C tools
 
+clean:	.FORCE
+	make -C src clean
+	make -C tools clean
+
 .FORCE:

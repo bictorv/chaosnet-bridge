@@ -4,7 +4,7 @@ The NCP implements the "transport layer" of Chaosnet, and lets a regular user pr
 
 You can also use it to make your "unix-like" host a Chaosnet node, by using and adding applications connected to the Chaosnet, such as file transfer, interactive terminal sessions, etc.
 
-For convenient Chaosnet DNS use on macOS 15.4 (and perhaps higher), install `libbind` (which needs `tbl` which comes with `groff`).
+On macOS, most often the default DNS resolver library (-lresolv) works fine, but if you run into problems, install `libbind` (which needs `tbl` which comes with `groff`) and use `make WITH_BIND=yes`.
 
 # Configuration
 
