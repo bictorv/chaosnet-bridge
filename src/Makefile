@@ -7,17 +7,20 @@ CFLAGS = -g
 
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
+# YMMV, but sometimes, e.g. with macports, openssl etc are in /opt/local.
 PFX=/opt/local
-# Are we using homebrew rather than port?
+# Are we using homebrew rather than macports?
 ifneq ($(HOMEBREW_PREFIX),)
   PFX=$(HOMEBREW_PREFIX)
 endif
 LDFLAGS = -L$(PFX)/lib
 CFLAGS = -I$(PFX)/include -g
-# To make chaosnet dns work in 15.4, you may need to install libbind (which needs tbl which comes with groff).
-# You can try using libresolv by commenting the following two lines.
-CFLAGS += -I$(PFX)/include/bind
-LIBRESOLV = -lbind
+# To make chaosnet dns work in macOS >= 15.4, you may need to install libbind (which needs tbl which comes with groff).
+# Use "make WITH_BIND=yes" to try bind instead of resolv.
+ifeq ($(WITH_BIND), yes)
+  CFLAGS += -I$(PFX)/include/bind
+  LIBRESOLV = -lbind
+endif
 endif
 
 # For OpenBSD, do "pkg_add libbind"
@@ -41,7 +44,6 @@ all: cbridge
 
 OBJS = cbridge.o contacts.o usockets.o chtls.o chudp.o debug.o chether.o dns.o chip.o ncp.o pkqueue.o firewall.o
 
-# YMMV, but sometimes openssl etc are in /opt/local.
 # -lssl and -lcrypto are needed only for TLS.
 # -lresolv needed only for dns.o (use -lbind for OpenBSD)
 cbridge: $(OBJS) chaosd.h cbridge-chaos.h chudp.h
