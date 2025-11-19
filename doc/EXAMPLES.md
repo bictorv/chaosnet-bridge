@@ -69,7 +69,7 @@ First, [create a certificate request](TLS.md) and get a certificate back. Then, 
 	ncp enabled yes
 	; Configure my TLS key and cert (see TLS.md)
 	tls key private/my.key.pem cert certs/my.cert.pem
-	; Define a TLS link to the main router over IPv6
+	; Define a TLS link to the main router over IP
 	link tls router.chaosnet.net host unknown myaddr 3077
 
 This should enable you to use e.g. [supdup](https://github.com/PDP-10/supdup) to connect to ITS systems,  [hostat](hostat.c) to check the status of systems, or [finger](finger.py) to check who is logged in.
