@@ -161,6 +161,7 @@ void init_chaos_dns(int do_forwarding);
 int parse_dns_config_line(void);
 void print_config_dns(void);
 void *dns_forwarder_thread(void *v);
+void validate_tls_params(void);
 #endif
 
 // NCP
@@ -771,10 +772,14 @@ handle_pkt_for_me(struct chaos_header *ch, u_char *data, int dlen, u_short dchad
     // RUT is handled separately
     return;
   if ((ch_opcode(ch) == CHOP_RFC) || (ch_opcode(ch) == CHOP_BRD))  {
-    if (verbose)
-      fprintf(stderr,"%s pkt for self (%#o) from <%#o,%#x> received, checking if we handle it\n",
-	      ch_opcode_name(ch_opcode(ch)),
+    if (verbose) {
+      char cname[CH_PK_MAX_DATALEN], *space;
+      get_packet_string(ch, (u_char *)cname, sizeof(cname));
+      if ((space = index(cname, ' ')) != NULL) *space = '\0';
+      fprintf(stderr,"%s %s pkt for self (%#o) from <%#o,%#x> received, checking if we handle it\n",
+	      ch_opcode_name(ch_opcode(ch)), cname,
 	      dchad, ch_srcaddr(ch), ch_srcindex(ch));
+    }
     // see what contact they look for
     if (!handle_rfc(ch, data, dlen)) {
       packet_to_conn_handler(data, dlen);
@@ -2332,20 +2337,7 @@ main(int argc, char *argv[])
 #if CHAOS_TLS
   // Just a little user-friendly config validation
   if (do_tls || do_tls_server) {
-    char *files[] = {tls_ca_file, tls_key_file, tls_cert_file, tls_crl_file };
-    char err[PATH_MAX + sizeof("%%%% cannot access ")+3];
-    int i;
-    for (i = 0; i < 4; i++) {
-      if ((strlen(files[i]) > 0) && (access(files[i], R_OK) != 0)) {
-	sprintf(err,"%%%% cannot access \"%s\"",files[i]);
-	perror(err);
-	fprintf(stderr,"%%%% configured for TLS keyfile \"%s\", certfile \"%s\", ca-chain \"%s\", crl \"%s\"\n",
-	       tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
-#if 0
-	exit(1);
-#endif
-      }
-    }
+    validate_tls_params();
   }
 #endif
 

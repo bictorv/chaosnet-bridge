@@ -2214,6 +2214,27 @@ validate_cert_file(char *fname)
   return 0;
 }
 
+// Only call this if TLS is actually going to be used.
+void validate_tls_params()
+{
+  char *files[] = {tls_ca_file, tls_key_file, tls_cert_file, tls_crl_file };
+  // see parse_tls_config_line above
+  char *params[] = {"ca-chain", "key", "cert", "crl"};
+  char err[PATH_MAX + sizeof("%%%% Cannot access ")+3]; // 2x" + NUL
+  int i;
+  for (i = 0; i < 4; i++) {
+    if ((strlen(files[i]) > 0) && (access(files[i], R_OK) != 0)) {
+      sprintf(err,"%%%% Cannot access \"%s\"",files[i]);
+      perror(err);
+      fprintf(stderr,"%%%% Please update your '%s' setting!\n", params[i]);
+      fprintf(stderr,"%%%% Configured for TLS key \"%s\", cert \"%s\", ca-chain \"%s\", crl \"%s\"\n",
+	      tls_key_file, tls_cert_file, tls_ca_file, tls_crl_file);
+      // We can't run if one of them isn't readable, so make it very clear.
+      exit(1);
+    }
+  }
+}
+
 // module initialization
 void init_chaos_tls()
 {
