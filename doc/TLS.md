@@ -50,7 +50,7 @@ Add TLS configuration to your `cbridge.conf` file:
 
 Add the link configuration:
 
-    link tls router.chaosnet.net host 3040 myaddr 3xxx
+    link tls router.chaosnet.net host unknown myaddr 3xxx
 
 where 3xxx is the Chaosnet address on subnet 6 which you got from Björn.
 

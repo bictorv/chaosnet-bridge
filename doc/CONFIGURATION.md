@@ -76,9 +76,9 @@ You can define links of two types: for whole subnets, and for individual hosts. 
 - `link` *LINKTYPE* `host` *%o* *ROUTEARGS*
 
 	configures an individual host (octal 16-bit address). 
-	For TLS links, the address can be the string `unknown` (but only if cbridge is configured to use DNS). 
+	For TLS links **only**, the address can be the string `unknown` (but only if cbridge is configured to use DNS). 
 	In this case, the address is discovered dynamically from the DNS addresses of the server CN, which is found in its TLS certificate. 
-	This is mainly useful when the server might occasionally change addresses, like the central hub for [the Global Chaosnet](https://chaosnet.net/global).
+	This is mainly useful when the server might occasionally change addresses or have more than one address, like the central hub for [the Global Chaosnet](https://chaosnet.net/global).
 	For `unknown` to work, the server must have an address on a subnet which matches the `myaddr` link parameter (or the `chaddr` global parameter).
 
 ### ROUTEDEF:
@@ -129,7 +129,7 @@ For links, you need to specify what link layer implementation is used for it.
 	The *host*:*port* syntax is invalid for numeric IPv6 *host* parts - use *host*|*port* if you want to specify a port.
 - `tls` *host*:*port* (or *host*|*port*)
 
-	this is a Chaos-over-TLS link, client end, connecting to *host* (IPv4, IPv6, or hostname) at *port* (default 42042). Default cost: `asynch`. 
+	this is a Chaos-over-TLS link, client end, connecting to TLS server *host* (IPv4, IPv6, or hostname) at *port* (default 42042). Default cost: `asynch`. 
 	The *host*:*port* syntax is invalid for numeric IPv6 *host* parts - use *host*|*port* if you want to specify a port.
 - `chip` *addr*
 
