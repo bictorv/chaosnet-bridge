@@ -130,11 +130,13 @@ class NCPConn:
     def get_line(self):
         # Read an OPN/CLS in response to our RFC
         rline = b""
+        havesome = False
         b = self.get_bytes(1)
         while b != b"\r" and b != b"\n" and b != b"\215" and b != b"":
+            havesome = True
             rline += b
             b = self.get_bytes(1)
-        if rline == b"":
+        if rline == b"" and not havesome:
             raise EOFError("got no data in get_line for {}".format(self))
             # raise ChaosError("got no data in get_line for {}".format(self))
         if b == b"\r":
@@ -379,8 +381,7 @@ class StreamConn(NCPConn):
         # Can't do this over stream interface
         pass
     def send_cls(self, msg):
-        # Can't do this over stream interface
-        pass
+        self.send_data("CLS {}\r\n".format(msg))
 
     def listen(self, contact):
         self.contact = contact
@@ -651,6 +652,13 @@ def dns_addr_of_name(name, timeout=5):
         return r[0] if r and len(r) > 0 else r
     else:
         return r
+def dns_addr_of_name_search(name, timeout=5, searchlist=None):
+    if "." in name:
+        return dns_addr_of_name(name, timeout=timeout)
+    for s in searchlist:
+        r = dns_addr_of_name(name+"."+s, timeout=timeout)
+        if r:
+            return r
 @functools.cache
 def dns_responsible(name, timeout=2):
     def parse_rp(d, options=None):
