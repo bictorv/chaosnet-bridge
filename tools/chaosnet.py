@@ -653,7 +653,7 @@ def dns_addr_of_name(name, timeout=5):
     else:
         return r
 def dns_addr_of_name_search(name, timeout=5, searchlist=None):
-    if "." in name:
+    if "." in name or searchlist is None:
         return dns_addr_of_name(name, timeout=timeout)
     for s in searchlist:
         r = dns_addr_of_name(name+"."+s, timeout=timeout)

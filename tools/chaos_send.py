@@ -14,7 +14,7 @@
 #    limitations under the License.
 
 import sys, re
-from chaosnet import StreamConn,ChaosError, EOFError, dns_name_of_address, dns_addr_of_name
+from chaosnet import StreamConn,ChaosError, EOFError, dns_name_of_address, dns_addr_of_name, dns_addr_of_name_search
 from datetime import datetime
 
 # Listens to SEND, returns 5 values:
@@ -22,14 +22,14 @@ from datetime import datetime
 # uname, host: the username and host the message is from
 # datestamp: the datestamp of the message (might be in a remote timezone, beware)
 # text: the text of the message
-def get_send_message():
+def get_send_message(searchlist=None):
     from getpass import getuser
     me = getuser()
     ncp = StreamConn()
     uname,host,date,lines = None, None, None, []
     dt = None
     source,destuser = ncp.listen("SEND")
-    sourcehost = dns_name_of_address(source)
+    sourcehost = dns_name_of_address(int(source,8))
     try:
         if destuser.lower() != me.lower():
             # Assume we're the only user logged in. 
@@ -42,13 +42,18 @@ def get_send_message():
         m = re.match(r"^([\w_.-]+)@([\w_.-]+) (.+)$", str(first,"ascii"))
         if m:
             uname,host,date = m[1],m[2],m[3]
-            dnshostaddr = dns_addr_of_name(host)
-            if len(dnshostaddr) > 0:
+            dnshostaddr = dns_addr_of_name_search(host,searchlist=searchlist)
+            if dnshostaddr and len(dnshostaddr) > 0:
                 dnshost = dns_name_of_address(dnshostaddr[0])
-                if (dnshost is not None and dnshost.lower() != host.lower()) or (sourcehost is not None and host.lower() != sourcehost.lower()):
+                if sourcehost is not None and dnshost is not None and sourcehost.lower() != dnshost.lower():
                     # @@@@ maybe do something more
                     print("Attention: SEND client addr {:o} has name {!r} != {!r} ({!r})".format(
-                        source, sourcehost, dnshost, host), file=sys.stderr)
+                        int(source,8), sourcehost, dnshost, host), file=sys.stderr)
+                if dnshost is not None and dnshost.lower().startswith(host.lower()+"."):
+                    # sender used a shortname, expand it
+                    host = dnshost
+            else:
+                print("Can't find DNS addr of sender name {!r}".format(host), file=sys.stderr)
             # Try parsing ITS, LispM, etc formats
             # @@@@ ITS :REPLY uses simply 3:17pm - do we care? No.
             for f in ["%d/%m/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
@@ -78,7 +83,7 @@ def send_message(user,athost,text,timeout=5):
     myhost = getfqdn()
     ncp = StreamConn()
     ncp.connect(athost,"SEND",[user],options=dict(timeout=timeout))
-    first = "{}@{} {}".format(me,myhost,datetime.now().strftime("%d-%b-%y %H:%M:%S"))
+    first = "{}@{} {}".format(me,myhost,datetime.now().strftime("%d-%b-%Y %H:%M:%S"))
     ncp.send_data(bytes(first,"ascii")+b"\215")
     bb = bytes(text,"ascii").translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
     ncp.send_data(bb)

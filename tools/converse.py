@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright © 2025 Björn Victor (bjorn@victor.se)
-# This is a Converse (i.e. SEND) client, vaguely reminiscent of Converse on LISPM.
+# This is a Converse (i.e. SEND) client/server, vaguely reminiscent of Converse on LISPM.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,9 +15,11 @@
 #    limitations under the License.
 
 # TODO:
-# - beeps when message incoming
-# - save configuration and window geometry
 # - (optionally) save incoming msgs to disk and restore them on restart
+# - configuration menu [TBC]
+# - beep when message incoming (cf /System/Library/Sounds, https://www.qt.io/product/qt6/qml-book/ch11-multimedia-sound-effects, platform.system(), can't get it to work)
+# - dock icon with counter for unseen msgs (https://doc.qt.io/qtforpython-6/overviews/qtdoc-appicon.html)
+# - use QThread instead of threadutil hack
 #
 # Configuration:
 # - colors of fields/msgs
@@ -40,27 +42,9 @@
 # Put an empty conversation at the very bottom, to start a new one.
 # Perhaps put each conversation in its own window, and have a menu item/command-N to create a new one,
 # prompting for destination? With QCompleter for host names? :-)
-#
-# Add menu bar with minimal content: Quit, New conversation, Next/Previous conversation.
-#
-# TODO:
-# Verify that the destination has a valid Chaos host.
-# Verify that the source "from" part matches the source address
 
 import sys, re
 from chaosnet import ChaosError, dns_name_of_address, dns_addr_of_name, dns_addr_of_name_search, set_dns_resolver_address
-
-config = dict(# date_color="#ffebee", 
-              from_net_color="#ffc",
-              from_me_color="#e1f5fe",
-              # Sigh.
-              dns_search_list=["chaosnet.net","victor.se","dfupdate.se"],
-)
-def getconf(opt):
-    if opt in config:
-        return config[opt]
-    else:
-        return None
 
 # For now, try pyqt6.
 
@@ -68,13 +52,38 @@ def getconf(opt):
 # https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qtwidgets-module.html
 # https://www.pythonguis.com/tutorials/pyqt6-qscrollarea/
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl
 from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpression
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QInputDialog,
                              QPushButton, QLabel, QFrame, QSpacerItem, QMessageBox, QComboBox,
                              QSizePolicy, QScrollArea, QLineEdit, QMenuBar)
 from PyQt6.QtGui import QAction, QRegularExpressionValidator
+from PyQt6.QtMultimedia import QSoundEffect
+
+# Create app already here, so QSettings below work nicely
+app = QApplication(sys.argv)
+app.setApplicationName("Converse")
+app.setOrganizationName("Global Chaosnet")
+app.setOrganizationDomain("chaosnet.net")
+app.setApplicationVersion("0.0.2")
+app.setStyleSheet("QMainWindow{background-color: #eee;}")
+
+################ configuration
+default_config = dict(# date_color="#ffebee", 
+    from_net_color="#ffc",
+    from_me_color="#e1f5fe",
+    send_message_timeout=5,
+    # Sigh.
+    dns_search_list=["chaosnet.net","victor.se","dfupdate.se"],
+    beep_sound="/System/Library/Sounds/Ping.aiff",
+)
+
+# create/restore settings based on app name etc
+settings = QSettings()
+# get setting, defaulting to default_config values
+def getconf(opt):
+    return settings.value(opt, default_config[opt] if opt in default_config else None)
 
 ################  get messages from cbridge
 
@@ -103,7 +112,7 @@ def fetch_new_messages(win):
     myhost = getfqdn()
     while True:
         try:
-            destuser,uname,host,date,text = get_send_message()
+            destuser,uname,host,date,text = get_send_message(searchlist=getconf('dns_search_list'))
         except ChaosError as msg:
             print("Error getting Converse messages: {}".format(msg.message), file=sys.stderr)
             # typically no cbridge running, so wait a bit before trying again
@@ -122,6 +131,12 @@ def fetch_new_messages(win):
             am(win,uname,host,"To: {}@{}\n".format(destuser,myhost)+text)
 
 ################ GUI/app
+
+# @@@@ doesn't work on my mac?
+def beep():
+    effect = QSoundEffect()
+    effect.setSource(QUrl.fromLocalFile(getconf('beep_sound')))
+    effect.play()
 
 # This makes the box fit the needed height, not more
 # https://stackoverflow.com/a/68271889
@@ -143,6 +158,13 @@ class MsgBox(QTextEdit):
         self.autoResize()
         super().resizeEvent(event)
 
+    #### this is for keeping track of when we gain focus: then remove dock widget counter
+    def focusInEvent(self, event):
+        # @@@@ remove dock widget counter
+        # find the MainWindow by traversing parentWidget() until isWindow() is true
+        # print("focus in",self,event, file=sys.stderr)
+        super().focusInEvent(event)
+
 # Automatically scroll to the bottom when things are added etc
 # https://stackoverflow.com/a/71283629
 class AutoBottomScrollArea(QScrollArea):
@@ -155,6 +177,32 @@ class AutoBottomScrollArea(QScrollArea):
         # because we may need to call it separately (if you need).
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
+    #### this is for keeping track of when we gain focus: then remove dock widget counter
+    def focusInEvent(self, event):
+        # @@@@ remove dock widget counter
+        # find the MainWindow by traversing parentWidget() until isWindow() is true
+        # print("focus in",self,event, file=sys.stderr)
+        super().focusInEvent(event)
+
+# @@@@ maybe QPlainTextEdit, for multi-line input.
+# @@@@ For validation (ascii only), see answer by Judah Benjamin on
+# @@@@ https://www.devasking.com/issue/how-to-restrict-user-input-in-qlineedit-in-pyqt
+class MessageInputBox(QLineEdit):
+    #### this is for keeping track of when we gain focus: then remove dock widget counter
+    def focusInEvent(self, event):
+        # @@@@ remove dock widget counter
+        # find the MainWindow by traversing parentWidget() until isWindow() is true
+        # print("focus in",self,event, file=sys.stderr)
+        super().focusInEvent(event)
+
+class DestinationBox(QComboBox):
+    #### this is for keeping track of when we gain focus: then remove dock widget counter
+    def focusInEvent(self, event):
+        # @@@@ remove dock widget counter
+        # find the MainWindow by traversing parentWidget() until isWindow() is true
+        # print("focus in",self,event, file=sys.stderr)
+        super().focusInEvent(event)
+
 # Subclass QMainWindow to customize your application's main window
 #
 # This could/should be a conversation window, i.e. per conversation/destination.
@@ -166,6 +214,43 @@ class AutoBottomScrollArea(QScrollArea):
 # Easier? But who are new msgs for? Still group chat would be nice?
 # @@@@ Develop a group chat, but probably separate
 class MainWindow(QMainWindow):
+
+    def aboutme(self):
+        QMessageBox.about(self, "About Converse", 
+                          "<center><b>"+app.applicationName()+" "+app.applicationVersion()+"</b></center><br>"+
+                          app.applicationName()+" is a program to have conversations on Chaosnet.<br>"+
+                          # "Please see https://"+app.organizationDomain()+".<br>"+
+                          "Copyright © 2025 Björn Victor (bjorn@victor.se)")
+
+    def set_message_timeout(self):
+        input,ok = QInputDialog.getInt(self,"Timeout when sending messages","Integer from 1 to 30:",
+                                       getconf('send_message_timeout'), min=1, max=30, step=1)
+        if ok:
+            settings.setValue('send_message_timeout', input)
+        else:
+            print("Setting message timeout cancelled", file=sys.stderr)
+
+    def set_dns_search_list(self):
+        while True:
+            input,ok = QInputDialog.getMultiLineText(self,"Domains to search in DNS","Domain list (one per line):",
+                                         text="\n".join(getconf('dns_search_list')))
+            if ok and input and len(input.strip()) > 0:
+                dlist = [d.strip() for d in input.strip().split("\n")]
+                badd = next((d for d in dlist if "." not in d),None)
+                if badd:
+                    response = QMessageBox.warning(self,"Syntax error","Domains should have '.' in them: "+badd,
+                                                   buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
+                    if response == QMessageBox.StandardButton.Cancel:
+                        print("Cancelled DNS search list setting", file=sys.stderr)
+                        return
+                else:
+                    print("Setting DNS search list:",dlist, file=sys.stderr)
+                    settings.setValue('dns_search_list',dlist)
+                    return
+            else:
+                print("Cancelled DNS search list setting", file=sys.stderr)
+                return
+
     def sendit(self):
         from chaos_send import send_message
         if not self.remote_host() or not self.remote_user():
@@ -175,7 +260,7 @@ class MainWindow(QMainWindow):
             return
         # Expand destination host (sigh, searchlist configuration...)
         destaddr = dns_addr_of_name_search(self.remote_host(),searchlist=getconf('dns_search_list'))
-        if destaddr is None:
+        if destaddr is None or len(destaddr) < 1:
             QMessageBox.critical(self,"Error","Destination host {!r} unknown on Chaosnet".format(self.remote_host()),
                                  buttons=QMessageBox.StandardButton.Ok)
             return
@@ -193,7 +278,7 @@ class MainWindow(QMainWindow):
             try:
                 # @@@@ need a cancel button, and a timeout setting
                 # @@@@ probably need to run send_message in another thread then?
-                send_message(u,h, self.input.text())
+                send_message(u,h, self.input.text(), timeout=getconf('send_message_timeout'))
                 other = "{}@{}".format(u,h)
                 # need to keep track of who we sent last msg to, and add sender arg if it changed.
                 if other != self.last_other:
@@ -219,6 +304,10 @@ class MainWindow(QMainWindow):
 
     def makeBox(self,text,is_from_net=True,other=""):
         from datetime import datetime
+        if not app.activeWindow():
+            print("Message when no active window", file=sys.stderr)
+            app.alert(self)     # bounce the dock icon
+            pass                # @@@@ count this, put it in the dock widget etc
         # If self.last_msg_time is a different day than today, add a line with today's date
         if self.prev_msg_datetime is None or datetime.now().date() != self.prev_msg_datetime.date():
             dbox = QHBoxLayout()
@@ -300,13 +389,25 @@ class MainWindow(QMainWindow):
         else:
             self.sendbutton.setEnabled(False)
 
+    def closeEvent(self,event):
+        settings.setValue("MainWindowSize",self.size())
+        settings.setValue("MainWindowPosition",self.pos())
+        # event.accept()
+        super().closeEvent(event)
+
+    # never activated?
+    def focusChange(self,old,new):
+        print("Focus change: from",old,"to",new, file=sys.stderr)
+
     def __init__(self):
         super().__init__()
         self.prev_msg_datetime = None
         self.last_other = None
 
         self.setWindowTitle("Chaosnet Converse")
-        self.resize(600,400)    # @@@@ make this depend on font size
+        self.resize(settings.value("MainWindowSize",QSize(600,400)))    # @@@@ make this depend on font size
+        if settings.value("MainWindowPosition"):
+            self.move(settings.value("MainWindowPosition"))
 
         # Put the messages in a vertically scrolling container
         scroll = AutoBottomScrollArea()  # contains the widgets, set as the centralWidget
@@ -332,10 +433,8 @@ class MainWindow(QMainWindow):
         self.sendbutton.setEnabled(False)
         self.sendbutton.clicked.connect(self.sendit)
         hlayout.addWidget(self.sendbutton)
-        # @@@@ maybe QPlainTextEdit, for multi-line input.
-        # @@@@ For validation (ascii only), see answer by Judah Benjamin on
-        # @@@@ https://www.devasking.com/issue/how-to-restrict-user-input-in-qlineedit-in-pyqt
-        self.input = QLineEdit()
+
+        self.input = MessageInputBox()
         # Set a validator to make the returnPressed only happen when non-empty, and only accept ASCII
         self.input.setValidator(QRegularExpressionValidator(QRegularExpression("[[:ascii:]]+"),self.input))
         # Disable the button, initially
@@ -346,7 +445,7 @@ class MainWindow(QMainWindow):
         # @@@@ make the "sender" item be clickable to update the dest?
         destlayout = QHBoxLayout()
         destlayout.addWidget(QLabel("Destination:"), alignment=Qt.AlignmentFlag.AlignLeft)
-        self.cbox = QComboBox()
+        self.cbox = DestinationBox()
         self.cbox.setMinimumWidth(300)
         self.cbox.setEditable(True)
         self.cbox.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop) # alphabetically?
@@ -366,6 +465,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(topwidget)
 
         self.input.setFocus()   # after showing it (by setCentralWidget)
+        # self.setFocusProxy(self.input)
+        # self.focusChanged.connect(self.focuschange)
 
         # Create the application menu:
         # - Send message (in the focused input box),
@@ -375,11 +476,21 @@ class MainWindow(QMainWindow):
         # cf https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qmenubar.html
         self_menu = self.menuBar()
         my_menu = self_menu.addMenu("Converse")
+        aboutaction = QAction("About Converse", self)
+        aboutaction.triggered.connect(self.aboutme)
+        my_menu.addAction(aboutaction)
         # @@@@ if we have >1 window, self needs to change. Use the button instead!
         qaction = QAction("Send message", self)
         qaction.setShortcut("Ctrl+S")
         qaction.triggered.connect(self.sendit)
         my_menu.addAction(qaction)
+        my_menu.addSeparator()
+        sto = QAction("Set timeout...", self)
+        sto.triggered.connect(self.set_message_timeout)
+        my_menu.addAction(sto)
+        sdl = QAction("Set domain search list...", self)
+        sdl.triggered.connect(self.set_dns_search_list)
+        my_menu.addAction(sdl)
 
 # https://www.pythonguis.com/faq/command-line-arguments-pyqt6/
 def parse(app):
@@ -392,14 +503,6 @@ def parse(app):
     parser.addOption(uopt)
     parser.process(app)
     return parser.value(hopt), parser.value(uopt)
-
-# You need one (and only one) QApplication instance per application.
-# Pass in sys.argv to allow command line arguments for your app.
-# If you know you won't use command line arguments QApplication([]) works too.
-app = QApplication(sys.argv)
-app.setApplicationName("Converse")
-app.setApplicationVersion("0.0.2")
-app.setStyleSheet("QMainWindow{background-color: #eee;}")
 
 rhost, ruser = parse(app)
 
