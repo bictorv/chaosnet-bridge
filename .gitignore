@@ -70,3 +70,8 @@ tmp/**
 
 # Xcode project (not yet)
 Chaosnet Bridge/**
+
+# pyinstaller
+tools/dist/**
+tools/build/**
+tools/converse.spec

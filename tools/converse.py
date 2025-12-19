@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#
 # Copyright © 2025 Björn Victor (bjorn@victor.se)
 # This is a Converse (i.e. SEND) client/server, vaguely reminiscent of Converse on LISPM.
 
@@ -15,14 +16,15 @@
 #    limitations under the License.
 
 # TODO:
+# - do actual sending in a separate thread, interruptible by Cancel button.
 # - (optionally) save incoming msgs to disk and restore them on restart
+# - FINGER/NAME client, show who of the destinations are online
+# -- better still, put the destination list in a left/right margin with "present" markers, a'la Msgr
+# -- and then: selecting a destination shows that conversation only.
 # - configuration menu [TBC]
 # - beep when message incoming (cf /System/Library/Sounds, https://www.qt.io/product/qt6/qml-book/ch11-multimedia-sound-effects, platform.system(), can't get it to work)
 # - dock icon with counter for unseen msgs (https://doc.qt.io/qtforpython-6/overviews/qtdoc-appicon.html)
-# - use QThread instead of threadutil hack
-#
 # Configuration:
-# - colors of fields/msgs
 # - sounds on/off
 # - receiver on/off (related to if the screen is on, or idle, or ...)
 # Future features: autoreply, idle detection, ignore lists...
@@ -31,6 +33,13 @@
 # - RFC arg: destinationUsername
 # - line 1: from@host date-and-time
 # - rest: message. ITS starts it with "To:" header (cf COMSAT).
+#
+# @@@@ saving/restoring messages:
+# - Save messages chronologically in original format (with \n) including the RFC arg, separated (ended) by ^L
+# - Save also outgoing messages, where the RFC "destuser" is "to:destuser@host"
+# - When restoring, use the "to:" prefix to select how to show it.
+# - Save msgs separately from settings.
+# - (at some point) have a setting for how many/how old msgs to save/restore
 #
 # @@@@ For sending, need to know our Chaos host name, which might be different from "actual" host name.
 # @@@@ May add "ID" operation for cbridge NCP to return useful things like addresses, full hostname, pretty hostname
@@ -43,39 +52,44 @@
 # Perhaps put each conversation in its own window, and have a menu item/command-N to create a new one,
 # prompting for destination? With QCompleter for host names? :-)
 
-import sys, re
-from chaosnet import ChaosError, dns_name_of_address, dns_addr_of_name, dns_addr_of_name_search, set_dns_resolver_address
+import sys, re, multiprocessing
+from datetime import datetime
+from chaosnet import ChaosError, dns_name_of_address, dns_addr_of_name_search, set_dns_resolver_address
+from qsend import get_send_message, send_message
 
 # For now, try pyqt6.
-
-# Cf https://www.pythonguis.com/tutorials/pyqt6-creating-your-first-window/,
 # https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qtwidgets-module.html
-# https://www.pythonguis.com/tutorials/pyqt6-qscrollarea/
 
-from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl
+# @@@@ Menubar icons don't seem to work in PyQt6, but in PySide6. But threadutil only works in PyQt6. :-(
+from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl, QThread, QTimer
 from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpression
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QInputDialog,
                              QPushButton, QLabel, QFrame, QSpacerItem, QMessageBox, QComboBox,
-                             QSizePolicy, QScrollArea, QLineEdit, QMenuBar)
-from PyQt6.QtGui import QAction, QRegularExpressionValidator
+                             QColorDialog, 
+                             QSizePolicy, QScrollArea, QLineEdit, QMenuBar, QProgressDialog)
+from PyQt6.QtGui import QAction, QRegularExpressionValidator, QColor, QPixmap, QIcon, qGray
 from PyQt6.QtMultimedia import QSoundEffect
 
 # Create app already here, so QSettings below work nicely
 app = QApplication(sys.argv)
 app.setApplicationName("Converse")
-app.setOrganizationName("Global Chaosnet")
+app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.0.2")
-app.setStyleSheet("QMainWindow{background-color: #eee;}")
+app.setApplicationVersion("0.0.3")
 
 ################ configuration
 default_config = dict(# date_color="#ffebee", 
+    # @@@@ make a config menu thing for this
     from_net_color="#ffc",
     from_me_color="#e1f5fe",
+    background_color="#eee",
     send_message_timeout=5,
     # Sigh.
     dns_search_list=["chaosnet.net","victor.se","dfupdate.se"],
+    dns_server="dns.chaosnet.net",
+    MainWindowSize=QSize(600,400),
+    # MainWindowPosition=None,
     beep_sound="/System/Library/Sounds/Ping.aiff",
 )
 
@@ -85,22 +99,24 @@ settings = QSettings()
 def getconf(opt):
     return settings.value(opt, default_config[opt] if opt in default_config else None)
 
+app.setStyleSheet("QMainWindow {"+"background-color: {};".format(getconf('background_color'))+"}")
+
 ################  get messages from cbridge
 
 # cf https://github.com/pyqt/examples/blob/_/src/11%20PyQt%20Thread%20example/03_with_threadutil.py
 from threading import Thread
-from threadutil import run_in_main_thread
+from threadutil import run_in_main_thread, CurrentThread
 from time import sleep
 
 new_messages = []
 def fetch_new_messages(win):
-    from chaos_send import get_send_message
     def add_message(win,uname,host,text):
         sender = ""
         ru, rh = win.remote_user(),win.remote_host()
         if ru is None or rh is None or uname.lower() != ru.lower() or host.lower() != rh.lower():
-            win.set_destination(uname,host)
-            sender = "{}@{}".format(uname,host)
+            # not the same remote as last what's in the destination box
+            win.set_destination(uname,host) # update the box
+            sender = "{}@{}".format(uname,host) # show who it's from in the message box
         win.makeBox(text, other=sender, is_from_net=True)
         win.last_other = sender
         # @@@@ optionally beep (setting)
@@ -112,6 +128,7 @@ def fetch_new_messages(win):
     myhost = getfqdn()
     while True:
         try:
+            # @@@@ use the remote date spec to show tz offset, if any
             destuser,uname,host,date,text = get_send_message(searchlist=getconf('dns_search_list'))
         except ChaosError as msg:
             print("Error getting Converse messages: {}".format(msg.message), file=sys.stderr)
@@ -202,7 +219,7 @@ class DestinationBox(QComboBox):
         # find the MainWindow by traversing parentWidget() until isWindow() is true
         # print("focus in",self,event, file=sys.stderr)
         super().focusInEvent(event)
-
+  
 # Subclass QMainWindow to customize your application's main window
 #
 # This could/should be a conversation window, i.e. per conversation/destination.
@@ -223,12 +240,44 @@ class MainWindow(QMainWindow):
                           "Copyright © 2025 Björn Victor (bjorn@victor.se)")
 
     def set_message_timeout(self):
-        input,ok = QInputDialog.getInt(self,"Timeout when sending messages","Integer from 1 to 30:",
+        input,ok = QInputDialog.getInt(self,"Set send timeout","Timeout when sending messages",
                                        getconf('send_message_timeout'), min=1, max=30, step=1)
         if ok:
-            settings.setValue('send_message_timeout', input)
+            if input != getconf('send_message_timeout'):
+                # avoid saving the default_config value
+                settings.setValue('send_message_timeout', input)
         else:
             print("Setting message timeout cancelled", file=sys.stderr)
+
+    def set_dns_server(self):
+        input,ok = QInputDialog.getText(self,"DNS server for Chaosnet","Strongly recommended not to change!",
+                                       text=getconf('dns_server'))
+        if ok and input and len(input.strip()) > 0:
+            s = input.strip()
+            if s == getconf('dns_server'):
+                # avoid saving the default_config value
+                return
+            r = None
+            if "." in s and re.match(r"^[\w_.-]+[^.]$", s):
+                print("Setting DNS server:",s, file=sys.stderr)
+                if set_dns_resolver_address(s) is None:
+                    # can fail e.g. if the name isn't actually in DNS
+                    r = QMessageBox.warning(self,"Error","Failed setting DNS server",
+                                            buttons=QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.RestoreDefaults)
+                else:
+                    settings.setValue('dns_server', s)
+            else:
+                print("Bad syntax for DNS server: {!r}".format(s), file=sys.stderr)
+                r = QMessageBox.warning(self,"Syntax error","Domain name syntax error",
+                                        buttons=QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.RestoreDefaults)
+            if r == QMessageBox.StandardButton.RestoreDefaults:
+                print("Restoring DNS server default:",default_config['dns_server'], file=sys.stderr)
+                # Clear the settings value, so the default_config is used instead
+                settings.setValue('dns_server',None)
+                if set_dns_resolver_address(default_config['dns_server']) is None:
+                    QMessageBox.critical(self,"Error","Failed setting default DNS server!")
+        else:
+            print("Setting DNS server cancelled", file=sys.stderr)
 
     def set_dns_search_list(self):
         while True:
@@ -236,7 +285,10 @@ class MainWindow(QMainWindow):
                                          text="\n".join(getconf('dns_search_list')))
             if ok and input and len(input.strip()) > 0:
                 dlist = [d.strip() for d in input.strip().split("\n")]
-                badd = next((d for d in dlist if "." not in d),None)
+                if dlist == default_config['dns_search_list']:
+                    # avoid saving the default_config value
+                    return
+                badd = next((d for d in dlist if not("." in d and re.match(r"^[\w_.-]+[^.]$",d))),None)
                 if badd:
                     response = QMessageBox.warning(self,"Syntax error","Domains should have '.' in them: "+badd,
                                                    buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
@@ -251,8 +303,120 @@ class MainWindow(QMainWindow):
                 print("Cancelled DNS search list setting", file=sys.stderr)
                 return
 
+    def make_icon(self, colorspec):
+        pm = QPixmap(12,12)
+        pm.fill(QColor(colorspec))
+        # print("Made icon from pixmap for color {!r}: {!r}".format(colorspec,pm), file=sys.stderr)
+        return QIcon(pm)
+        
+    def edit_background_color(self, cf_name):
+        print("Getting a color setting for {} (default {})".format(cf_name,getconf(cf_name)), file=sys.stderr)
+        color = QColorDialog.getColor(QColor(getconf(cf_name)), self)
+        if color.isValid() and color.name() != getconf(cf_name):
+            print("Got a color: {} ({!r})".format(color.name(),color), file=sys.stderr)
+            settings.setValue(cf_name, color.name())
+            return color.name()
+
+    def set_background_color(self, color=None):
+        c = self.edit_background_color('background_color') if not color else color
+        settings.setValue('background_color',c)
+        app.setStyleSheet("QMainWindow{"+"background-color: {};".format(c)+"}")
+       
+    def set_background_color_from_me(self, color=None):
+        c = self.edit_background_color('from_me_color') if not color else color
+        if c:
+            i = self.make_icon(c)
+            # print("Setting icon for {!r} to {!r}".format(self.from_me_color_action,i), file=sys.stderr)
+            self.from_me_color_action.setIcon(i)
+            # @@@@ go though all messages and change the color?
+    def set_background_color_from_net(self, color=None):
+        c = self.edit_background_color('from_net_color') if not color else color
+        if c:
+            i = self.make_icon(c)
+            # print("Setting icon for {!r} to {!r}".format(self.from_net_color_action,i), file=sys.stderr)
+            self.from_net_color_action.setIcon(i)
+            # @@@@ go though all messages and change the color?
+
+    def edit_destination_list(self):
+        dlist = [self.cbox.itemText(i) for i in range(self.cbox.count())]
+        while True:
+            input,ok = QInputDialog.getMultiLineText(self,"Edit destination menu","user@host (one per line)",
+                                         text="\n".join(dlist))
+            if ok and input and len(input.strip()) > 0:
+                new_dlist = [d.strip() for d in input.strip().split("\n")]
+                badd = next((d for d in new_dlist if not re.match(r"^[\w_.-]+@[\w_.-]+$",d)),None)
+                if badd:
+                    response = QMessageBox.warning(self,"Syntax error","Destination should be user@host: "+badd,
+                                                   buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
+                    if response == QMessageBox.StandardButton.Cancel:
+                        print("Cancelled editing destination list", file=sys.stderr)
+                        return
+                else:
+                    print("Setting destination list:",new_dlist, file=sys.stderr)
+                    self.cbox.clear()
+                    self.cbox.insertItems(0,new_dlist)
+                    settings.setValue('destination_list',new_dlist)
+                    print("Settings status: {!r}".format(settings.status()), file=sys.stderr)
+                    if settings.status() != QSettings.Status.NoError:
+                        QMessageBox.warning(self,"Settings error","Settings could not be saved: {!r}".format(settings.status()))
+                    return
+            else:
+                print("Cancelled editing destination list", file=sys.stderr)
+                return
+
+    def reset_destinations(self):
+        self.cbox.clear()
+        settings.setValue('destination_list',[])
+
+    def init_message_history(self):
+        h = QLabel()
+        h.setTextFormat(Qt.TextFormat.RichText)
+        h.setText("<i>Message history</i>")
+        self.msglayout.addWidget(h, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Keep a stretch at the top of the messages, so new msgs are at the bottom, next to the input box
+        self.msglayout.addStretch(1)
+
+    def clear_message_history(self):
+        # Need to recursively delete widgets.
+        # cf "Example 2: Clearing Widgets in a QGridLayout" on https://dnmtechs.com/clearing-widgets-in-pyqt-layout-python-3-programming/
+        # similar to https://gist.github.com/GriMel/181db149cc150d903f1a
+        # 
+        def clear_layout(layout):
+            while layout is not None and layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                else:
+                    clear_layout(item.layout())
+        clear_layout(self.msglayout)
+        # Then reinitialize it
+        self.init_message_history()
+
+    def reset_settings(self):
+        # Reset settings
+        for s in list(default_config.keys()) + ["MainWindowSize", "MainWindowPosition"]:
+            settings.setValue(s,default_config[s] if s in default_config else None)
+        # Also update effect of settings: background colors
+        app.setStyleSheet("QMainWindow{"+"background-color: {};".format(getconf('background_color'))+"}")
+        self.set_background_color_from_net(getconf('from_net_color'))
+        self.set_background_color_from_me(getconf('from_me_color'))
+        # Resize to default
+        wsz = default_config['MainWindowSize']
+        self.resize(wsz)
+        if getconf('MainWindowPosition'):
+            # If there is a default, move there
+            self.move(getconf('MainWindowPosition'))
+        else:
+            # Else find the middle of the screen we're on
+            scr = app.screenAt(self.pos())
+            sz = scr.size()
+            self.move(QPoint(round((sz.width()-wsz.width())/2), round((sz.height()-wsz.height())/2)))
+
     def sendit(self):
-        from chaos_send import send_message
+        if len(self.input.text().strip()) == 0:
+            # just noop. This is slightly better than disabling the button, which makes it almost invisible (on macOS).
+            return
         if not self.remote_host() or not self.remote_user():
             # @@@@ Beep
             QMessageBox.critical(self,"Error","Destination user/host unknown!",
@@ -276,10 +440,12 @@ class MainWindow(QMainWindow):
                   file=sys.stderr)
             self.input.setReadOnly(True)
             try:
-                # @@@@ need a cancel button, and a timeout setting
-                # @@@@ probably need to run send_message in another thread then?
-                send_message(u,h, self.input.text(), timeout=getconf('send_message_timeout'))
                 other = "{}@{}".format(u,h)
+                # @@@@ need a cancel button, and a timeout setting
+                # @@@@ need to run send_message in another thread:
+                # cf https://www.pythonguis.com/tutorials/multithreading-pyside6-applications-qthreadpool/
+                # cf https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qprogressdialog.html
+                send_message(u,h, self.input.text(), timeout=getconf('send_message_timeout'))
                 # need to keep track of who we sent last msg to, and add sender arg if it changed.
                 if other != self.last_other:
                     self.makeBox(self.input.text(), is_from_net=False, other=other)
@@ -290,10 +456,9 @@ class MainWindow(QMainWindow):
                 self.input.clear()
             except ChaosError as m:
                 # @@@@ Beep
-                QMessageBox.critical(self,"Chaosnet Error","Error from host {}: {}".format(self.remote_host(),m.message),
+                QMessageBox.critical(self,"Chaosnet Error","Error from host {}:<br>{}".format(self.remote_host(),m.message),
                                      buttons=QMessageBox.StandardButton.Ok)
             self.input.setReadOnly(False)
-            self.enable_input()
 
     def makeline(self, width=100):
         line = QFrame()
@@ -303,9 +468,7 @@ class MainWindow(QMainWindow):
         return line
 
     def makeBox(self,text,is_from_net=True,other=""):
-        from datetime import datetime
         if not app.activeWindow():
-            print("Message when no active window", file=sys.stderr)
             app.alert(self)     # bounce the dock icon
             pass                # @@@@ count this, put it in the dock widget etc
         # If self.last_msg_time is a different day than today, add a line with today's date
@@ -327,6 +490,7 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         # timestamp @@@@ from incoming msg?
         if other != self.last_other:
+            # New other end, show it together with the time
             tbox = QVBoxLayout()
             tbox.setContentsMargins(0, 0, 0, 0)
             tbox.setSpacing(0)
@@ -338,16 +502,23 @@ class MainWindow(QMainWindow):
             time = QLabel(datetime.now().strftime('%H:%M:%S'))
         box = MsgBox()
         box.setText(text)
+        # Nice corners please!
+        ss = "border-radius: 7px; border: 1px solid grey;"
         if is_from_net:         # text on the left
             if getconf("from_net_color"):
-                box.setStyleSheet("background-color: {};".format(getconf('from_net_color')))
+                ss += "background-color: {};".format(getconf('from_net_color'))
+                if qGray(QColor(getconf('from_net_color')).rgba()) < 128:
+                    ss += "color: white;"
             align = Qt.AlignmentFlag.AlignLeft
             contents = [box, time]
         else:                   # on the right
             if getconf("from_me_color"):
-                box.setStyleSheet("background-color: {};".format(getconf('from_me_color')))
+                ss += "background-color: {};".format(getconf('from_me_color'))
+                if qGray(QColor(getconf('from_me_color')).rgba()) < 128:
+                    ss += "color: white;"
             align = Qt.AlignmentFlag.AlignRight
             contents = [time, box]
+        box.setStyleSheet(ss)
         for c in contents:
             row.addWidget(c, alignment=align)
         w = QWidget()
@@ -375,19 +546,14 @@ class MainWindow(QMainWindow):
         else:
             self.cbox.setCurrentText("{}@{}".format(user, host))
             # Since the text might not have been "activated" yet, just entered, add it to the menu
-            # @@@@ perhaps "expand" it by doing DNS lookup and using the canonical name?
-            if self.cbox.findText(self.cbox.currentText()) < 0:
+            if self.cbox.findText(self.cbox.currentText(),flags=Qt.MatchFlag.MatchFixedString) < 0:
                 print("adding new destination {!r}".format(self.cbox.currentText()), file=sys.stderr)
+                print("old destinations: ",settings.value('destination_list'), file=sys.stderr)
                 if self.cbox.insertPolicy() == QComboBox.InsertPolicy.InsertAtTop:
                     self.cbox.insertItem(0, self.cbox.currentText())
                 else:           # I assumed this followed the policy, but...
                     self.cbox.addItem(self.cbox.currentText())
-
-    def enable_input(self):
-        if len(self.input.text()) > 0 and len(self.cbox.currentText()) > 0:
-            self.sendbutton.setEnabled(True)
-        else:
-            self.sendbutton.setEnabled(False)
+                settings.setValue('destination_list',[self.cbox.itemText(i) for i in range(self.cbox.count())])
 
     def closeEvent(self,event):
         settings.setValue("MainWindowSize",self.size())
@@ -399,27 +565,52 @@ class MainWindow(QMainWindow):
     def focusChange(self,old,new):
         print("Focus change: from",old,"to",new, file=sys.stderr)
 
-    def __init__(self):
-        super().__init__()
-        self.prev_msg_datetime = None
-        self.last_other = None
+    def init_menus(self):
+        # Create the application menu
+        self_menu = self.menuBar()
+        my_menu = self_menu.addMenu(app.applicationName())
+        aboutaction = QAction("About {}".format(app.applicationName()), self)
+        aboutaction.triggered.connect(self.aboutme)
+        my_menu.addAction(aboutaction)
+        def make_action(title, handler, shortcut=None, icon=None):
+            act = QAction(title, self)
+            act.triggered.connect(handler)
+            if shortcut is not None:
+                act.setShortcut(shortcut)
+            if icon is not None:
+                # print("Setting icon for {!r} to {!r}".format(title,icon), file=sys.stderr)
+                act.setIcon(icon)
+            return act
+        my_menu.addAction(make_action("Send message", self.sendit, shortcut="Ctrl+S"))
+        my_menu.addSeparator()
+        my_menu.addAction(make_action("Edit destination menu", self.edit_destination_list))
+        my_menu.addAction(make_action("Clear destination menu", self.reset_destinations))
+        my_menu.addAction(make_action("Clear message history", self.clear_message_history))
+        my_menu.addSeparator()
+        my_menu.addAction(make_action("Set send timeout...", self.set_message_timeout))
+        my_menu.addAction(make_action("Set domain search list...", self.set_dns_search_list))
+        my_menu.addAction(make_action("Set DNS server...", self.set_dns_server))
+        my_menu.addSeparator()
+        my_menu.addAction(make_action("Edit background color...", self.set_background_color))
+        self.from_net_color_action = make_action("Edit net message background color...", 
+                                                 self.set_background_color_from_net,
+                                                 icon=self.make_icon(getconf('from_net_color')))
+        my_menu.addAction(self.from_net_color_action)
+        self.from_me_color_action = make_action("Edit my message background color...", 
+                                                self.set_background_color_from_me,
+                                                icon=self.make_icon(getconf('from_me_color')))
+        my_menu.addAction(self.from_me_color_action)
+        my_menu.addAction(make_action("Reset all settings", self.reset_settings))
+        
+        
 
-        self.setWindowTitle("Chaosnet Converse")
-        self.resize(settings.value("MainWindowSize",QSize(600,400)))    # @@@@ make this depend on font size
-        if settings.value("MainWindowPosition"):
-            self.move(settings.value("MainWindowPosition"))
-
+    def init_layout_and_boxes(self):
         # Put the messages in a vertically scrolling container
         scroll = AutoBottomScrollArea()  # contains the widgets, set as the centralWidget
         widget = QWidget() # widget that contains the collection of Vertical Box
         self.msglayout = QVBoxLayout()  # the vertical box that contains the MsgBoxes
 
-        h = QLabel()
-        h.setTextFormat(Qt.TextFormat.RichText)
-        h.setText("<i>Message history</i>")
-        self.msglayout.addWidget(h, alignment=Qt.AlignmentFlag.AlignCenter)
-        # Keep a stretch at the top of the messages, so new msgs are at the bottom, next to the input box
-        self.msglayout.addStretch(1)
+        self.init_message_history()
 
         widget.setLayout(self.msglayout)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
@@ -430,7 +621,8 @@ class MainWindow(QMainWindow):
         hlayout = QHBoxLayout()
         self.sendbutton = QPushButton("Send", self)
         self.sendbutton.setDefault(True) # Make it a nice big button
-        self.sendbutton.setEnabled(False)
+        # Disabling the button makes it almost invisible (on macOS). Instead have sendit handle it.
+        # self.sendbutton.setEnabled(False)
         self.sendbutton.clicked.connect(self.sendit)
         hlayout.addWidget(self.sendbutton)
 
@@ -440,7 +632,7 @@ class MainWindow(QMainWindow):
         # Disable the button, initially
         self.input.returnPressed.connect(self.sendit)
         # Enable it when there is text in the input field
-        self.input.textEdited.connect(self.enable_input)
+        # Disabling the button makes it almost invisible (on macOS). Instead have sendit handle it.
         hlayout.addWidget(self.input)
         # @@@@ make the "sender" item be clickable to update the dest?
         destlayout = QHBoxLayout()
@@ -448,11 +640,11 @@ class MainWindow(QMainWindow):
         self.cbox = DestinationBox()
         self.cbox.setMinimumWidth(300)
         self.cbox.setEditable(True)
+        self.cbox.setDuplicatesEnabled(False)
         self.cbox.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop) # alphabetically?
         self.cbox.setValidator(QRegularExpressionValidator(QRegularExpression(r"[\w_.-]+@[\w_.-]+"),self))
         destlayout.addWidget(self.cbox, alignment=Qt.AlignmentFlag.AlignLeft)
         destlayout.addStretch(1)
-        # @@@@ add a "remove" button to remove the current index (except 0)
 
         # The top-level layout: messages followed by input
         toplayout = QVBoxLayout()
@@ -465,57 +657,55 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(topwidget)
 
         self.input.setFocus()   # after showing it (by setCentralWidget)
-        # self.setFocusProxy(self.input)
-        # self.focusChanged.connect(self.focuschange)
+        # print("msglayout",self.msglayout,"widget layout",widget.layout())
+        # print("msglayout parent",self.msglayout.parentWidget(),"widget",widget, file=sys.stderr)
 
-        # Create the application menu:
-        # - Send message (in the focused input box),
-        # - Clear history
-        # - Clear destinations
-        # @@@@ add "About" etc
-        # cf https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qmenubar.html
-        self_menu = self.menuBar()
-        my_menu = self_menu.addMenu("Converse")
-        aboutaction = QAction("About Converse", self)
-        aboutaction.triggered.connect(self.aboutme)
-        my_menu.addAction(aboutaction)
-        # @@@@ if we have >1 window, self needs to change. Use the button instead!
-        qaction = QAction("Send message", self)
-        qaction.setShortcut("Ctrl+S")
-        qaction.triggered.connect(self.sendit)
-        my_menu.addAction(qaction)
-        my_menu.addSeparator()
-        sto = QAction("Set timeout...", self)
-        sto.triggered.connect(self.set_message_timeout)
-        my_menu.addAction(sto)
-        sdl = QAction("Set domain search list...", self)
-        sdl.triggered.connect(self.set_dns_search_list)
-        my_menu.addAction(sdl)
+    def __init__(self):
+        super().__init__()
+        self.prev_msg_datetime = None
+        self.last_other = None
+
+        self.setWindowTitle("Chaosnet Converse")
+        # Initialize settings
+        set_dns_resolver_address(getconf('dns_server'))
+        self.resize(settings.value("MainWindowSize",getconf('MainWindowSize')))    # @@@@ make this depend on font size
+        if settings.value("MainWindowPosition"):
+            self.move(settings.value("MainWindowPosition"))
+
+        # initialize layout etc
+        self.init_layout_and_boxes()
+        if settings.value('destination_list'):
+            self.cbox.insertItems(0,settings.value('destination_list'))
+
+        # initialize menus
+        self.init_menus()
 
 # https://www.pythonguis.com/faq/command-line-arguments-pyqt6/
-def parse(app):
+def parse_args(app):
     parser = QCommandLineParser()
     parser.addHelpOption()
     parser.addVersionOption()
     hopt = QCommandLineOption(["r","remotehost"],"Remote hostname","hostname")
     uopt = QCommandLineOption(["u","remoteuser"],"Remote user","username")
+    # @@@@ add --verbose, and use it for non-debug-but-possibly-relevant printouts
     parser.addOption(hopt)
     parser.addOption(uopt)
     parser.process(app)
     return parser.value(hopt), parser.value(uopt)
 
-rhost, ruser = parse(app)
+if __name__ == '__main__':
+    rhost, ruser = parse_args(app)
 
-# Create a Qt widget, which will be our window.
-window = MainWindow()
-if rhost and ruser:
-    print("User: {!r}, Host: {!r}".format(ruser, rhost), file=sys.stderr)
-    window.set_destination(ruser,rhost)
-window.show()
+    # Create a Qt widget, which will be our window.
+    window = MainWindow()
+    if rhost and ruser:
+        print("User: {!r}, Host: {!r}".format(ruser, rhost), file=sys.stderr)
+        window.set_destination(ruser,rhost)
+    window.show()
 
-# Run the SEND server thread
-thread = Thread(target=fetch_new_messages, args=(window,), daemon=True)
-thread.start()
+    # Run the SEND server thread
+    thread = Thread(target=fetch_new_messages, args=(window,), daemon=True)
+    thread.start()
 
-# Start the event loop.
-app.exec()
+    # Start the event loop.
+    app.exec()

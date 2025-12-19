@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+#
 # Copyright © 2025 Björn Victor (bjorn@victor.se)
 # Implementation of the SEND protocol.
 
@@ -55,7 +57,8 @@ def get_send_message(searchlist=None):
             else:
                 print("Can't find DNS addr of sender name {!r}".format(host), file=sys.stderr)
             # Try parsing ITS, LispM, etc formats
-            # @@@@ ITS :REPLY uses simply 3:17pm - do we care? No.
+            # @@@@ Use this to show the time offset
+            # @@@@ ITS :REPLY uses simply 3:17pm - do we care? Not yet.
             for f in ["%d/%m/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
                 try:
                     dt = datetime.strptime(date,f)
@@ -63,6 +66,26 @@ def get_send_message(searchlist=None):
                 except ValueError as e:
                     dt = None
                     # print("Error parsing date:",e, file=sys.stderr)
+            # @@@@ do the below adjustment also for full time specs! Easier with full datetime!
+            if dt is None:
+                # Try to parse 3:17pm. This could be east or west of here.
+                # Heuristics which work with a diff < 12 hours (i.e. not Japan vs California):
+                # Subtract local hour from remote hour; if > 12 or < 12, subtract/add 24.
+                # This gives the #hours ahead the sender is (so display e.g. "12:24:42 (-9 h)"
+                m = re.match(r"([0-9]+):([0-9]+)([ap]m)", date)
+                if m:
+                    hr,min,ap = m.group(1,2,3)
+                    if ap == "pm":
+                        h += 12 # use 24-hour time
+                    now = datetime.now()
+                    if math.abs(now.minute-min) > 10:
+                        pass
+                    diff = hr-now.hour
+                    if diff > 12:
+                        diff -= 24
+                    elif diff < 12:
+                        diff += 24
+                    # @@@@ make a datetime adjusted with diff hours
             while len(pkt) > 0:
                 ll = str(pkt.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8").split("\n")
                 lines += ll
@@ -82,18 +105,35 @@ def send_message(user,athost,text,timeout=5):
     me = getuser()
     myhost = getfqdn()
     ncp = StreamConn()
+    # Protocol: RFC arg is destination username
     ncp.connect(athost,"SEND",[user],options=dict(timeout=timeout))
+    # First line is sender@host date-and-time
     first = "{}@{} {}".format(me,myhost,datetime.now().strftime("%d-%b-%Y %H:%M:%S"))
     ncp.send_data(bytes(first,"ascii")+b"\215")
+    # followed by data with LISPM newlines
     bb = bytes(text,"ascii").translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
     ncp.send_data(bb)
 
 if __name__ == '__main__':
     import argparse
-    p = argparse.ArgumentParser(description="Send a message")
-    # @@@@ or use user@host syntax
-    p.add_argument("user",help="Destination user")
-    p.add_argument("host",help="Destination host")
-    p.add_argument("message", nargs="+",help="Messsage to send")
+    p = argparse.ArgumentParser(description="Send a Chaosnet message")
+    p.add_argument("user_at_host",help="Destination (user@host)")
+    p.add_argument("message", nargs="*",help="Message to send (or stdin)")
     args = p.parse_args()
-    send_message(args.user,args.host," ".join(args.message))
+
+    # Parse destination
+    m = re.match(r"^([\w_.-]+)@([\w_.-]+)$",args.user_at_host)
+    if not m: 
+        print("Bad argument {!r}, should be user@host".format(args.user_at_host), file=sys.stderr)
+        exit(1)
+    # If no message given, read it from stdin
+    if not args.message or len(args.message) == 0:
+        msg = "".join(sys.stdin.readlines()).rstrip()
+        print("input was {!r}".format(msg), file=sys.stderr)
+    else:
+        msg = " ".join(args.message)
+
+    try:
+        send_message(m.group(1),m.group(2),msg)
+    except ChaosError as e:
+        print("Chaosnet error: {}".format(e), file=sys.stderr)
