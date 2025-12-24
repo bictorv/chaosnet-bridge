@@ -11,24 +11,25 @@ It makes use of `qsend.py`, which can also be used as a command-line client for 
 ## User interface
 
 There are three parts of the user interface:
-1. a Message history, showing incoming and outgoing messages
+1. a Conversation part, where tabs show the Message history for each conversation (incoming and outgoing messages)
 2. a Destination selector, indicating where messages will be sent
 3. a message Input window, where you type the message to be sent before clicking the Send button.
 
 There is also a Converse menu (at least one), with settings and additional actions, and an About item.
 
-### Message history
+### Conversation
+Each conversation is put in a separate tab, showing the message history for a conversation party.
 The message history shows incoming and outgoing messages, with timestamps. New messages appear at the bottom of the message history, scrolling older messages upwards.
 
 Incoming messages are left-adjusted and in a (by default yellowish) color. Outgoing messages are right-adjusted and in a (by default blue-ish) color.
 
 If the most recent message is sent/received on a new date, the date is shown before the message.
 
-If the most recent message is not from/to the next most recent message, the source/destination of the message is also indicated.
+Not currently relevant: If the most recent message is not from/to the next most recent message, the source/destination of the message is also indicated.
 
 If a message arrives when the Converse window is not the focused/active window, an attempt is made to "bounce" the application icon (e.g. in the Dock, on macOS).
 
-The message history can be cleared using the `Clear message history` menu item.
+The message histories can be cleared using the `Clear message history` menu item.
 
 ### Destination input
 

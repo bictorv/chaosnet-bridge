@@ -16,6 +16,8 @@
 #    limitations under the License.
 
 # TODO:
+# - conversation menu: clear individual conversation, remove individual conversation; remove all conversations
+# - optionally show all conversations in the same tab
 # - do actual sending in a separate thread, interruptible by Cancel button.
 # - (optionally) save incoming msgs to disk and restore them on restart
 # - FINGER/NAME client, show who of the destinations are online
@@ -43,14 +45,7 @@
 #
 # @@@@ For sending, need to know our Chaos host name, which might be different from "actual" host name.
 # @@@@ May add "ID" operation for cbridge NCP to return useful things like addresses, full hostname, pretty hostname
-# @@@@ Make this a config/parameter here for now.
-#
-# TODO:
-# Put each conversation in a container which scrolls if it's too high. Add title to show other end.
-# Put an input window at the bottom of each conversation.
-# Put an empty conversation at the very bottom, to start a new one.
-# Perhaps put each conversation in its own window, and have a menu item/command-N to create a new one,
-# prompting for destination? With QCompleter for host names? :-)
+# @@@@ TODO: Make this a config/parameter here for now.
 
 import sys, re, multiprocessing
 from datetime import datetime
@@ -66,7 +61,7 @@ from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpress
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QInputDialog,
                              QPushButton, QLabel, QFrame, QSpacerItem, QMessageBox, QComboBox,
-                             QColorDialog, 
+                             QColorDialog, QTabWidget, 
                              QSizePolicy, QScrollArea, QLineEdit, QMenuBar, QProgressDialog)
 from PyQt6.QtGui import QAction, QRegularExpressionValidator, QColor, QPixmap, QIcon, qGray
 from PyQt6.QtMultimedia import QSoundEffect
@@ -116,8 +111,8 @@ def fetch_new_messages(win):
         if ru is None or rh is None or uname.lower() != ru.lower() or host.lower() != rh.lower():
             # not the same remote as last what's in the destination box
             win.set_destination(uname,host) # update the box
-            sender = "{}@{}".format(uname,host) # show who it's from in the message box
-        win.makeBox(text, other=sender, is_from_net=True)
+        sender = "{}@{}".format(uname,host) # show who it's from in the message box
+        win.add_message(sender, text, True)
         win.last_other = sender
         # @@@@ optionally beep (setting)
     # The trick: run add_message in the main thread
@@ -220,6 +215,243 @@ class DestinationBox(QComboBox):
         # print("focus in",self,event, file=sys.stderr)
         super().focusInEvent(event)
   
+# New design:
+class ConversationTabs(QTabWidget):
+    # This holds all the conversations, and keeps track of them
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.my_tabs = []
+        self.unread_marker = self.make_icon("red")
+        # set up currentChanged signal to also change destination_selector, and clear red icon
+        self.currentChanged.connect(self.selected_tab_changed)
+        # @@@@ set up tabCloseRequested signal to do remove_conversation and remove from destination_list
+        # set up ScrollButtons and IconSize
+        self.setUsesScrollButtons(True) # @@@@ until we have West Side tabs
+        self.setIconSize(QSize(4,4))    # @@@@ experiment
+        self.setTabBarAutoHide(True)    # @@@@ experiment
+        # @@@@ at some point make the tabs go west AND horizontal
+        # @@@@ add a header (to be replaced) saying "Conversations appear here"
+
+    def set_destbox(self, destbox):
+        # These are mutually dependent, so one has to be updated after creation
+        self.destination_selector = destbox # need to keep track of this
+    def make_icon(self, colorspec):
+        pm = QPixmap(12,12)
+        pm.fill(QColor(colorspec))
+        # print("Made icon from pixmap for color {!r}: {!r}".format(colorspec,pm), file=sys.stderr)
+        return QIcon(pm)
+
+    def selected_tab_changed(self,newidx):
+        dest = self.tabText(newidx)
+        self.setTabIcon(newidx, QIcon()) # clear the red marker
+        # Keep destination_list in sync with tab selection
+        # I hope this doesn't make things recurse too much...
+        if self.destination_selector.currentText() != dest:
+            self.destination_selector.select_destination(dest)
+
+    def add_message(self, destination, text, is_from_net):
+        c = self.find_conversation(destination)
+        if c is None:
+            # print("Can't find conversation with {!r}, adding one".format(destination), file=sys.stderr)
+            c = self.add_conversation(destination)
+        c.add_message(destination, text, is_from_net=is_from_net)
+        if c != self.currentWidget():
+            # print("Added msg to non-current conversation, marking it as unread", file=sys.stderr)
+            self.setTabIcon(self.indexOf(c), self.unread_marker)
+        if not app.activeWindow():
+            app.alert(self)
+
+    def add_conversation(self, destination):
+        c = ConversationTab()
+        # print("addTab",c,destination, file=sys.stderr)
+        i = self.addTab(c, destination)
+        self.setTabToolTip(i, destination)
+        # @@@@ also make sure destination is in destination_list
+        di = self.destination_selector.findText(destination)
+        if di < 0:
+            self.destination_selector.add_destination(destination)
+        return c
+    def find_conversation(self, destination):
+        # find the conversation for a message destination
+        for i in range(self.count()):
+            if self.tabText(i) == destination:
+                return self.widget(i)
+    def remove_conversation(self, destination):
+        # remove the whole conversation for a destination, e.g. when closing a tab
+        # or removing a destination from the destination_list
+        pass
+    def clear_conversation(self, destination):
+        c = self.find_conversation(destination)
+        if c:
+            print("Clearing conversation with {!r}".format(destination), file=sys.stderr)
+            c.clear_conversation()
+    def clear_all_conversations(self):
+        for i in range(self.count()):
+            print("Clearing conversation with {!r}".format(self.tabText(i)), file=sys.stderr)
+            self.widget(i).clear_conversation()
+
+class ConversationTab(AutoBottomScrollArea):
+    def __init__(self, parent = None):
+        super().__init__()
+        self.prev_msg_datetime = None
+        self.last_other = None
+
+        # This holds one conversation in a vertically scrolling container, contains the widgets, set as the centralWidget
+        self.widget = QWidget() # widget that contains the collection of Vertical Box
+        self.msglayout = QVBoxLayout()  # the vertical box that contains the MsgBoxes
+        self.widget.setLayout(self.msglayout)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setWidgetResizable(True)
+        # You must add the layout of widget before you call this function; if you add it later, the widget will not be visible
+        self.setWidget(self.widget)
+        self.init_message_history()
+
+    def add_message(self, other, text, is_from_net=True):
+        # If self.prev_msg_time is a different day than today, add a line with today's date
+        if self.prev_msg_datetime is None or datetime.now().date() != self.prev_msg_datetime.date():
+            self.msglayout.addWidget(self.make_date_marker())
+            self.prev_msg_datetime = datetime.now()
+        corr = self.make_correspondent_line(other)
+        # @@@@ instead, subclass MsgBox for left/right position
+        box = MsgBox()
+        box.setText(text)
+        # Nice corners please!
+        # @@@@ consider QSS?
+        ss = "border-radius: 7px; border: 1px solid grey;"
+        if is_from_net:         # text on the left
+            if getconf("from_net_color"):
+                ss += "background-color: {};".format(getconf('from_net_color'))
+                if qGray(QColor(getconf('from_net_color')).rgba()) < 128:
+                    ss += "color: white;"
+            align = Qt.AlignmentFlag.AlignLeft
+            contents = [box, corr]
+        else:                   # on the right
+            if getconf("from_me_color"):
+                ss += "background-color: {};".format(getconf('from_me_color'))
+                if qGray(QColor(getconf('from_me_color')).rgba()) < 128:
+                    ss += "color: white;"
+            align = Qt.AlignmentFlag.AlignRight
+            contents = [corr, box]
+        box.setStyleSheet(ss)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        for c in contents:
+            row.addWidget(c, alignment=align)
+        w = QWidget()
+        w.setLayout(row)
+        self.msglayout.addWidget(w, alignment=align)
+
+    def clear_conversation(self):
+        # clear, but keep it
+        # Need to recursively delete widgets.
+        # cf "Example 2: Clearing Widgets in a QGridLayout" on https://dnmtechs.com/clearing-widgets-in-pyqt-layout-python-3-programming/
+        # similar to https://gist.github.com/GriMel/181db149cc150d903f1a
+        # 
+        def clear_layout(layout):
+            while layout is not None and layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                else:
+                    clear_layout(item.layout())
+        clear_layout(self.msglayout)
+        # Then reinitialize it
+        self.init_message_history()
+
+    def init_message_history(self):
+        h = QLabel()
+        h.setTextFormat(Qt.TextFormat.RichText)
+        h.setText("<i>Message history</i>")
+        self.msglayout.addWidget(h, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Keep a stretch at the top of the messages, so new msgs are at the bottom, next to the input box
+        self.msglayout.addStretch(1)
+
+    def makeline(self, width=100):
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setMinimumWidth(width)
+        return line
+
+    def make_date_marker(self):
+        dbox = QHBoxLayout()
+        dbox.setContentsMargins(0, 0, 0, 0)
+        dbox.addWidget(self.makeline(), alignment=Qt.AlignmentFlag.AlignRight)
+        d = QLabel(datetime.now().date().strftime("%e %b %Y"))
+        d.setScaledContents(True)
+        dbox.addWidget(d, alignment=Qt.AlignmentFlag.AlignCenter)
+        dbox.addWidget(self.makeline(), alignment=Qt.AlignmentFlag.AlignLeft)
+        dw = QWidget()
+        dw.setLayout(dbox)
+        # @@@@ consider QSS?
+        if getconf("date_color"):
+            dw.setStyleSheet('background-color: {};'.format(getconf('date_color')))
+        # self.msglayout.addWidget(dw, alignment=Qt.AlignmentFlag.AlignHCenter)
+        return dw
+
+    def make_correspondent_line(self, other, time=None):
+        if other != self.last_other:
+            # New other end, show it together with the time
+            tbox = QVBoxLayout()
+            tbox.setContentsMargins(0, 0, 0, 0)
+            tbox.setSpacing(0)
+            tbox.addWidget(QLabel(datetime.now().strftime('%H:%M:%S')))
+            tbox.addWidget(QLabel(other))
+            time = QWidget()
+            time.setLayout(tbox)
+            self.last_other = other
+        else:
+            time = QLabel(datetime.now().strftime('%H:%M:%S'))
+        return time
+
+class DestinationSelector(QComboBox):
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.tabbar = None
+        self.currentIndexChanged.connect(self.current_destination_changed)
+        self.setMinimumWidth(300)
+        self.setEditable(True)
+        self.setDuplicatesEnabled(False)
+        self.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop) # alphabetically?
+        self.setValidator(QRegularExpressionValidator(QRegularExpression(r"[\w_.-]+@[\w_.-]+"),self))
+    def set_tabbar(self, tb):
+        # These are mutually dependent, so one has to be updated after creation
+        self.tabbar = tb
+    def current_destination_changed(self, newidx):
+        if self.tabbar:
+            # Keep destination_list in sync with tab selection
+            # I hope this doesn't make things recurse too much...
+            dest = self.itemText(newidx)
+            print("Current_Destination_Changed: idx {} => dest {}".format(newidx, dest), file=sys.stderr)
+            c = self.tabbar.find_conversation(dest)
+            if c:
+                i = self.tabbar.indexOf(c)
+                print("Current dest changed: setting tabbar index {}".format(i), file=sys.stderr)
+                self.tabbar.setCurrentIndex(i)
+    def add_destination(self, dest):
+        if self.findText(dest,flags=Qt.MatchFlag.MatchFixedString) < 0:
+            if self.insertPolicy() == QComboBox.InsertPolicy.InsertAtTop:
+                self.insertItem(0, dest)
+                setting.setValue('destination_list_index', 0)
+            else:           # I assumed this followed the policy, but...
+                i = self.addItem(dest)
+                setting.setValue('destination_list_index', i)
+        else:
+            print("Not adding destination {!r}: already exists".format(dest), file=sys.stderr)
+    def select_destination(self, dest):
+        di = self.findText(dest, flags=Qt.MatchFlag.MatchExactly|Qt.MatchFlag.MatchFixedString)
+        if di:
+            self.setCurrentIndex(di)
+            setting.setValue('destination_list_index', di)
+        else:
+            print("Can't select destination {!r}: not found".format(dest), file=sys.stderr)
+    def edit_destination_list(self):
+        pass                    # @@@@ 
+    def clear_destination_list(self):
+        self.clear()            # @@@@
+
+
 # Subclass QMainWindow to customize your application's main window
 #
 # This could/should be a conversation window, i.e. per conversation/destination.
@@ -304,6 +536,7 @@ class MainWindow(QMainWindow):
                 return
 
     def make_icon(self, colorspec):
+        # @@@@ make the icon have a thin border to make it stand out in the menu
         pm = QPixmap(12,12)
         pm.fill(QColor(colorspec))
         # print("Made icon from pixmap for color {!r}: {!r}".format(colorspec,pm), file=sys.stderr)
@@ -319,8 +552,10 @@ class MainWindow(QMainWindow):
 
     def set_background_color(self, color=None):
         c = self.edit_background_color('background_color') if not color else color
-        settings.setValue('background_color',c)
-        app.setStyleSheet("QMainWindow{"+"background-color: {};".format(c)+"}")
+        if c:
+            settings.setValue('background_color',c)
+            self.background_color_action.setIcon(self.make_icon(c))
+            app.setStyleSheet("QMainWindow{"+"background-color: {};".format(c)+"}")
        
     def set_background_color_from_me(self, color=None):
         c = self.edit_background_color('from_me_color') if not color else color
@@ -356,6 +591,7 @@ class MainWindow(QMainWindow):
                     self.cbox.clear()
                     self.cbox.insertItems(0,new_dlist)
                     settings.setValue('destination_list',new_dlist)
+                    # @@@@ what to set destination_list_index to?
                     print("Settings status: {!r}".format(settings.status()), file=sys.stderr)
                     if settings.status() != QSettings.Status.NoError:
                         QMessageBox.warning(self,"Settings error","Settings could not be saved: {!r}".format(settings.status()))
@@ -367,6 +603,7 @@ class MainWindow(QMainWindow):
     def reset_destinations(self):
         self.cbox.clear()
         settings.setValue('destination_list',[])
+        settings.setValue('destination_list_index',0)
 
     def init_message_history(self):
         h = QLabel()
@@ -377,21 +614,7 @@ class MainWindow(QMainWindow):
         self.msglayout.addStretch(1)
 
     def clear_message_history(self):
-        # Need to recursively delete widgets.
-        # cf "Example 2: Clearing Widgets in a QGridLayout" on https://dnmtechs.com/clearing-widgets-in-pyqt-layout-python-3-programming/
-        # similar to https://gist.github.com/GriMel/181db149cc150d903f1a
-        # 
-        def clear_layout(layout):
-            while layout is not None and layout.count():
-                item = layout.takeAt(0)
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
-                else:
-                    clear_layout(item.layout())
-        clear_layout(self.msglayout)
-        # Then reinitialize it
-        self.init_message_history()
+        self.tbar.clear_all_conversations()
 
     def reset_settings(self):
         # Reset settings
@@ -431,13 +654,12 @@ class MainWindow(QMainWindow):
         if len(self.input.text()) > 0:
             u,h = self.remote_user(), self.remote_host()
             desthost = dns_name_of_address(destaddr[0])
-            if desthost:
+            if desthost and h != desthost:
                 print("Setting dest to {!r} (canonical name of {!r})".format(desthost, h))
                 h = desthost
             self.set_destination(u,h)
             # first lock the input, send it, and when it's sent, unlock (in case it takes time)
-            print("Sending {!r} to {}@{}".format(self.input.text(), u,h), 
-                  file=sys.stderr)
+            print("Sending to {}@{}: {!r}".format(u,h, self.input.text()), file=sys.stderr)
             self.input.setReadOnly(True)
             try:
                 other = "{}@{}".format(u,h)
@@ -446,84 +668,18 @@ class MainWindow(QMainWindow):
                 # cf https://www.pythonguis.com/tutorials/multithreading-pyside6-applications-qthreadpool/
                 # cf https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qprogressdialog.html
                 send_message(u,h, self.input.text(), timeout=getconf('send_message_timeout'))
-                # need to keep track of who we sent last msg to, and add sender arg if it changed.
-                if other != self.last_other:
-                    self.makeBox(self.input.text(), is_from_net=False, other=other)
-                    self.last_other = other
-                else:
-                    self.makeBox(self.input.text(), is_from_net=False)
+                self.tbar.add_message(other, self.input.text(), is_from_net=False)
                 # and clear the input field
                 self.input.clear()
             except ChaosError as m:
                 # @@@@ Beep
-                QMessageBox.critical(self,"Chaosnet Error","Error from host {}:<br>{}".format(self.remote_host(),m.message),
+                print("Chaosnet error: {!r}".format(m.message), file=sys.stderr)
+                QMessageBox.critical(self,"Chaosnet Error","Error from host {}:<br>{}".format(self.remote_host(),m.message.rstrip("\0x00")),
                                      buttons=QMessageBox.StandardButton.Ok)
             self.input.setReadOnly(False)
 
-    def makeline(self, width=100):
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setMinimumWidth(width)
-        return line
-
-    def makeBox(self,text,is_from_net=True,other=""):
-        if not app.activeWindow():
-            app.alert(self)     # bounce the dock icon
-            pass                # @@@@ count this, put it in the dock widget etc
-        # If self.last_msg_time is a different day than today, add a line with today's date
-        if self.prev_msg_datetime is None or datetime.now().date() != self.prev_msg_datetime.date():
-            dbox = QHBoxLayout()
-            dbox.setContentsMargins(0, 0, 0, 0)
-            dbox.addWidget(self.makeline(), alignment=Qt.AlignmentFlag.AlignRight)
-            d = QLabel(datetime.now().date().strftime("%e %b %Y"))
-            d.setScaledContents(True)
-            dbox.addWidget(d, alignment=Qt.AlignmentFlag.AlignCenter)
-            dbox.addWidget(self.makeline(), alignment=Qt.AlignmentFlag.AlignLeft)
-            dw = QWidget()
-            dw.setLayout(dbox)
-            if getconf("date_color"):
-                dw.setStyleSheet('background-color: {};'.format(getconf('date_color')))
-            self.msglayout.addWidget(dw, alignment=Qt.AlignmentFlag.AlignHCenter)
-            self.prev_msg_datetime = datetime.now()
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        # timestamp @@@@ from incoming msg?
-        if other != self.last_other:
-            # New other end, show it together with the time
-            tbox = QVBoxLayout()
-            tbox.setContentsMargins(0, 0, 0, 0)
-            tbox.setSpacing(0)
-            tbox.addWidget(QLabel(datetime.now().strftime('%H:%M:%S')))
-            tbox.addWidget(QLabel(other))
-            time = QWidget()
-            time.setLayout(tbox)
-        else:
-            time = QLabel(datetime.now().strftime('%H:%M:%S'))
-        box = MsgBox()
-        box.setText(text)
-        # Nice corners please!
-        ss = "border-radius: 7px; border: 1px solid grey;"
-        if is_from_net:         # text on the left
-            if getconf("from_net_color"):
-                ss += "background-color: {};".format(getconf('from_net_color'))
-                if qGray(QColor(getconf('from_net_color')).rgba()) < 128:
-                    ss += "color: white;"
-            align = Qt.AlignmentFlag.AlignLeft
-            contents = [box, time]
-        else:                   # on the right
-            if getconf("from_me_color"):
-                ss += "background-color: {};".format(getconf('from_me_color'))
-                if qGray(QColor(getconf('from_me_color')).rgba()) < 128:
-                    ss += "color: white;"
-            align = Qt.AlignmentFlag.AlignRight
-            contents = [time, box]
-        box.setStyleSheet(ss)
-        for c in contents:
-            row.addWidget(c, alignment=align)
-        w = QWidget()
-        w.setLayout(row)
-        self.msglayout.addWidget(w, alignment=align)
+    def add_message(self, other, text, is_from_net):
+        self.tbar.add_message(other, text, is_from_net=is_from_net)
 
     def remote_user(self):
         try:
@@ -551,8 +707,10 @@ class MainWindow(QMainWindow):
                 print("old destinations: ",settings.value('destination_list'), file=sys.stderr)
                 if self.cbox.insertPolicy() == QComboBox.InsertPolicy.InsertAtTop:
                     self.cbox.insertItem(0, self.cbox.currentText())
+                    settings.setValue('destination_list_index',0)
                 else:           # I assumed this followed the policy, but...
-                    self.cbox.addItem(self.cbox.currentText())
+                    i = self.cbox.addItem(self.cbox.currentText())
+                    settings.setValue('destination_list_index',i)
                 settings.setValue('destination_list',[self.cbox.itemText(i) for i in range(self.cbox.count())])
 
     def closeEvent(self,event):
@@ -591,7 +749,9 @@ class MainWindow(QMainWindow):
         my_menu.addAction(make_action("Set domain search list...", self.set_dns_search_list))
         my_menu.addAction(make_action("Set DNS server...", self.set_dns_server))
         my_menu.addSeparator()
-        my_menu.addAction(make_action("Edit background color...", self.set_background_color))
+        self.background_color_action = make_action("Edit background color...", self.set_background_color,
+                                                   icon=self.make_icon(getconf('background_color')))
+        my_menu.addAction(self.background_color_action)
         self.from_net_color_action = make_action("Edit net message background color...", 
                                                  self.set_background_color_from_net,
                                                  icon=self.make_icon(getconf('from_net_color')))
@@ -602,20 +762,13 @@ class MainWindow(QMainWindow):
         my_menu.addAction(self.from_me_color_action)
         my_menu.addAction(make_action("Reset all settings", self.reset_settings))
         
-        
+    def init_layout_and_boxes_new(self):
+        # @@@@ new: the TabWidget replaces scroll; move its initialization to where tab/pages are initalized
+        pass
 
     def init_layout_and_boxes(self):
-        # Put the messages in a vertically scrolling container
-        scroll = AutoBottomScrollArea()  # contains the widgets, set as the centralWidget
-        widget = QWidget() # widget that contains the collection of Vertical Box
-        self.msglayout = QVBoxLayout()  # the vertical box that contains the MsgBoxes
-
-        self.init_message_history()
-
-        widget.setLayout(self.msglayout)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(widget)
+        # Put the messages in separate conversation tabs
+        self.tbar = ConversationTabs()
         
         # now the part for the input and Send button
         hlayout = QHBoxLayout()
@@ -629,26 +782,20 @@ class MainWindow(QMainWindow):
         self.input = MessageInputBox()
         # Set a validator to make the returnPressed only happen when non-empty, and only accept ASCII
         self.input.setValidator(QRegularExpressionValidator(QRegularExpression("[[:ascii:]]+"),self.input))
-        # Disable the button, initially
         self.input.returnPressed.connect(self.sendit)
-        # Enable it when there is text in the input field
-        # Disabling the button makes it almost invisible (on macOS). Instead have sendit handle it.
         hlayout.addWidget(self.input)
-        # @@@@ make the "sender" item be clickable to update the dest?
+
         destlayout = QHBoxLayout()
         destlayout.addWidget(QLabel("Destination:"), alignment=Qt.AlignmentFlag.AlignLeft)
-        self.cbox = DestinationBox()
-        self.cbox.setMinimumWidth(300)
-        self.cbox.setEditable(True)
-        self.cbox.setDuplicatesEnabled(False)
-        self.cbox.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop) # alphabetically?
-        self.cbox.setValidator(QRegularExpressionValidator(QRegularExpression(r"[\w_.-]+@[\w_.-]+"),self))
+        self.cbox = DestinationSelector(self)
+        self.cbox.set_tabbar(self.tbar) # tie them together
+        self.tbar.set_destbox(self.cbox)
         destlayout.addWidget(self.cbox, alignment=Qt.AlignmentFlag.AlignLeft)
         destlayout.addStretch(1)
 
         # The top-level layout: messages followed by input
         toplayout = QVBoxLayout()
-        toplayout.addWidget(scroll)
+        toplayout.addWidget(self.tbar)
         toplayout.addLayout(destlayout)
         toplayout.addLayout(hlayout)
         topwidget = QWidget()
@@ -657,8 +804,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(topwidget)
 
         self.input.setFocus()   # after showing it (by setCentralWidget)
-        # print("msglayout",self.msglayout,"widget layout",widget.layout())
-        # print("msglayout parent",self.msglayout.parentWidget(),"widget",widget, file=sys.stderr)
 
     def __init__(self):
         super().__init__()
@@ -676,6 +821,8 @@ class MainWindow(QMainWindow):
         self.init_layout_and_boxes()
         if settings.value('destination_list'):
             self.cbox.insertItems(0,settings.value('destination_list'))
+        if settings.value('destination_list_index'):
+            self.cbox.setCurrentIndex(settings.value('destination_list_index'))
 
         # initialize menus
         self.init_menus()
@@ -696,16 +843,19 @@ def parse_args(app):
 if __name__ == '__main__':
     rhost, ruser = parse_args(app)
 
-    # Create a Qt widget, which will be our window.
-    window = MainWindow()
-    if rhost and ruser:
-        print("User: {!r}, Host: {!r}".format(ruser, rhost), file=sys.stderr)
-        window.set_destination(ruser,rhost)
-    window.show()
+    try:
+        # Create a Qt widget, which will be our window.
+        window = MainWindow()
+        if rhost and ruser:
+            print("User: {!r}, Host: {!r}".format(ruser, rhost), file=sys.stderr)
+            window.set_destination(ruser,rhost)
+        window.show()
 
-    # Run the SEND server thread
-    thread = Thread(target=fetch_new_messages, args=(window,), daemon=True)
-    thread.start()
+        # Run the SEND server thread
+        thread = Thread(target=fetch_new_messages, args=(window,), daemon=True)
+        thread.start()
 
-    # Start the event loop.
-    app.exec()
+        # Start the event loop.
+        app.exec()
+    except RuntimeError as m:
+        print(m, file=sys.stderr)
