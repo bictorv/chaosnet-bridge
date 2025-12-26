@@ -15,7 +15,7 @@ There are three parts of the user interface:
 2. a Destination selector, indicating where messages will be sent
 3. a message Input window, where you type the message to be sent before clicking the Send button.
 
-There is also a Converse menu (at least one), with settings and additional actions, and an About item.
+There is also a Converse menu (at least one), a Settings menu, and a Conversation menu. And an About item.
 
 ### Conversation
 Each conversation is put in a separate tab, showing the message history for a conversation party.
@@ -25,11 +25,16 @@ Incoming messages are left-adjusted and in a (by default yellowish) color. Outgo
 
 If the most recent message is sent/received on a new date, the date is shown before the message.
 
-Not currently relevant: If the most recent message is not from/to the next most recent message, the source/destination of the message is also indicated.
+If a message arrives to a conversation whose tab is not selected, a little red dot is added to the tab label.
+
+If there is only one conversation, the tab header is not shown. (*Give me feedback on this?*)
 
 If a message arrives when the Converse window is not the focused/active window, an attempt is made to "bounce" the application icon (e.g. in the Dock, on macOS).
 
-The message histories can be cleared using the `Clear message history` menu item.
+The Conversation menu allows clearing the current conversation tab, removing it altogether, and removing the current destination from the destination input drop-down menu.
+
+To clear all conversation histories, use `Clear all conversations` in the Settings menu. 
+To remove all conversation tabs, use `Remove all conversations` in the Settings menu.
 
 ### Destination input
 
@@ -38,6 +43,7 @@ The destination can be input in this part, using the syntax `user@host`, where `
 If a "shortname" for the `host` is used, an attempt is made to expand the shortname into a fully qualified domain name. E.g., if `victor@up` is input, it will/should be expanded to `victor@UP.dfUpdate.SE`.
 
 The destination list can be edited using the `Edit destination menu` menu item, and cleared by the `Clear destination menu`.
+To remove the currently selected destination from the list, use `Remove current destination` from the Conversation menu.
 
 ### Message Input
 
@@ -45,7 +51,11 @@ The message to be sent is input here. You can send it by pressing [Enter], [Cont
 
 ## Settings
 
-- The window geometry and position is saved between sessions. Also destinations are saved.
+The window geometry and position is saved between sessions. Also destinations are saved, and attempts are made to preserve the currently selected destination.
+
+In the Settings menu:
+- You can edit the destination menu, or clear it.
+- You can clear all conversations, or remove them all.
 - You can set the timeout for sending messages (default 5 seconds) using the `Set send timeout` menu item.
 - You can set the domain name search list using the `Set domain search list` menu item. This is used if you specify a destination `host` without a domain, e.g. `up`. The domain names are appended to the `host` and looked up until a match is found.
 - You can specify the DNS server to use for Chaosnet-class requests (default `dns.chaosnet.net`). Note that almost all DNS servers in the world are incapable of finding Chaosnet-class DNS information, so you probably do not want to change this setting.
@@ -54,7 +64,9 @@ The message to be sent is input here. You can send it by pressing [Enter], [Cont
 
 You can also reset all settings by using the `Reset all settings` menu item. This also moves and resizes the Converse window to the default position/size.
 
-## Making an app
+## Installation and requirements
+
+Requirements: dnspython, pyqt6.
 
 Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.org/en/stable/) to produce an app from the python sources. If `pip3 install PyInstaller` doesn't put pyinstaller in your `PATH`, please see a comment in [Makefile](Makefile).
 
@@ -62,7 +74,6 @@ Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.
 
 - [ ] The message input window should (optionally?) support multi-line input (using QPlainTextEdit instead of QTextEdit).
 - [ ] Sending the message should be done in a separate thread, so it can be interrupted/cancelled if it takes too long time.
-- [x] Messages should (optionally?) be displayed in separate tabs/windows for different destinations, keeping conversations separate.
 - [ ] Incoming/outgoing messages should be saved to disk and restored when Converse is restarted.
 - [ ] There should be some (optional) sound effect when a message is received (and perhaps sent). *But I can't get `QSoundEffect` to work on my Mac.* :-(
 - [ ] There should be some display of whether saved destinations are online, and non-idle. *Implementation idea: use the STATUS protocol to see if the host is up, the FINGER protocol which gives a quick response if it is supported, and otherwise the NAME protocol (where the output needs parsing).*
@@ -72,7 +83,7 @@ Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.
 
 Let me know if you (want to) implement any of this, or if you have more ideas!
 
-## Known problems
+## Known issues
 
 - When you change the message background colors, old messages are not re-coloured.
 - An attempt at setting an icon for the menu items for editing colors, but this does not always have effect in PyQt6 on macOS. *Probably depends on installation issues.*
