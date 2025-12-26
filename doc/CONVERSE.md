@@ -62,18 +62,18 @@ Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.
 
 - [ ] The message input window should (optionally?) support multi-line input (using QPlainTextEdit instead of QTextEdit).
 - [ ] Sending the message should be done in a separate thread, so it can be interrupted/cancelled if it takes too long time.
-- [ ] Messages should (optionally?) be displayed in separate tabs/windows for different destinations, keeping conversations separate.
+- [x] Messages should (optionally?) be displayed in separate tabs/windows for different destinations, keeping conversations separate.
 - [ ] Incoming/outgoing messages should be saved to disk and restored when Converse is restarted.
 - [ ] There should be some (optional) sound effect when a message is received (and perhaps sent). *But I can't get `QSoundEffect` to work on my Mac.* :-(
 - [ ] There should be some display of whether saved destinations are online, and non-idle. *Implementation idea: use the STATUS protocol to see if the host is up, the FINGER protocol which gives a quick response if it is supported, and otherwise the NAME protocol (where the output needs parsing).*
 - [ ] You may want to set an auto-reply (if you go AFK), and there should be a setting for at what idle time the auto-reply is sent. *(And it should ideally be sent if your screen is locked, too.) (Perhaps the auto-reply should be implemented using a CLS packet with the message, to avoid auto-auto-replies?)*
 - [ ] There could be a Dock icon counter for unseen incoming messages, on macOS.
-- [ ] You could dream of a "group chat" setting, which automatically sends messages to a set of destinations. *Need to handle replies sensibly though (so they go to all in the group).*
+- [ ] You could dream of a "group chat" setting, which automatically sends messages to a set of destinations. *Need to handle replies sensibly though (so they go to all in the group). Probably a new/compatible protocol for group handling, which uses SEND for transport?*
 
 Let me know if you (want to) implement any of this, or if you have more ideas!
 
 ## Known problems
 
 - When you change the message background colors, old messages are not re-coloured.
-- An attempt at setting an icon for the menu items for editing colors, but this has no effect in PyQt6. It seems to have an effect in PySide6, but then again the threadutil hack doesn't seem to work there. :-(
+- An attempt at setting an icon for the menu items for editing colors, but this does not always have effect in PyQt6 on macOS. *Probably depends on installation issues.*
 - QSoundEffect doesn't seem to work in either PyQt6 or PySide6, on my Mac.

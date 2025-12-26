@@ -99,11 +99,11 @@ def get_send_message(searchlist=None):
     return destuser,uname,host,dt if dt else date,"\n".join(lines)
 
 # May raise ChaosError
-def send_message(user,athost,text,timeout=5):
+def send_message(user,athost,text,timeout=5,myhostname=None):
     from getpass import getuser
     from socket import getfqdn
     me = getuser()
-    myhost = getfqdn()
+    myhost = myhostname or getfqdn()
     ncp = StreamConn()
     # Protocol: RFC arg is destination username
     ncp.connect(athost,"SEND",[user],options=dict(timeout=timeout))
