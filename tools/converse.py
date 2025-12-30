@@ -22,6 +22,7 @@
 # -- better still, put the destination list in a left/right margin with "present" markers, a'la Msgr
 # - beep when message incoming (cf /System/Library/Sounds, https://www.qt.io/product/qt6/qml-book/ch11-multimedia-sound-effects, platform.system(), can't get it to work)
 # - dock icon with counter for unseen msgs (https://doc.qt.io/qtforpython-6/overviews/qtdoc-appicon.html)
+# - perhaps handle "private" networks (avoid DNS)
 # Configuration:
 # - sounds on/off
 # - receiver on/off (related to if the screen is on, or idle, or ...)
@@ -38,11 +39,6 @@
 # - When restoring, use the "to:" prefix to select how to show it.
 # - Save msgs separately from settings.
 # - (at some point) have a setting for how many/how old msgs to save/restore
-#
-# @@@@ For sending, need to know our Chaos host name, which might be different from "actual" host name.
-# @@@@ May add "ID" operation for cbridge NCP to return useful things like addresses, full hostname, pretty hostname
-# @@@@ Or perhaps better (and simpler with Packet interface), interpret unicast 0 address as "localhost",
-# @@@@ and just use RFC 0 STATUS and see the reply? -ish.
 
 import sys, re, multiprocessing
 from datetime import datetime
@@ -69,7 +65,7 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.3.0")
+app.setApplicationVersion("0.4.0")
 
 ################ configuration
 debug = False
@@ -80,6 +76,7 @@ default_config = dict(# date_color="#ffebee",
     from_me_color="#e1f5fe",
     background_color="#eee",
     send_message_timeout=5,
+    restore_conversation_tabs=True,
     # Sigh.
     dns_search_list=["chaosnet.net","victor.se","dfupdate.se"],
     dns_server="dns.chaosnet.net",
@@ -195,8 +192,9 @@ class AutoBottomScrollArea(QScrollArea):
 class ConversationTabBar(QTabBar):
     def __init__(self):
         super().__init__()
-        self.setElideMode(Qt.TextElideMode.ElideNone) # @@@@ super weird, but necessary
-
+        # @@@@ super weird, but necessary, otherwise only the elision is visible. Further workaound would be needed.
+        self.setElideMode(Qt.TextElideMode.ElideNone)
+        
     def tabSizeHint(self, index):
         size = super().tabSizeHint(index)
         size.transpose()
@@ -207,11 +205,9 @@ class ConversationTabBar(QTabBar):
         option = QStyleOptionTab()
         for index in range(self.count()):
             self.initStyleOption(option, index)
-            qDebug("application style {!r}".format(QApplication.style()))
-            qDebug("product type {!r}".format(QSysInfo.productType()))
-            # @@@@ the test on style test doesn't quite work, unfortunately. Test OS instead
+            # @@@@ the test on style doesn't quite work, unfortunately. Test OS instead
             if QSysInfo.productType() in ["macos","darwin"]: # QApplication.style().objectName() == "macos":
-                option.shape = QTabBar.Shape.RoundedNorth
+                option.shape = QTabBar.Shape.RoundedNorth    # this magically affects the highlight of selected tab
                 option.position = QStyleOptionTab.TabPosition.Beginning
             else:
                 option.shape = QTabBar.Shape.RoundedWest
@@ -227,10 +223,10 @@ class ConversationTabs(QTabWidget):
         self.unread_marker = self.make_icon("red")
         self.destination_selector = None
 
-        # @@@@ at some point make the tabs go west AND horizontal
+        # make the tabs go west AND horizontal
         self.setTabBar(ConversationTabBar())
         self.setTabPosition(QTabWidget.TabPosition.West)
-        if force_top_valign:
+        if force_top_valign:                                      # On macOS, tabs are normally vertically centered
             self.setStyleSheet("QTabWidget::tab-bar {left : 0;}")  # using stylesheet on initializing
 
         # set up currentChanged signal to also change destination_selector, and clear red icon
@@ -365,6 +361,7 @@ class ConversationTabs(QTabWidget):
         self.removeTab(idx)
         if self.count() == 0:
             self.add_dummy_page()
+
     # @@@@ have this in a right-click menu for the Tab? Can we have right-click menus?
     def clear_conversation(self, destination):
         c = self.find_conversation(destination)
@@ -510,6 +507,8 @@ class DestinationSelector(QComboBox):
         # These are mutually dependent, so one has to be updated after creation
         self.tabbar = tb
     def current_destination_changed(self, newidx):
+        qDebug("Saving destination index {}".format(newidx))
+        settings.setValue('destination_list_index', newidx)
         if self.tabbar:
             # Keep destination_list in sync with tab selection
             dest = self.itemText(newidx)
@@ -552,6 +551,7 @@ class DestinationSelector(QComboBox):
         di = self.find_destination(dest)
         if di >= 0:
             self.setCurrentIndex(di)
+            qDebug("Saving destination index {}".format(di))
             settings.setValue('destination_list_index', di)
         else:
             # print("Can't select destination {!r}: not found".format(dest), file=sys.stderr)
@@ -667,7 +667,7 @@ class MainWindow(QMainWindow):
         # @@@@ make the icon have a thin border to make it stand out in the menu
         pm = QPixmap(12,12)
         pm.fill(QColor(colorspec))
-        qDebug("Made icon from pixmap for color {!r} ({!r}): {!r}".format(colorspec,QColor(colorspec).name(),pm))
+        # qDebug("Made icon from pixmap for color {!r} ({!r}): {!r}".format(colorspec,QColor(colorspec).name(),pm))
         return QIcon(pm)
         
     def edit_background_color(self, cf_name):
@@ -831,6 +831,7 @@ class MainWindow(QMainWindow):
                     di = 0
                 else:           # I assumed this followed the policy, but...
                     di = self.cbox.addItem(self.cbox.currentText())
+                qDebug("Saving destination index {}".format(di))
                 settings.setValue('destination_list_index',di)
                 if switch:
                     self.cbox.setCurrentIndex(di)
@@ -839,6 +840,7 @@ class MainWindow(QMainWindow):
                 if switch and self.cbox.currentIndex() != di:
                     # print("set_destination: changing index from {} to {}".format(self.cbox.currentIndex(), di), file=sys.stderr)
                     self.cbox.setCurrentIndex(di)
+                    qDebug("Saving destination index {}".format(di))
                     settings.setValue('destination_list_index', di)
                 else:
                     # print("set_destination: not changing index from {} ({}, {})".format(self.cbox.currentIndex(), self.cbox.currentText(), switch), file=sys.stderr)
@@ -846,6 +848,10 @@ class MainWindow(QMainWindow):
                 if switch and self.tbar.tabText(self.tbar.currentIndex()).lower() != self.cbox.currentText().lower():
                     # print("set_destination: switching conversation", file=sys.stderr)
                     self.tbar.select_conversation(self.cbox.currentText())
+
+    def set_restore_conversations(self):
+        qDebug("Setting Restore Conversations to {!r}".format(self.restore_conversations_action.isChecked()))
+        settings.setValue('restore_conversation_tabs', self.restore_conversations_action.isChecked())
 
     def closeEvent(self,event):
         settings.setValue("MainWindowSize",self.size())
@@ -878,6 +884,13 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(make_action("Clear destination menu", self.cbox.clear_destination_list))
         settings_menu.addAction(make_action("Clear all conversations", self.clear_all_conversations))
         settings_menu.addAction(make_action("Remove all conversations", self.remove_all_conversations))
+        settings_menu.addSeparator()
+        # @@@@ Generalize this mechanism (for configuring boolean settings)
+        self.restore_conversations_action = make_action("Restore conversation tabs on restart", 
+                                                        self.set_restore_conversations)
+        self.restore_conversations_action.setCheckable(True)
+        self.restore_conversations_action.setChecked(getconf('restore_conversation_tabs'))
+        settings_menu.addAction(self.restore_conversations_action)
         settings_menu.addSeparator()
         settings_menu.addAction(make_action("Set send timeout...", self.set_message_timeout))
         settings_menu.addAction(make_action("Set domain search list...", self.set_dns_search_list))
@@ -954,10 +967,15 @@ class MainWindow(QMainWindow):
 
         # initialize layout etc
         self.init_layout_and_boxes()
+        di = settings.value('destination_list_index') # get this before doing the add_conversation below
         if settings.value('destination_list'):
             self.cbox.insertItems(0,settings.value('destination_list'))
-        if settings.value('destination_list_index'):
-            self.cbox.setCurrentIndex(settings.value('destination_list_index'))
+            if getconf('restore_conversation_tabs'):
+                for d in settings.value('destination_list'):
+                    self.tbar.add_conversation(d)
+        if di is not None:
+            qDebug("Setting destination index {}".format(di))
+            self.cbox.setCurrentIndex(di)
 
         # initialize menus
         self.init_menus()
@@ -991,14 +1009,29 @@ if __name__ == '__main__':
             # maybe refuse
             qInfo("%% Spoofing Chaosnet hostname")
         if re.match(r"^[\w_.-]+[^.]$", chost) and dns_addr_of_name_search(chost):
-            qInfo("Setting Chaosnet hostname {!r}".format(chost))
+            qInfo("Using Chaosnet hostname {!r}".format(chost))
+            # NOTE: not saving this persistently, in order to discover changes
             default_config['my_chaos_hostname'] = chost
         else:
             qWarning("Bad Chaosnet hostname {!r}".format(chost))
             exit(1)
     else:
         if dns_addr_of_name_search(getfqdn()) is None:
-            qWarning("Your host name {!r} is not in Chaosnet DNS. You might need to use the -c option.")
+            from bhostat import host_name_and_addr
+            name,addr = host_name_and_addr("localhost")
+            # name might be a shortname or a "Pretty and Silly String", so find the DNS name of the address
+            fqdn = dns_name_of_address(addr)
+            if fqdn is None:
+                qWarning("Your host name {!r} is not in Chaosnet DNS, and neither is your local address {:o}. You might need to use the -c option.".format(getfqdn(), addr))
+                if name is not None:
+                    # Use the silly name anyway, in case this is on a private net
+                    qInfo("Using Chaos hostname {!r} ({:o})".format(name.replace(" ","-"), addr))
+                    # NOTE: not saving this persistently, in order to discover changes
+                    default_config['my_chaos_hostname'] = name.replace(" ","-")
+            else:
+                qDebug("Using Chaos hostname {!r} ({:o}, {!r})".format(fqdn, addr, name))
+                # NOTE: not saving this persistently, in order to discover changes
+                default_config['my_chaos_hostname'] = fqdn
 
     try:
         if not debug:
