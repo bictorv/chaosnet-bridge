@@ -2129,8 +2129,24 @@ initiate_conn_from_rfc_line(struct conn *conn, u_char *buf, int buflen)
   // Parse address or host name
   if ((sscanf((char *)hname, "%ho", &haddr) != 1) || !valid_chaos_host_address(haddr)) {
     // Not a plain address:
-    // Check private host table
-    haddr = private_hosts_addrs_of_name(hname);
+    // Interpret "local" or "localhost" as my local address, with preference to addresses not on the Global Hub net (6)
+    if ((strcasecmp((char *)hname, "local") == 0) || (strcasecmp((char *)hname, "localhost") == 0)) {
+      haddr = 0;
+      u_short my_global_chaddr = 0;
+      for (int i = 0; i < nchaddr; i++) {
+	if ((mychaddr[i] >> 8) != 6) {
+	  haddr = mychaddr[i];
+	  break;
+	} else
+	  my_global_chaddr = mychaddr[i];
+      }
+      if ((haddr == 0) && (my_global_chaddr != 0))
+	haddr = my_global_chaddr;
+      if ((haddr != 0) && ncp_debug) printf("NCP parsed host \"%s\" to address %o\n", hname, haddr);
+    } else {
+      // Check private host table
+      haddr = private_hosts_addrs_of_name(hname);
+    }
     if (haddr == 0) {
 #if CHAOS_DNS
       // Check DNS

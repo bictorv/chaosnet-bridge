@@ -36,6 +36,10 @@ no_host_names = False
 
 @functools.cache
 def host_name(addr, timeout=2):
+    name,_ = host_name_and_addr(addr, timeout=timeout)
+    return name
+@functools.cache
+def host_name_and_addr(addr, timeout=2):
     if isinstance(addr,int):
         if addr < 0o400:
             return addr
@@ -57,7 +61,7 @@ def host_name(addr, timeout=2):
         # BGDFAX pads with spaces (instead of nulls)
         name = str(data[:32].rstrip(b'\x00 '), "ascii")
         # host_names[addr] = name
-        return name
+        return name,src
     else:
         if debug:
             print("No STATUS from {:s}".format(addr), file=sys.stderr)
@@ -66,10 +70,10 @@ def host_name(addr, timeout=2):
             print("Got DNS for {:s}: {}".format(addr,name), file=sys.stderr)
         if name is None:
             # host_names[addr] = addr
-            return addr
+            return addr,addr
         else:
             # host_names[addr] = name
-            return name
+            return name,addr
         # name = "{}".format(addr)
     # return host_names[addr]
 
