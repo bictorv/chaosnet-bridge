@@ -16,8 +16,6 @@
 #    limitations under the License.
 
 # TODO:
-# - test sound on Z2
-# - Try to make "West Side" tabs to work, check what the highlight is doing wrong.
 # - do actual sending in a separate thread, interruptible by Cancel button.
 # - (optionally) save incoming msgs to disk and restore them on restart
 # - FINGER/NAME client, show who of the destinations are online
@@ -29,10 +27,10 @@
 # - receiver on/off (related to if the screen is on, or idle, or ...)
 # Future features: autoreply, idle detection, ignore lists...
 
-# SEND protocol message format:
+# SEND protocol message format (https://chaosnet.net/amber.html#Send):
 # - RFC arg: destinationUsername
 # - line 1: from@host date-and-time
-# - rest: message. ITS starts it with "To:" header (cf COMSAT).
+# - rest: message. ITS starts it with "To:" header (cf COMSAT). (We remove that.)
 #
 # @@@@ saving/restoring messages:
 # - Save messages chronologically in original format (with \n) including the RFC arg, separated (ended) by ^L
@@ -43,7 +41,8 @@
 #
 # @@@@ For sending, need to know our Chaos host name, which might be different from "actual" host name.
 # @@@@ May add "ID" operation for cbridge NCP to return useful things like addresses, full hostname, pretty hostname
-# @@@@ TODO: Make this a config/parameter here for now.
+# @@@@ Or perhaps better (and simpler with Packet interface), interpret unicast 0 address as "localhost",
+# @@@@ and just use RFC 0 STATUS and see the reply? -ish.
 
 import sys, re, multiprocessing
 from datetime import datetime
@@ -53,14 +52,14 @@ from qsend import get_send_message, send_message
 # For now, try pyqt6.
 # https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qtwidgets-module.html
 
-# @@@@ Menubar icons don't seem to work in PyQt6, but in PySide6. But threadutil only works in PyQt6. :-(
 # They work in pyqt6 on Z2, but not on Puck. 
-from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl, QThread, QTimer
+from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl, QThread, QTimer, qInfo, qDebug, qWarning, QRect, QSysInfo
 from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpression
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QInputDialog,
                              QPushButton, QLabel, QFrame, QSpacerItem, QMessageBox, QComboBox,
-                             QColorDialog, QTabWidget, 
+                             QColorDialog, QTabWidget, QGroupBox, QProxyStyle, QTabBar,
+                             QStyle, QStylePainter, QStyleOptionTab, QStyleOptionTabWidgetFrame,
                              QSizePolicy, QScrollArea, QLineEdit, QMenuBar, QProgressDialog)
 from PyQt6.QtGui import QAction, QRegularExpressionValidator, QColor, QPixmap, QIcon, qGray
 from PyQt6.QtMultimedia import QSoundEffect
@@ -70,11 +69,13 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.0.3")
+app.setApplicationVersion("0.3.0")
 
 ################ configuration
+debug = False
+verbose = False
+
 default_config = dict(# date_color="#ffebee", 
-    # @@@@ make a config menu thing for this
     from_net_color="#ffc",
     from_me_color="#e1f5fe",
     background_color="#eee",
@@ -127,7 +128,7 @@ def fetch_new_messages(win):
             # @@@@ use the remote date spec to show tz offset, if any
             destuser,uname,host,date,text = get_send_message(searchlist=getconf('dns_search_list'))
         except ChaosError as msg:
-            print("Error getting Converse messages: {}".format(msg.message), file=sys.stderr)
+            qWarning("Error getting Converse messages: {}".format(msg.message))
             # typically no cbridge running, so wait a bit before trying again
             sleep(5)
             continue
@@ -151,16 +152,17 @@ def beep():
     effect.setSource(QUrl.fromLocalFile(getconf('beep_sound')))
     effect.play()
 
-# This makes the box fit the needed height, not more
-# https://stackoverflow.com/a/68271889
 # @@@@ Change this to do a QPlainTextEdit?
-class MsgBox(QTextEdit):
+# @@@@ subclass MessageDisplayBox for left/right position
+class MessageDisplayBox(QTextEdit):
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
         # self.setFont(font)
         self.textChanged.connect(self.autoResize)
 
+    # This makes the box fit the needed height, not more
+    # https://stackoverflow.com/a/68271889
     def autoResize(self):
         self.document().setTextWidth(self.viewport().width())
         margins = self.contentsMargins()
@@ -171,12 +173,11 @@ class MsgBox(QTextEdit):
         self.autoResize()
         super().resizeEvent(event)
 
-    #### this is for keeping track of when we gain focus: then remove dock widget counter
-    def focusInEvent(self, event):
-        # @@@@ remove dock widget counter
-        # find the MainWindow by traversing parentWidget() until isWindow() is true
-        # print("focus in",self,event, file=sys.stderr)
-        super().focusInEvent(event)
+# @@@@ maybe QPlainTextEdit, for multi-line input.
+# @@@@ For validation (ascii only), see answer by Judah Benjamin on
+# @@@@ https://www.devasking.com/issue/how-to-restrict-user-input-in-qlineedit-in-pyqt
+class MessageInputBox(QLineEdit):
+    pass
 
 # Automatically scroll to the bottom when things are added etc
 # https://stackoverflow.com/a/71283629
@@ -190,49 +191,85 @@ class AutoBottomScrollArea(QScrollArea):
         # because we may need to call it separately (if you need).
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
-    #### this is for keeping track of when we gain focus: then remove dock widget counter
-    def focusInEvent(self, event):
-        # @@@@ remove dock widget counter
-        # find the MainWindow by traversing parentWidget() until isWindow() is true
-        # print("focus in",self,event, file=sys.stderr)
-        super().focusInEvent(event)
+# https://github.com/mauriliogenovese/PySide6_VerticalQTabWidget/blob/main/PySide6_VerticalQTabWidget/VerticalQTabWidget.py
+class ConversationTabBar(QTabBar):
+    def __init__(self):
+        super().__init__()
+        self.setElideMode(Qt.TextElideMode.ElideNone) # @@@@ super weird, but necessary
 
-# @@@@ maybe QPlainTextEdit, for multi-line input.
-# @@@@ For validation (ascii only), see answer by Judah Benjamin on
-# @@@@ https://www.devasking.com/issue/how-to-restrict-user-input-in-qlineedit-in-pyqt
-class MessageInputBox(QLineEdit):
-    #### this is for keeping track of when we gain focus: then remove dock widget counter
-    def focusInEvent(self, event):
-        # @@@@ remove dock widget counter
-        # find the MainWindow by traversing parentWidget() until isWindow() is true
-        # print("focus in",self,event, file=sys.stderr)
-        super().focusInEvent(event)
+    def tabSizeHint(self, index):
+        size = super().tabSizeHint(index)
+        size.transpose()
+        return size
 
-class DestinationBox(QComboBox):
-    #### this is for keeping track of when we gain focus: then remove dock widget counter
-    def focusInEvent(self, event):
-        # @@@@ remove dock widget counter
-        # find the MainWindow by traversing parentWidget() until isWindow() is true
-        # print("focus in",self,event, file=sys.stderr)
-        super().focusInEvent(event)
-  
-# New design:
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionTab()
+        for index in range(self.count()):
+            self.initStyleOption(option, index)
+            qDebug("application style {!r}".format(QApplication.style()))
+            qDebug("product type {!r}".format(QSysInfo.productType()))
+            # @@@@ the test on style test doesn't quite work, unfortunately. Test OS instead
+            if QSysInfo.productType() in ["macos","darwin"]: # QApplication.style().objectName() == "macos":
+                option.shape = QTabBar.Shape.RoundedNorth
+                option.position = QStyleOptionTab.TabPosition.Beginning
+            else:
+                option.shape = QTabBar.Shape.RoundedWest
+            painter.drawControl(QStyle.ControlElement.CE_TabBarTabShape, option)
+            option.shape = QTabBar.Shape.RoundedNorth
+            painter.drawControl(QStyle.ControlElement.CE_TabBarTabLabel, option)
+
 class ConversationTabs(QTabWidget):
     # This holds all the conversations, and keeps track of them
-    def __init__(self, parent = None):
+    def __init__(self, parent = None, force_top_valign=True):
         super().__init__(parent)
         self.my_tabs = []
         self.unread_marker = self.make_icon("red")
+        self.destination_selector = None
+
+        # @@@@ at some point make the tabs go west AND horizontal
+        self.setTabBar(ConversationTabBar())
+        self.setTabPosition(QTabWidget.TabPosition.West)
+        if force_top_valign:
+            self.setStyleSheet("QTabWidget::tab-bar {left : 0;}")  # using stylesheet on initializing
+
         # set up currentChanged signal to also change destination_selector, and clear red icon
         self.currentChanged.connect(self.selected_tab_changed)
         # set up tabCloseRequested signal to do close_conversation which also removes from destination_list
         self.tabCloseRequested.connect(self.close_conversation)
         # set up ScrollButtons and IconSize
-        self.setUsesScrollButtons(True) # @@@@ until we have West Side tabs
-        self.setIconSize(QSize(4,4))    # @@@@ experiment
-        self.setTabBarAutoHide(True)    # @@@@ experiment
-        # @@@@ at some point make the tabs go west AND horizontal
-        # @@@@ add a header (to be replaced) saying "Conversations appear here"
+        self.setUsesScrollButtons(True) # @@@@ at least until we have West Side tabs
+        self.setIconSize(QSize(4,4))    # @@@@ experiment (looks ok)
+        # self.setTabBarAutoHide(True)    # @@@@ experiment (seems ok)
+        # add a header (to be replaced) saying "Conversations appear here"
+        self.dummy_page = self.make_dummy_page()
+        self.add_dummy_page()
+
+    # https://gist.github.com/kihoon71/521f12ba7887875a25c756cc9e7aa2fa
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionTabWidgetFrame()
+        self.initStyleOption(option)
+        option.rect = QRect(QPoint(self.tabBar().geometry().width(), 0),
+                            QSize(option.rect.width(), option.rect.height()))
+        painter.drawPrimitive(QStyle.PrimitiveElement.PE_FrameTabWidget, option)
+
+    def add_dummy_page(self):
+        qDebug("Adding dummy page")
+        self.setTabBarAutoHide(True) # hide the silly "tab header"
+        self.addTab(self.dummy_page,"No conversations active")
+    def remove_dummy_page(self):
+        if self.count() == 1 and self.currentWidget() == self.dummy_page:
+            qDebug("Removing dummy page")
+            self.removeTab(0)
+        self.setTabBarAutoHide(False) # show also single tab headers
+    def make_dummy_page(self):
+        w = QWidget()
+        l = QVBoxLayout()
+        w.setLayout(l)
+        l.addWidget(QLabel("<i>Conversations appear here</i>"))
+        l.addStretch(1)
+        return w
 
     def set_destbox(self, destbox):
         # These are mutually dependent, so one has to be updated after creation
@@ -248,14 +285,15 @@ class ConversationTabs(QTabWidget):
         self.setTabIcon(newidx, QIcon()) # clear the red marker
         # Keep destination_list in sync with tab selection
         # I hope this doesn't make things recurse too much...
-        if self.destination_selector.currentText() != dest:
+        if self.destination_selector is not None and self.destination_selector.currentText() != dest:
             self.destination_selector.select_destination(dest)
 
     def add_message(self, destination, text, is_from_net):
         c = self.find_conversation(destination)
         if c is None:
-            # print("Can't find conversation with {!r}, adding one".format(destination), file=sys.stderr)
+            qDebug("Can't find conversation with {!r}, adding one".format(destination))
             c = self.add_conversation(destination)
+        qDebug("Adding msg for {!r} to {!r}".format(destination,c))
         c.add_message(destination, text, is_from_net=is_from_net)
         if c != self.currentWidget():
             # print("Added msg to non-current conversation, marking it as unread", file=sys.stderr)
@@ -266,13 +304,15 @@ class ConversationTabs(QTabWidget):
         return self.indexOf(c)
 
     def add_conversation(self, destination):
+        self.remove_dummy_page()
         c = ConversationTab()
         c.last_other = destination
         i = self.addTab(c, destination)
         self.setTabToolTip(i, destination)
-        # @@@@ also make sure destination is in destination_list
+        # also make sure destination is in destination_list
         di = self.destination_selector.find_destination(destination)
         if di < 0:
+            qDebug("Adding destination {!r}".format(destination))
             self.destination_selector.add_destination(destination)
         return c
     def find_conversation(self, destination):
@@ -297,29 +337,47 @@ class ConversationTabs(QTabWidget):
             if i >= 0:
                 c.clear_conversation()
                 self.removeTab(i)
+                if self.count() == 0:
+                    self.add_dummy_page()
             else:
-                print("remove_conversation: Can't find index of conversation {!r} ({})".format(c, destination), file=sys.stderr)
+                qDebug("remove_conversation: Can't find index of conversation {!r} ({})".format(c, destination))
         else:
-            print("remove_conversation: Can't find conversation with {}".format(destination), file=sys.stderr)
+            qDebug("remove_conversation: Can't find conversation with {}".format(destination))
+    def remove_all_conversations(self):
+        # first clear the conversations
+        for i in range(self.count()):
+            if self.widget(i) != self.dummy_page:
+                qDebug("Clearing conversation with {!r}".format(self.tabText(i)))
+                self.widget(i).clear_conversation()
+        # then remove all tabs
+        self.clear()
+        self.add_dummy_page()
+        
+    # @@@@ have this in a right-click menu for the Tab? Can we have right-click menus?
     def close_conversation(self, idx):
         c = self.widget(idx)
-        print("close_conversation: clearing conversation {} ({!r})".format(idx, c), file=sys.stderr)
+        # print("close_conversation: clearing conversation {} ({!r})".format(idx, c), file=sys.stderr)
         c.clear_conversation()
         d = self.tabText(idx)
-        print("close_conversation: removing destination {!r}".format(d), file=sys.stderr)
+        # print("close_conversation: removing destination {!r}".format(d), file=sys.stderr)
         self.destination_selector.remove_destination(d)
-        print("close_conversation: removing tab {}".format(idx), file=sys.stderr)
+        # print("close_conversation: removing tab {}".format(idx), file=sys.stderr)
         self.removeTab(idx)
-
+        if self.count() == 0:
+            self.add_dummy_page()
+    # @@@@ have this in a right-click menu for the Tab? Can we have right-click menus?
     def clear_conversation(self, destination):
         c = self.find_conversation(destination)
         if c:
-            print("Clearing conversation with {!r}".format(destination), file=sys.stderr)
+            if verbose:
+                qInfo("Clearing conversation with {!r}".format(destination))
             c.clear_conversation()
     def clear_all_conversations(self):
         for i in range(self.count()):
-            print("Clearing conversation with {!r}".format(self.tabText(i)), file=sys.stderr)
-            self.widget(i).clear_conversation()
+            if self.widget(i) != self.dummy_page:
+                if verbose:
+                    qInfo("Clearing conversation with {!r}".format(self.tabText(i)))
+                self.widget(i).clear_conversation()
 
 class ConversationTab(AutoBottomScrollArea):
     def __init__(self, parent = None):
@@ -329,7 +387,7 @@ class ConversationTab(AutoBottomScrollArea):
 
         # This holds one conversation in a vertically scrolling container, contains the widgets, set as the centralWidget
         self.widget = QWidget() # widget that contains the collection of Vertical Box
-        self.msglayout = QVBoxLayout()  # the vertical box that contains the MsgBoxes
+        self.msglayout = QVBoxLayout()  # the vertical box that contains the MessageDisplayBoxes
         self.widget.setLayout(self.msglayout)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.setWidgetResizable(True)
@@ -338,13 +396,15 @@ class ConversationTab(AutoBottomScrollArea):
         self.init_message_history()
 
     def add_message(self, other, text, is_from_net=True):
+        if verbose:
+            qInfo("Adding message to conversation with {}: {!r}".format(other,text))
         # If self.prev_msg_time is a different day than today, add a line with today's date
         if self.prev_msg_datetime is None or datetime.now().date() != self.prev_msg_datetime.date():
             self.msglayout.addWidget(self.make_date_marker())
             self.prev_msg_datetime = datetime.now()
         corr = self.make_correspondent_line(other)
-        # @@@@ instead, subclass MsgBox for left/right position
-        box = MsgBox()
+        # @@@@ instead, subclass MessageDisplayBox for left/right position
+        box = MessageDisplayBox()
         box.setText(text)
         # Nice corners please!
         # @@@@ consider QSS?
@@ -452,10 +512,7 @@ class DestinationSelector(QComboBox):
     def current_destination_changed(self, newidx):
         if self.tabbar:
             # Keep destination_list in sync with tab selection
-            # I hope this doesn't make things recurse too much...
             dest = self.itemText(newidx)
-            # print("current_destination_changed: destinations are {!r}".format([self.itemText(i) for i in range(self.count())]), file=sys.stderr)
-            # print("current_destination_changed: curr is {}, newidx {} => dest {}".format(self.currentIndex(), newidx, dest), file=sys.stderr)
             if self.currentIndex() != newidx:
                 # print("current_destination_changed: new index {} not current ({}), changing it".format(newidx, self.currentIndex()), file=sys.stderr)
                 self.setCurrentIndex(newidx)
@@ -465,7 +522,7 @@ class DestinationSelector(QComboBox):
                 # print("Current dest changed: setting tabbar index {}".format(i), file=sys.stderr)
                 self.tabbar.setCurrentIndex(i)
             else:
-                print("current_destination_changed: can't find conversation with {}".format(dest), file=sys.stderr)
+                # print("current_destination_changed: can't find conversation with {}".format(dest), file=sys.stderr)
                 pass
     def find_destination(self, dest):
         return self.findText(dest, flags=Qt.MatchFlag.MatchFixedString)
@@ -483,8 +540,14 @@ class DestinationSelector(QComboBox):
     def remove_destination(self, dest):
         i = self.find_destination(dest)
         if i >= 0:
-            print("Removing destination {} ({}) from destination list".format(i, dest), file=sys.stderr)
-            self.removeItem(i)
+            c = self.tabbar.find_conversation(dest)
+            if c:
+                # @@@@ allow it if it has no messages, and then remove it as a side effect?
+                QMessageBox.warning(self,"Conversation exists","Can't remove a destination which has a conversation. Remove that first.")
+            else:
+                if verbose:
+                    qInfo("Removing destination {} ({}) from destination list".format(i, dest))
+                self.removeItem(i)
     def select_destination(self, dest):
         di = self.find_destination(dest)
         if di >= 0:
@@ -494,25 +557,43 @@ class DestinationSelector(QComboBox):
             # print("Can't select destination {!r}: not found".format(dest), file=sys.stderr)
             pass
     def edit_destination_list(self):
-        pass                    # @@@@ 
+        # @@@@ make sure all active conversations are in the dest list. QMessageBox.info about it.
+        dlist = [self.itemText(i) for i in range(self.count())]
+        while True:
+            input,ok = QInputDialog.getMultiLineText(self,"Edit destination menu","user@host (one per line)",
+                                         text="\n".join(dlist))
+            if ok and input and len(input.strip()) > 0:
+                new_dlist = [d.strip() for d in input.strip().split("\n")]
+                badd = next((d for d in new_dlist if not re.match(r"^[\w_.-]+@[\w_.-]+$",d)),None)
+                if badd:
+                    response = QMessageBox.warning(self,"Syntax error","Destination should be user@host: "+badd,
+                                                   buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
+                    if response == QMessageBox.StandardButton.Cancel:
+                        qDebug("Cancelled editing destination list")
+                        return
+                else:
+                    qDebug("Setting destination list: {!r}".format(new_dlist))
+                    self.clear()
+                    self.insertItems(0,new_dlist)
+                    settings.setValue('destination_list',new_dlist)
+                    # @@@@ what to set destination_list_index to? Save the text we had, look it up and go there!
+                    if settings.status() != QSettings.Status.NoError:
+                        QMessageBox.warning(self,"Settings error","Settings could not be saved: {!r}".format(settings.status()))
+                    return
+            else:
+                qDebug("Cancelled editing destination list")
+                return
     def clear_destination_list(self):
-        self.clear()            # @@@@
+        # @@@@ disallow this unless all conversations are empty
+        self.clear()
+        settings.setValue('destination_list',[])
+        settings.setValue('destination_list_index',0)
 
 
-# Subclass QMainWindow to customize your application's main window
-#
-# This could/should be a conversation window, i.e. per conversation/destination.
-# The thread which reads incoming msgs should keep track of windows
-# and give a msg to an existing, or create a new one, depending on the source.
-# Alternative: use tabs rather than new windows?
-#
-# Alternative: make it a "group chat" with all msgs in the same window, and tag all msgs with sender?
-# Easier? But who are new msgs for? Still group chat would be nice?
-# @@@@ Develop a group chat, but probably separate
 class MainWindow(QMainWindow):
 
     def aboutme(self):
-        QMessageBox.about(self, "About Converse", 
+        QMessageBox.about(self, "About "+app.applicationName(), 
                           "<center><b>"+app.applicationName()+" "+app.applicationVersion()+"</b></center><br>"+
                           app.applicationName()+" is a program to have conversations on Chaosnet.<br>"+
                           # "Please see https://"+app.organizationDomain()+".<br>"+
@@ -526,7 +607,7 @@ class MainWindow(QMainWindow):
                 # avoid saving the default_config value
                 settings.setValue('send_message_timeout', input)
         else:
-            print("Setting message timeout cancelled", file=sys.stderr)
+            qDebug("Setting message timeout cancelled")
 
     def set_dns_server(self):
         input,ok = QInputDialog.getText(self,"DNS server for Chaosnet","Strongly recommended not to change!",
@@ -538,7 +619,7 @@ class MainWindow(QMainWindow):
                 return
             r = None
             if "." in s and re.match(r"^[\w_.-]+[^.]$", s):
-                print("Setting DNS server:",s, file=sys.stderr)
+                qDebug("Setting DNS server: {!r}".format(s))
                 if set_dns_resolver_address(s) is None:
                     # can fail e.g. if the name isn't actually in DNS
                     r = QMessageBox.warning(self,"Error","Failed setting DNS server",
@@ -546,17 +627,17 @@ class MainWindow(QMainWindow):
                 else:
                     settings.setValue('dns_server', s)
             else:
-                print("Bad syntax for DNS server: {!r}".format(s), file=sys.stderr)
+                qWarning("Bad syntax for DNS server: {!r}".format(s))
                 r = QMessageBox.warning(self,"Syntax error","Domain name syntax error",
                                         buttons=QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.RestoreDefaults)
             if r == QMessageBox.StandardButton.RestoreDefaults:
-                print("Restoring DNS server default:",default_config['dns_server'], file=sys.stderr)
+                qDebug("Restoring DNS server default: {!r}".format(default_config['dns_server']))
                 # Clear the settings value, so the default_config is used instead
                 settings.setValue('dns_server',None)
                 if set_dns_resolver_address(default_config['dns_server']) is None:
                     QMessageBox.critical(self,"Error","Failed setting default DNS server!")
         else:
-            print("Setting DNS server cancelled", file=sys.stderr)
+            qDebug("Setting DNS server cancelled")
 
     def set_dns_search_list(self):
         while True:
@@ -572,28 +653,28 @@ class MainWindow(QMainWindow):
                     response = QMessageBox.warning(self,"Syntax error","Domains should have '.' in them: "+badd,
                                                    buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
                     if response == QMessageBox.StandardButton.Cancel:
-                        print("Cancelled DNS search list setting", file=sys.stderr)
+                        qDebug("Cancelled DNS search list setting")
                         return
                 else:
-                    print("Setting DNS search list:",dlist, file=sys.stderr)
+                    qDebug("Setting DNS search list: {!r}".format(dlist))
                     settings.setValue('dns_search_list',dlist)
                     return
             else:
-                print("Cancelled DNS search list setting", file=sys.stderr)
+                qDebug("Cancelled DNS search list setting")
                 return
 
     def make_icon(self, colorspec):
         # @@@@ make the icon have a thin border to make it stand out in the menu
         pm = QPixmap(12,12)
         pm.fill(QColor(colorspec))
-        # print("Made icon from pixmap for color {!r}: {!r}".format(colorspec,pm), file=sys.stderr)
+        qDebug("Made icon from pixmap for color {!r} ({!r}): {!r}".format(colorspec,QColor(colorspec).name(),pm))
         return QIcon(pm)
         
     def edit_background_color(self, cf_name):
-        print("Getting a color setting for {} (default {})".format(cf_name,getconf(cf_name)), file=sys.stderr)
+        # print("Getting a color setting for {} (default {})".format(cf_name,getconf(cf_name)), file=sys.stderr)
         color = QColorDialog.getColor(QColor(getconf(cf_name)), self)
         if color.isValid() and color.name() != getconf(cf_name):
-            print("Got a color: {} ({!r})".format(color.name(),color), file=sys.stderr)
+            # print("Got a color: {} ({!r})".format(color.name(),color), file=sys.stderr)
             settings.setValue(cf_name, color.name())
             return color.name()
 
@@ -619,34 +700,6 @@ class MainWindow(QMainWindow):
             self.from_net_color_action.setIcon(i)
             # @@@@ go though all messages and change the color?
 
-    def edit_destination_list(self):
-        dlist = [self.cbox.itemText(i) for i in range(self.cbox.count())]
-        while True:
-            input,ok = QInputDialog.getMultiLineText(self,"Edit destination menu","user@host (one per line)",
-                                         text="\n".join(dlist))
-            if ok and input and len(input.strip()) > 0:
-                new_dlist = [d.strip() for d in input.strip().split("\n")]
-                badd = next((d for d in new_dlist if not re.match(r"^[\w_.-]+@[\w_.-]+$",d)),None)
-                if badd:
-                    response = QMessageBox.warning(self,"Syntax error","Destination should be user@host: "+badd,
-                                                   buttons=QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
-                    if response == QMessageBox.StandardButton.Cancel:
-                        print("Cancelled editing destination list", file=sys.stderr)
-                        return
-                else:
-                    print("Setting destination list:",new_dlist, file=sys.stderr)
-                    self.cbox.clear()
-                    self.cbox.insertItems(0,new_dlist)
-                    settings.setValue('destination_list',new_dlist)
-                    # @@@@ what to set destination_list_index to?
-                    print("Settings status: {!r}".format(settings.status()), file=sys.stderr)
-                    if settings.status() != QSettings.Status.NoError:
-                        QMessageBox.warning(self,"Settings error","Settings could not be saved: {!r}".format(settings.status()))
-                    return
-            else:
-                print("Cancelled editing destination list", file=sys.stderr)
-                return
-
     def reset_destinations(self):
         self.cbox.clear()
         settings.setValue('destination_list',[])
@@ -667,17 +720,17 @@ class MainWindow(QMainWindow):
     def clear_current_conversation(self):
         currdest = self.tbar.tabText(self.tbar.currentIndex())
         if currdest and len(currdest) > 0:
-            print("Clearing conversation with {}".format(currdest), file=sys.stderr)
+            qDebug("Clearing conversation with {}".format(currdest))
             self.tbar.clear_conversation(currdest)
     def remove_current_conversation(self):
         currdest = self.tbar.tabText(self.tbar.currentIndex())
         if currdest and len(currdest) > 0:
-            print("Removing conversation with {}".format(currdest), file=sys.stderr)
+            qDebug("Removing conversation with {}".format(currdest))
             self.tbar.remove_conversation(currdest)
     def remove_current_destination(self):
         currdest = self.cbox.currentText()
         if currdest and len(currdest) > 0:
-            print("Removing destination {}".format(currdest), file=sys.stderr)
+            qDebug("Removing destination {}".format(currdest))
             self.cbox.remove_destination(currdest)
 
 
@@ -720,12 +773,15 @@ class MainWindow(QMainWindow):
             u,h = self.remote_user(), self.remote_host()
             desthost = dns_name_of_address(destaddr[0])
             if desthost and h != desthost:
-                print("Setting dest to {!r} (canonical name of {!r})".format(desthost, h), file=sys.stderr)
+                # prettify/canonicalize
+                qDebug("Setting dest to {!r} (canonical name of {!r})".format(desthost, h))
+                self.cbox.setCurrentText(u+"@"+desthost) # this might not be updated yet
                 h = desthost
-            print("Setting destination {}@{}".format(u,h), file=sys.stderr)
+            qDebug("Setting destination {}@{}".format(u,h))
             self.set_destination(u,h, True) # update dest, and switch to it
             # first lock the input, send it, and when it's sent, unlock (in case it takes time)
-            print("Sending to {}@{}: {!r}".format(u,h, self.input.text()), file=sys.stderr)
+            if verbose:
+                qInfo("Sending to {}@{}: {!r}".format(u,h, self.input.text()))
             self.input.setReadOnly(True)
             try:
                 other = "{}@{}".format(u,h)
@@ -740,7 +796,7 @@ class MainWindow(QMainWindow):
                 self.input.clear()
             except ChaosError as m:
                 # @@@@ Beep
-                print("Chaosnet error: {!r}".format(m.message), file=sys.stderr)
+                qInfo("Chaosnet error: {!r}".format(m.message))
                 QMessageBox.critical(self,"Chaosnet Error","Error from host {}:<br>{}".format(self.remote_host(),m.message.rstrip("\0x00")),
                                      buttons=QMessageBox.StandardButton.Ok)
             self.input.setReadOnly(False)
@@ -763,9 +819,9 @@ class MainWindow(QMainWindow):
 
     def set_destination(self, user=None, host=None, switch=True):
         if user is None or user == "":
-            print("Invalid destination user {!r}".format(user), file=sys.stderr)
+            qInfo("Invalid destination user {!r}".format(user))
         elif host is None or host == "":
-            print("Invalid destination host {!r}".format(host), file=sys.stderr)
+            qInfo("Invalid destination host {!r}".format(host))
         else:
             # Since the text might not have been "activated" yet, just entered, add it to the menu
             di = self.cbox.find_destination(self.cbox.currentText())
@@ -799,7 +855,7 @@ class MainWindow(QMainWindow):
 
     # never activated?
     def focusChange(self,old,new):
-        print("Focus change: from",old,"to",new, file=sys.stderr)
+        qDebug("Focus change: from {!r} to {!r}".format(old,new))
 
     def init_menus(self):
         def make_action(title, handler, shortcut=None, icon=None):
@@ -818,8 +874,8 @@ class MainWindow(QMainWindow):
         my_menu.addAction(aboutaction)
         my_menu.addAction(make_action("Send message", self.sendit, shortcut="Ctrl+S"))
         settings_menu = self_menu.addMenu("Settings")
-        settings_menu.addAction(make_action("Edit destination menu", self.edit_destination_list))
-        settings_menu.addAction(make_action("Clear destination menu", self.reset_destinations))
+        settings_menu.addAction(make_action("Edit destination menu", self.cbox.edit_destination_list))
+        settings_menu.addAction(make_action("Clear destination menu", self.cbox.clear_destination_list))
         settings_menu.addAction(make_action("Clear all conversations", self.clear_all_conversations))
         settings_menu.addAction(make_action("Remove all conversations", self.remove_all_conversations))
         settings_menu.addSeparator()
@@ -909,29 +965,45 @@ class MainWindow(QMainWindow):
 # https://www.pythonguis.com/faq/command-line-arguments-pyqt6/
 def parse_args(app):
     parser = QCommandLineParser()
+    parser.setApplicationDescription(app.applicationName()+" is a program to have conversations on Chaosnet.")
     parser.addHelpOption()
     parser.addVersionOption()
-    copt = QCommandLineOption(["c","chaoshost"],"My Chaosnet hostname","chaosname")
-    # @@@@ add --verbose, and use it for non-debug-but-possibly-relevant printouts
+    copt = QCommandLineOption(["c","chaoshost"],"Set my Chaosnet hostname (if your hostname is not in Chaos DNS)","chaosname")
+    dopt = QCommandLineOption(["d","debug"],"Debug messages")
+    vopt = QCommandLineOption(["V","verbose"],"Verbose messages")
+    parser.addOption(dopt)
+    parser.addOption(vopt)
     parser.addOption(copt)
     parser.process(app)
+    if parser.isSet(dopt):
+        global debug
+        debug = True
+    if parser.isSet(vopt):
+        global verbose
+        verbose = True
     return parser.value(copt)
 
 if __name__ == '__main__':
+    from socket import getfqdn
     chost = parse_args(app)
     if chost:
-        from socket import getfqdn
         if chost.lower() != getfqdn().lower() and dns_addr_of_name_search(getfqdn()):
             # maybe refuse
-            print("%% Spoofing Chaosnet hostname", file=sys.stderr)
+            qInfo("%% Spoofing Chaosnet hostname")
         if re.match(r"^[\w_.-]+[^.]$", chost) and dns_addr_of_name_search(chost):
-            print("Setting Chaosnet hostname {!r}".format(chost), file=sys.stderr)
+            qInfo("Setting Chaosnet hostname {!r}".format(chost))
             default_config['my_chaos_hostname'] = chost
         else:
-            print("Bad Chaosnet hostname {!r}".format(chost), file=sys.stderr)
+            qWarning("Bad Chaosnet hostname {!r}".format(chost))
             exit(1)
+    else:
+        if dns_addr_of_name_search(getfqdn()) is None:
+            qWarning("Your host name {!r} is not in Chaosnet DNS. You might need to use the -c option.")
 
     try:
+        if not debug:
+            # Just ignore all qDebug printouts
+            qDebug = lambda x: x
         # Create a Qt widget, which will be our window.
         window = MainWindow()
         window.show()

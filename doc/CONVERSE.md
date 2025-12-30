@@ -27,8 +27,6 @@ If the most recent message is sent/received on a new date, the date is shown bef
 
 If a message arrives to a conversation whose tab is not selected, a little red dot is added to the tab label.
 
-If there is only one conversation, the tab header is not shown. (*Give me feedback on this?*)
-
 If a message arrives when the Converse window is not the focused/active window, an attempt is made to "bounce" the application icon (e.g. in the Dock, on macOS).
 
 The Conversation menu allows clearing the current conversation tab, removing it altogether, and removing the current destination from the destination input drop-down menu.
@@ -80,11 +78,12 @@ Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.
 - [ ] You may want to set an auto-reply (if you go AFK), and there should be a setting for at what idle time the auto-reply is sent. *(And it should ideally be sent if your screen is locked, too.) (Perhaps the auto-reply should be implemented using a CLS packet with the message, to avoid auto-auto-replies?)*
 - [ ] There could be a Dock icon counter for unseen incoming messages, on macOS.
 - [ ] You could dream of a "group chat" setting, which automatically sends messages to a set of destinations. *Need to handle replies sensibly though (so they go to all in the group). Probably a new/compatible protocol for group handling, which uses SEND for transport?*
+- [ ] If the dnspython requirement is awkward, it could be replaced by a HOSTAB client, but it might not be as fast?
 
 Let me know if you (want to) implement any of this, or if you have more ideas!
 
 ## Known issues
 
 - When you change the message background colors, old messages are not re-coloured.
-- An attempt at setting an icon for the menu items for editing colors, but this does not always have effect in PyQt6 on macOS. *Probably depends on installation issues.*
+- An attempt at setting an icon for the menu items for editing colors, but this does not always have effect in PyQt6 on macOS. *Probably depends on installation issues, it works on one of my macs.*
 - QSoundEffect doesn't seem to work in either PyQt6 or PySide6, on my Mac.
