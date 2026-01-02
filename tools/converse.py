@@ -2,6 +2,7 @@
 #
 # Copyright © 2025 Björn Victor (bjorn@victor.se)
 # This is a Converse (i.e. SEND) client/server, vaguely reminiscent of Converse on LISPM.
+# It can be used to send/receive text messages between users on the Chaosnet.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -16,6 +17,9 @@
 #    limitations under the License.
 
 # TODO:
+# - optionally use QPlainTextEdit, for multi-line input. 
+# - show timestamp offset from local time,
+#   e.g. "09:55:31 (-9h)" for a Californian msg appearing in Europe, or "(+9h)" for the other way around.
 # - do actual sending in a separate thread, interruptible by Cancel button.
 # - (optionally) save incoming msgs to disk and restore them on restart
 # - FINGER/NAME client, show who of the destinations are online
@@ -24,9 +28,10 @@
 # - dock icon with counter for unseen msgs (https://doc.qt.io/qtforpython-6/overviews/qtdoc-appicon.html)
 # - perhaps handle "private" networks (avoid DNS)
 # Configuration:
+# - tabs left/right?
 # - sounds on/off
 # - receiver on/off (related to if the screen is on, or idle, or ...)
-# Future features: autoreply, idle detection, ignore lists...
+# Future features: autoreply, idle detection, ignore lists, user aliases...
 
 # SEND protocol message format (https://chaosnet.net/amber.html#Send):
 # - RFC arg: destinationUsername
@@ -48,7 +53,6 @@ from qsend import get_send_message, send_message
 # For now, try pyqt6.
 # https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qtwidgets-module.html
 
-# They work in pyqt6 on Z2, but not on Puck. 
 from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl, QThread, QTimer, qInfo, qDebug, qWarning, QRect, QSysInfo
 from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpression
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
@@ -76,11 +80,10 @@ default_config = dict(# date_color="#ffebee",
     from_me_color="#e1f5fe",
     background_color="#eee",
     send_message_timeout=5,
-    restore_conversation_tabs=True,
     # Sigh.
     dns_search_list=["chaosnet.net","victor.se","dfupdate.se"],
     dns_server="dns.chaosnet.net",
-    # @@@@ TEMP HACK until cbridge does ID operation @@@@
+    # This is not a persistent setting - see the "-c" option
     my_chaos_hostname=None,     # None means use IP hostname
     MainWindowSize=QSize(600,400),
     # MainWindowPosition=None,
@@ -104,14 +107,14 @@ from time import sleep
 
 new_messages = []
 def fetch_new_messages(win):
-    def add_message(win,uname,host,text):
+    def add_message(win,uname,host,diffhours,text):
         sender = ""
         ru, rh = win.remote_user(),win.remote_host()
         if ru is None or rh is None or uname.lower() != ru.lower() or host.lower() != rh.lower():
             # not the same remote as last what's in the destination box
             win.set_destination(uname,host,False) # update the box, but don't switch to it
         sender = "{}@{}".format(uname,host) # show who it's from in the message box
-        win.add_message(sender, text, True)
+        win.add_message(sender, diffhours, text, True)
         win.last_other = sender
         # @@@@ optionally beep (setting)
     # The trick: run add_message in the main thread
@@ -122,8 +125,8 @@ def fetch_new_messages(win):
     myhost = getconf('my_chaos_hostname') or getfqdn()
     while True:
         try:
-            # @@@@ use the remote date spec to show tz offset, if any
-            destuser,uname,host,date,text = get_send_message(searchlist=getconf('dns_search_list'))
+            # use the remote date spec to show tz offset, if any
+            destuser,uname,host,date,diffh,text = get_send_message(searchlist=getconf('dns_search_list'))
         except ChaosError as msg:
             qWarning("Error getting Converse messages: {}".format(msg.message))
             # typically no cbridge running, so wait a bit before trying again
@@ -137,9 +140,9 @@ def fetch_new_messages(win):
         if m:
             text = text[m.end():].lstrip()
         if destuser.lower() == me.lower():
-            am(win,uname,host,text)
+            am(win,uname,host,diffh,text)
         else:                   # This shouldn't happen, get_send_message checks
-            am(win,uname,host,"To: {}@{}\n".format(destuser,myhost)+text)
+            am(win,uname,host,diffh,"To: {}@{}\n".format(destuser,myhost)+text)
 
 ################ GUI/app
 
@@ -192,7 +195,7 @@ class AutoBottomScrollArea(QScrollArea):
 class ConversationTabBar(QTabBar):
     def __init__(self):
         super().__init__()
-        # @@@@ super weird, but necessary, otherwise only the elision is visible. Further workaound would be needed.
+        # @@@@ super weird, but necessary, otherwise only the elision is visible. Further workaound would be needed. Check the sources?
         self.setElideMode(Qt.TextElideMode.ElideNone)
         
     def tabSizeHint(self, index):
@@ -205,7 +208,7 @@ class ConversationTabBar(QTabBar):
         option = QStyleOptionTab()
         for index in range(self.count()):
             self.initStyleOption(option, index)
-            # @@@@ the test on style doesn't quite work, unfortunately. Test OS instead
+            # @@@@ the test on style doesn't quite work, unfortunately. Test OS instead.
             if QSysInfo.productType() in ["macos","darwin"]: # QApplication.style().objectName() == "macos":
                 option.shape = QTabBar.Shape.RoundedNorth    # this magically affects the highlight of selected tab
                 option.position = QStyleOptionTab.TabPosition.Beginning
@@ -235,8 +238,7 @@ class ConversationTabs(QTabWidget):
         self.tabCloseRequested.connect(self.close_conversation)
         # set up ScrollButtons and IconSize
         self.setUsesScrollButtons(True) # @@@@ at least until we have West Side tabs
-        self.setIconSize(QSize(4,4))    # @@@@ experiment (looks ok)
-        # self.setTabBarAutoHide(True)    # @@@@ experiment (seems ok)
+        self.setIconSize(QSize(4,4))    # @@@@ experiment (looks ok). This is for the red dot etc.
         # add a header (to be replaced) saying "Conversations appear here"
         self.dummy_page = self.make_dummy_page()
         self.add_dummy_page()
@@ -284,13 +286,13 @@ class ConversationTabs(QTabWidget):
         if self.destination_selector is not None and self.destination_selector.currentText() != dest:
             self.destination_selector.select_destination(dest)
 
-    def add_message(self, destination, text, is_from_net):
+    def add_message(self, destination, diffhours, text, is_from_net):
         c = self.find_conversation(destination)
         if c is None:
             qDebug("Can't find conversation with {!r}, adding one".format(destination))
             c = self.add_conversation(destination)
         qDebug("Adding msg for {!r} to {!r}".format(destination,c))
-        c.add_message(destination, text, is_from_net=is_from_net)
+        c.add_message(destination, diffhours, text, is_from_net=is_from_net)
         if c != self.currentWidget():
             # print("Added msg to non-current conversation, marking it as unread", file=sys.stderr)
             self.setTabIcon(self.indexOf(c), self.unread_marker)
@@ -322,7 +324,7 @@ class ConversationTabs(QTabWidget):
             # print("Setting current conversation for {} = {!r}".format(destination, c), file=sys.stderr)
             self.setCurrentWidget(c)
         else:
-            # print("select_conversation: can't find conversation for {}".format(destination), file=sys.stderr)
+            qDebug("select_conversation: can't find conversation for {}".format(destination))
             pass
     def remove_conversation(self, destination):
         # remove the whole conversation for a destination, e.g. when closing a tab
@@ -392,14 +394,14 @@ class ConversationTab(AutoBottomScrollArea):
         self.setWidget(self.widget)
         self.init_message_history()
 
-    def add_message(self, other, text, is_from_net=True):
+    def add_message(self, other, diffhours, text, is_from_net=True):
         if verbose:
             qInfo("Adding message to conversation with {}: {!r}".format(other,text))
         # If self.prev_msg_time is a different day than today, add a line with today's date
         if self.prev_msg_datetime is None or datetime.now().date() != self.prev_msg_datetime.date():
             self.msglayout.addWidget(self.make_date_marker())
             self.prev_msg_datetime = datetime.now()
-        corr = self.make_correspondent_line(other)
+        corr = self.make_correspondent_line(other,diffhours)
         # @@@@ instead, subclass MessageDisplayBox for left/right position
         box = MessageDisplayBox()
         box.setText(text)
@@ -478,19 +480,19 @@ class ConversationTab(AutoBottomScrollArea):
         # self.msglayout.addWidget(dw, alignment=Qt.AlignmentFlag.AlignHCenter)
         return dw
 
-    def make_correspondent_line(self, other, time=None):
+    def make_correspondent_line(self, other, diffhours, time=None):
         if self.last_other is None or other.lower() != self.last_other.lower():
             # New other end, show it together with the time
             tbox = QVBoxLayout()
             tbox.setContentsMargins(0, 0, 0, 0)
             tbox.setSpacing(0)
-            tbox.addWidget(QLabel(datetime.now().strftime('%H:%M:%S')))
+            tbox.addWidget(QLabel(datetime.now().strftime('%H:%M:%S')+(" ({}h)".format(diffhours) if diffhours != 0 else "")))
             tbox.addWidget(QLabel(other))
             time = QWidget()
             time.setLayout(tbox)
             self.last_other = other
         else:
-            time = QLabel(datetime.now().strftime('%H:%M:%S'))
+            time = QLabel(datetime.now().strftime('%H:%M:%S')+(" ({}h)".format(diffhours) if diffhours != 0 else ""))
         return time
 
 class DestinationSelector(QComboBox):
@@ -507,7 +509,7 @@ class DestinationSelector(QComboBox):
         # These are mutually dependent, so one has to be updated after creation
         self.tabbar = tb
     def current_destination_changed(self, newidx):
-        qDebug("Saving destination index {}".format(newidx))
+        qDebug("current_destination_changed: Saving destination index {}".format(newidx))
         settings.setValue('destination_list_index', newidx)
         if self.tabbar:
             # Keep destination_list in sync with tab selection
@@ -540,10 +542,14 @@ class DestinationSelector(QComboBox):
         i = self.find_destination(dest)
         if i >= 0:
             c = self.tabbar.find_conversation(dest)
-            if c:
-                # @@@@ allow it if it has no messages, and then remove it as a side effect?
-                QMessageBox.warning(self,"Conversation exists","Can't remove a destination which has a conversation. Remove that first.")
+            if c and c.msglayout.count() > 2:
+                # allow it if it has no messages (only header and spacer), and then remove it as a side effect
+                qDebug("remove_destination: have conversation, count {} {!r}".format(
+                    c.msglayout.count(), [c.msglayout.itemAt(i) for i in range(c.msglayout.count())]))
+                QMessageBox.warning(self,"Conversation exists","Can't remove a destination which has a conversation with messages. Clear or remove the conversation first.")
             else:
+                if c:
+                    self.tabbar.remove_conversation(dest)
                 if verbose:
                     qInfo("Removing destination {} ({}) from destination list".format(i, dest))
                 self.removeItem(i)
@@ -551,14 +557,17 @@ class DestinationSelector(QComboBox):
         di = self.find_destination(dest)
         if di >= 0:
             self.setCurrentIndex(di)
-            qDebug("Saving destination index {}".format(di))
+            qDebug("select_destination: Saving destination index {}".format(di))
             settings.setValue('destination_list_index', di)
         else:
             # print("Can't select destination {!r}: not found".format(dest), file=sys.stderr)
             pass
     def edit_destination_list(self):
-        # @@@@ make sure all active conversations are in the dest list. QMessageBox.info about it.
+        curr_dest = self.currentText() # save current, to re-select it below
         dlist = [self.itemText(i) for i in range(self.count())]
+        # make sure all active conversations are in the dest list. 
+        active = [self.tabbar.tabText(i) for i in range(self.tabbar.count()) if self.tabbar.widget(i).msglayout.count() > 2]
+        qDebug("active conversations {!r}".format(active))
         while True:
             input,ok = QInputDialog.getMultiLineText(self,"Edit destination menu","user@host (one per line)",
                                          text="\n".join(dlist))
@@ -572,22 +581,40 @@ class DestinationSelector(QComboBox):
                         qDebug("Cancelled editing destination list")
                         return
                 else:
+                    missing = [d for d in active if d not in new_dlist]
+                    if len(missing) > 0:
+                        QMessageBox.information(self,"Keeping active destinations",
+                                                "Keeping destinations of active conversations: {}".format(", ".join(missing)))
+                        new_dlist += missing # @@@@ should keep order of dlist
+                    # also remove conversation tabs
+                    for d in [removed for removed in dlist if removed not in new_dlist]:
+                        qDebug("removing conversation {!r}".format(d))
+                        self.tabbar.remove_conversation(d)
                     qDebug("Setting destination list: {!r}".format(new_dlist))
                     self.clear()
                     self.insertItems(0,new_dlist)
                     settings.setValue('destination_list',new_dlist)
-                    # @@@@ what to set destination_list_index to? Save the text we had, look it up and go there!
-                    if settings.status() != QSettings.Status.NoError:
-                        QMessageBox.warning(self,"Settings error","Settings could not be saved: {!r}".format(settings.status()))
+                    if curr_dest in new_dlist:
+                        self.select_destination(curr_dest)
                     return
             else:
                 qDebug("Cancelled editing destination list")
                 return
     def clear_destination_list(self):
-        # @@@@ disallow this unless all conversations are empty
-        self.clear()
-        settings.setValue('destination_list',[])
-        settings.setValue('destination_list_index',0)
+        # disallow this unless conversations are empty @@@@ unless some setting?
+        active = [self.tabbar.tabText(i) for i in range(self.tabbar.count()) if self.tabbar.widget(i).msglayout.count() > 2]
+        if len(active) > 0:
+            QMessageBox.information(self,"Keeping active destinations",
+                                    "Keeping destinations of active conversations: {}".format(", ".join(active)))
+            dlist = [self.itemText(i) for i in range(self.count())]
+            for d in [dest for dest in dlist if dest not in active]:
+                self.remove_destination(d)
+        else:
+            # also remove conversation tabs
+            self.tabbar.remove_all_conversations()
+            self.clear()
+            settings.setValue('destination_list',[])
+            settings.setValue('destination_list_index',0)
 
 
 class MainWindow(QMainWindow):
@@ -700,19 +727,6 @@ class MainWindow(QMainWindow):
             self.from_net_color_action.setIcon(i)
             # @@@@ go though all messages and change the color?
 
-    def reset_destinations(self):
-        self.cbox.clear()
-        settings.setValue('destination_list',[])
-        settings.setValue('destination_list_index',0)
-
-    def init_message_history(self):
-        h = QLabel()
-        h.setTextFormat(Qt.TextFormat.RichText)
-        h.setText("<i>Message history</i>")
-        self.msglayout.addWidget(h, alignment=Qt.AlignmentFlag.AlignCenter)
-        # Keep a stretch at the top of the messages, so new msgs are at the bottom, next to the input box
-        self.msglayout.addStretch(1)
-
     def clear_all_conversations(self):
         self.tbar.clear_all_conversations()
     def remove_all_conversations(self):
@@ -732,7 +746,6 @@ class MainWindow(QMainWindow):
         if currdest and len(currdest) > 0:
             qDebug("Removing destination {}".format(currdest))
             self.cbox.remove_destination(currdest)
-
 
     def reset_settings(self):
         # Reset settings
@@ -790,7 +803,7 @@ class MainWindow(QMainWindow):
                 # cf https://www.pythonguis.com/tutorials/multithreading-pyside6-applications-qthreadpool/
                 # cf https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qprogressdialog.html
                 send_message(u,h, self.input.text(), timeout=getconf('send_message_timeout'),myhostname=getconf('my_chaos_hostname'))
-                ix = self.tbar.add_message(other, self.input.text(), is_from_net=False)
+                ix = self.tbar.add_message(other, 0, self.input.text(), is_from_net=False)
                 self.tbar.select_conversation(other)
                 # and clear the input field
                 self.input.clear()
@@ -801,8 +814,8 @@ class MainWindow(QMainWindow):
                                      buttons=QMessageBox.StandardButton.Ok)
             self.input.setReadOnly(False)
 
-    def add_message(self, other, text, is_from_net):
-        self.tbar.add_message(other, text, is_from_net=is_from_net)
+    def add_message(self, other, diffhours, text, is_from_net):
+        self.tbar.add_message(other, diffhours, text, is_from_net=is_from_net)
 
     def remote_user(self):
         try:
@@ -831,7 +844,7 @@ class MainWindow(QMainWindow):
                     di = 0
                 else:           # I assumed this followed the policy, but...
                     di = self.cbox.addItem(self.cbox.currentText())
-                qDebug("Saving destination index {}".format(di))
+                qDebug("set_destination: Saving destination index {}".format(di))
                 settings.setValue('destination_list_index',di)
                 if switch:
                     self.cbox.setCurrentIndex(di)
@@ -840,7 +853,7 @@ class MainWindow(QMainWindow):
                 if switch and self.cbox.currentIndex() != di:
                     # print("set_destination: changing index from {} to {}".format(self.cbox.currentIndex(), di), file=sys.stderr)
                     self.cbox.setCurrentIndex(di)
-                    qDebug("Saving destination index {}".format(di))
+                    qDebug("set_destination (2): Saving destination index {}".format(di))
                     settings.setValue('destination_list_index', di)
                 else:
                     # print("set_destination: not changing index from {} ({}, {})".format(self.cbox.currentIndex(), self.cbox.currentText(), switch), file=sys.stderr)
@@ -849,9 +862,9 @@ class MainWindow(QMainWindow):
                     # print("set_destination: switching conversation", file=sys.stderr)
                     self.tbar.select_conversation(self.cbox.currentText())
 
-    def set_restore_conversations(self):
-        qDebug("Setting Restore Conversations to {!r}".format(self.restore_conversations_action.isChecked()))
-        settings.setValue('restore_conversation_tabs', self.restore_conversations_action.isChecked())
+    # def set_restore_conversations(self):
+    #     qDebug("Setting Restore Conversations to {!r}".format(self.restore_conversations_action.isChecked()))
+    #     settings.setValue('restore_conversation_tabs', self.restore_conversations_action.isChecked())
 
     def closeEvent(self,event):
         settings.setValue("MainWindowSize",self.size())
@@ -886,12 +899,13 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(make_action("Remove all conversations", self.remove_all_conversations))
         settings_menu.addSeparator()
         # @@@@ Generalize this mechanism (for configuring boolean settings)
-        self.restore_conversations_action = make_action("Restore conversation tabs on restart", 
-                                                        self.set_restore_conversations)
-        self.restore_conversations_action.setCheckable(True)
-        self.restore_conversations_action.setChecked(getconf('restore_conversation_tabs'))
-        settings_menu.addAction(self.restore_conversations_action)
-        settings_menu.addSeparator()
+        # @@@@ But this particular one should not be optional!
+        # self.restore_conversations_action = make_action("Restore conversation tabs on restart", 
+        #                                                 self.set_restore_conversations)
+        # self.restore_conversations_action.setCheckable(True)
+        # self.restore_conversations_action.setChecked(getconf('restore_conversation_tabs'))
+        # settings_menu.addAction(self.restore_conversations_action)
+        # settings_menu.addSeparator()
         settings_menu.addAction(make_action("Set send timeout...", self.set_message_timeout))
         settings_menu.addAction(make_action("Set domain search list...", self.set_dns_search_list))
         settings_menu.addAction(make_action("Set DNS server...", self.set_dns_server))
@@ -970,9 +984,8 @@ class MainWindow(QMainWindow):
         di = settings.value('destination_list_index') # get this before doing the add_conversation below
         if settings.value('destination_list'):
             self.cbox.insertItems(0,settings.value('destination_list'))
-            if getconf('restore_conversation_tabs'):
-                for d in settings.value('destination_list'):
-                    self.tbar.add_conversation(d)
+            for d in settings.value('destination_list'):
+                self.tbar.add_conversation(d)
         if di is not None:
             qDebug("Setting destination index {}".format(di))
             self.cbox.setCurrentIndex(di)
@@ -1018,11 +1031,12 @@ if __name__ == '__main__':
     else:
         if dns_addr_of_name_search(getfqdn()) is None:
             from bhostat import host_name_and_addr
+            # Get the local cbridge's name and address (using STATUS)
             name,addr = host_name_and_addr("localhost")
             # name might be a shortname or a "Pretty and Silly String", so find the DNS name of the address
             fqdn = dns_name_of_address(addr)
             if fqdn is None:
-                qWarning("Your host name {!r} is not in Chaosnet DNS, and neither is your local address {:o}. You might need to use the -c option.".format(getfqdn(), addr))
+                qWarning("Your host name {!r} is not in Chaosnet DNS, and neither is your local address {:o}. You might need to use the --chaoshost option.".format(getfqdn(), addr))
                 if name is not None:
                     # Use the silly name anyway, in case this is on a private net
                     qInfo("Using Chaos hostname {!r} ({:o})".format(name.replace(" ","-"), addr))
@@ -1037,11 +1051,11 @@ if __name__ == '__main__':
         if not debug:
             # Just ignore all qDebug printouts
             qDebug = lambda x: x
-        # Create a Qt widget, which will be our window.
+
         window = MainWindow()
         window.show()
 
-        # Run the SEND server thread
+        # Run the SEND server thread (should perhaps use QThread or QRunnable or...)
         thread = Thread(target=fetch_new_messages, args=(window,), daemon=True)
         thread.start()
 

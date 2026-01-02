@@ -19,7 +19,7 @@ There is also a Converse menu (at least one), a Settings menu, and a Conversatio
 
 ### Conversation
 Each conversation is put in a separate tab, showing the message history for a conversation party.
-The message history shows incoming and outgoing messages, with timestamps. New messages appear at the bottom of the message history, scrolling older messages upwards.
+The message history shows incoming and outgoing messages, with timestamps. New messages appear at the bottom of the message history, scrolling older messages upwards. Timestamps for messages from other timezones indicate the timezone difference.
 
 Incoming messages are left-adjusted and in a (by default yellowish) color. Outgoing messages are right-adjusted and in a (by default blue-ish) color.
 

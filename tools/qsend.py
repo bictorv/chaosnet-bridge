@@ -23,6 +23,7 @@ from datetime import datetime
 # destuser: the user for whom the message is
 # uname, host: the username and host the message is from
 # datestamp: the datestamp of the message (might be in a remote timezone, beware)
+# diffhours: timezone difference (in rounded hours) between the datestamp and local time
 # text: the text of the message
 def get_send_message(searchlist=None):
     from getpass import getuser
@@ -30,6 +31,7 @@ def get_send_message(searchlist=None):
     ncp = StreamConn()
     uname,host,date,lines = None, None, None, []
     dt = None
+    diffh = 0
     source,destuser = ncp.listen("SEND")
     sourcehost = dns_name_of_address(int(source,8))
     try:
@@ -51,41 +53,41 @@ def get_send_message(searchlist=None):
                     # @@@@ maybe do something more
                     print("Attention: SEND client addr {:o} has name {!r} != {!r} ({!r})".format(
                         int(source,8), sourcehost, dnshost, host), file=sys.stderr)
-                if dnshost is not None and dnshost.lower().startswith(host.lower()+"."):
+                if dnshost is not None: # and dnshost.lower().startswith(host.lower()+"."):
                     # sender used a shortname, expand it
                     host = dnshost
             else:
                 print("Can't find DNS addr of sender name {!r}".format(host), file=sys.stderr)
-            # Try parsing ITS, LispM, etc formats
-            # @@@@ Use this to show the time offset
-            # @@@@ ITS :REPLY uses simply 3:17pm - do we care? Not yet.
-            for f in ["%d/%m/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
+            # Try parsing ITS, LispM, etc formats. Use this to show the time offset
+            for f in ["%m/%d/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
                 try:
                     dt = datetime.strptime(date,f)
                     break
                 except ValueError as e:
                     dt = None
                     # print("Error parsing date:",e, file=sys.stderr)
-            # @@@@ do the below adjustment also for full time specs! Easier with full datetime!
+            now = datetime.now()
             if dt is None:
                 # Try to parse 3:17pm. This could be east or west of here.
                 # Heuristics which work with a diff < 12 hours (i.e. not Japan vs California):
                 # Subtract local hour from remote hour; if > 12 or < 12, subtract/add 24.
                 # This gives the #hours ahead the sender is (so display e.g. "12:24:42 (-9 h)"
-                m = re.match(r"([0-9]+):([0-9]+)([ap]m)", date)
+                m = re.match(r" ?([0-9]+):([0-9]+)([ap]m)", date)
                 if m:
                     hr,min,ap = m.group(1,2,3)
                     if ap == "pm":
                         h += 12 # use 24-hour time
-                    now = datetime.now()
-                    if math.abs(now.minute-min) > 10:
-                        pass
-                    diff = hr-now.hour
-                    if diff > 12:
-                        diff -= 24
-                    elif diff < 12:
-                        diff += 24
-                    # @@@@ make a datetime adjusted with diff hours
+                    # @@@@ check if too far off?
+                    diffh = round(((int(hr)-now.hour)*60+int(min)-now.minute)/60)
+                    if diffh > 12:
+                        diffh -= 24
+                    elif diffh < -12:
+                        diffh += 24
+                # else:
+                #     print("Failed to parse partial timespec {!r}".format(date), file=sys.stderr)
+            else:
+                diffdt = dt-now # this is a timedelta with only days and seconds
+                diffh = round((diffdt.days*24*60*60 + diffdt.seconds)/(60*60))
             while len(pkt) > 0:
                 ll = str(pkt.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8").split("\n")
                 lines += ll
@@ -96,7 +98,7 @@ def get_send_message(searchlist=None):
             lines = [str(first,"ascii")]
     except ChaosError as m:
         print("Error!",m, file=sys.stderr)
-    return destuser,uname,host,dt if dt else date,"\n".join(lines)
+    return destuser,uname,host,dt if dt else date,diffh,"\n".join(lines)
 
 # May raise ChaosError
 def send_message(user,athost,text,timeout=5,myhostname=None):
