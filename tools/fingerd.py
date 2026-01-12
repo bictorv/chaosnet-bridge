@@ -50,7 +50,29 @@ def get_console_user():
         return uname
     return b""
 
+# Use this on macOS; detects idle time not only in terminal windows
+def get_idle_time_macos():
+    r = subprocess.run(["/usr/sbin/ioreg","-r","-c","IOHIDSystem"], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    rout = r.stdout.splitlines()
+    hididletime = next((line for line in rout if b"HIDIdleTime" in line), None)
+    if hididletime is None:
+        if debug:
+            print("Can't find idle time", file=sys.stderr)
+        return 0
+    m = re.match(r".*\"HIDIdleTime\" = ([0-9]+)",str(hididletime,"ascii"))
+    if m:
+        if debug:
+            print("Idle time {} => {} sec".format(m.group(1), round(int(m.group(1))/1000000000)), file=sys.stderr)
+        return round(int(m.group(1))/1000000000)
+    elif debug:
+        print("Can't parse idle time: {!r}".format(str(hididletime,"ascii")), file=sys.stderr)
+
 def get_idle_time(user):
+    import platform
+    if platform.system() == "Darwin":
+        idle = get_idle_time_macos()
+        if idle is not None:    # else failed somehow
+            return idle
     r = subprocess.run(["/usr/bin/w","-h",user], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
     rout = r.stdout.splitlines()
     idle = 65534
