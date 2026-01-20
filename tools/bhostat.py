@@ -34,49 +34,6 @@ verbose = False
 # Prefer not to ask for a host's name
 no_host_names = False
 
-@functools.cache
-def host_name(addr, timeout=2):
-    name,_ = host_name_and_addr(addr, timeout=timeout)
-    return name
-@functools.cache
-def host_name_and_addr(addr, timeout=2):
-    if isinstance(addr,int):
-        if addr < 0o400:
-            return addr
-        addr = "{:o}".format(addr)
-    # if no_host_names:
-    #     return addr
-    # if addr in host_names:
-    #     return host_names[addr]
-    try:
-        s = Simple(addr, "STATUS", options=dict(timeout=timeout))
-        src, data = s.result()
-    except ChaosError as msg:
-        if debug:
-            print("Error while getting STATUS of {}: {}".format(addr,msg), file=sys.stderr)
-        # host_names[addr] = "????"
-        # return addr
-        src = None
-    if src:
-        # BGDFAX pads with spaces (instead of nulls)
-        name = str(data[:32].rstrip(b'\x00 '), "ascii")
-        # host_names[addr] = name
-        return name,src
-    else:
-        if debug:
-            print("No STATUS from {:s}".format(addr), file=sys.stderr)
-        name = dns_name_of_address(addr, timeout=timeout, onlyfirst=True)
-        if debug:
-            print("Got DNS for {:s}: {}".format(addr,name), file=sys.stderr)
-        if name is None:
-            # host_names[addr] = addr
-            return addr,addr
-        else:
-            # host_names[addr] = name
-            return name,addr
-        # name = "{}".format(addr)
-    # return host_names[addr]
-
 #### Application protocols (@@@@ perhaps move to chaosnet.py?)
 
 # Oxymoron ("simple" means "datagram" in Chaosnet lingo), but here it means:
@@ -117,7 +74,7 @@ class SimpleProtocol:
             for n in nargs:
                 if isinstance(n,str):
                     ha =  dns_addr_of_name(n, timeout=2)
-                    print("ha {!r} n {!r}".format(ha,n), file=sys.stderr)
+                    # print("ha {!r} n {!r}".format(ha,n), file=sys.stderr)
                     hargs.extend(ha)
         # First do unicast, if any
         if len(hargs) > 0:

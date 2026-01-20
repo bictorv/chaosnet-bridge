@@ -13,8 +13,8 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from bhostat import Status, ChaosUptime, ChaosTime, ChaosFinger, ChaosDumpRoutingTable, ChaosName, ChaosLoadName, ChaosLoad, ChaosLastSeen, ChaosSimpleStatus, host_name, debug, SimpleStreamProtocol
-from chaosnet import dns_name_of_address, get_dns_host_info, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, ChaosError, EOFError
+from bhostat import Status, ChaosUptime, ChaosTime, ChaosFinger, ChaosDumpRoutingTable, ChaosName, ChaosLoadName, ChaosLoad, ChaosLastSeen, ChaosSimpleStatus, debug, SimpleStreamProtocol
+from chaosnet import dns_name_of_address, get_dns_host_info, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, host_name, ChaosError, EOFError
 from datetime import timedelta
 import sys, html, re
 

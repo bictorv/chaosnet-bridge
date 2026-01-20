@@ -39,6 +39,9 @@ class EOFError(ChaosError):
     pass
 class LOSError(ChaosError):
     pass
+class CLSError(ChaosError):
+    pass
+# @@@@ add FWD exception?
 class UnexpectedOpcode(ChaosError):
     pass
 
@@ -261,7 +264,7 @@ class PacketConn(NCPConn):
             self.remote = str(data,"ascii")
             return True
         elif opc == Opcode.CLS:
-            raise ChaosError(str(data,"ascii"))
+            raise CLSError(str(data,"ascii"))
         elif opc == Opcode.LOS:
             raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
@@ -289,6 +292,26 @@ class PacketConn(NCPConn):
             if debug:
                 print("read less than expected: {} < {}, going for more".format(len(data),dlen), file=sys.stderr)
             return data + self.get_message(dlen-len(data))
+
+    def get_string_until_eof(self):
+        # Returns the string, translated from LISPM chars
+        string = ""
+        while True:
+            opc,data = self.get_packet()
+            if opc == Opcode.CLS:
+                self.close()
+                return string
+            elif opc == Opcode.LOS:
+                raise LOSError("LOS: {}".format(str(data,"ascii")))
+            elif opc == Opcode.EOF:
+                return string
+            # @@@@ handle ANS too?
+            elif opc != Opcode.DAT:
+                raise UnexpectedOpcode("Unexpected opcode {}".format(opc))
+            else:
+                # Translate to Unix
+                out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                string += out
 
     def copy_until_eof(self):
         # Returns the number of bytes printed
@@ -363,6 +386,7 @@ class BroadcastConn(PacketConn):
 class StreamConn(NCPConn):
     def __init__(self):
         self.socket_address = stream_socket_address
+        self.opn_sent = False
         super().__init__()
 
     def send_data(self, data):
@@ -377,11 +401,14 @@ class StreamConn(NCPConn):
 
     def send_opn(self):
         self.send_data("OPN\r\n")
+        self.opn_sent = True
     def send_los(self, msg):
         # Can't do this over stream interface
         pass
     def send_cls(self, msg):
-        self.send_data("CLS {}\r\n".format(msg))
+        # Can only be sent before OPN
+        if not self.opn_sent:
+            self.send_data("CLS {}\r\n".format(msg))
 
     def listen(self, contact):
         self.contact = contact
@@ -421,7 +448,7 @@ class StreamConn(NCPConn):
             self.contact = contact
             return True
         elif op == b"CLS":
-            raise ChaosError(str(data,"ascii"))
+            raise CLSError(str(data,"ascii"))
         elif op == b"LOS":
             raise LOSError("LOS: {}".format(str(data,"ascii")))
         else:
@@ -440,6 +467,18 @@ class StreamConn(NCPConn):
                 print("< {} of {} from {}".format(len(d2), length, self), file=sys.stderr)
             data += d2
         return data
+
+    def get_string_until_eof(self):
+        # Returns the string, translated from LISPM chars
+        string = ""
+        while True:
+            data = self.get_bytes(488)
+            if len(data) == 0:
+                return string
+            else:
+                # Translate to Unix
+                out = str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")
+                string += out
 
     def copy_until_eof(self):
         # Returns the number of bytes printed
@@ -533,7 +572,7 @@ class Simple:
             dest = data[0] + data[1]*256
             if debug:
                 print("FWD received: use host {:o} contact {}".format(dest,str(data[2:],"ascii")), file=sys.stderr)
-            # This should be a separate exception so it can be handled, and FWD should be detected in other places too.
+            # @@@@ This should be a separate exception so it can be handled, and FWD should be detected in other places too.
             raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} contact {}".format(self.hname, dest, str(data[2:],"ascii")))
         else:
             raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(opcode_name(opc), self.hname, data))
@@ -577,6 +616,313 @@ class BroadcastSimple:
         if nonprinter is not None:
             nonprinter(nonprinted)
 
+################ Protocols giving structured data back
+
+class SimpleDict:
+    # Caller handle CLSError, LOSError and socket.error
+    def __init__(self, hname, args=[], options=None):
+        self.conn = PacketConn()
+        self.hname = hname
+        if options is None:
+            options = dict()
+        if 'timeout' not in options:
+            options['timeout'] = 2 # default timeout
+        self.conn.connect(hname, self.contact, args, options, simple=True)
+
+    def result_packet(self):
+        try:
+            opc, data = self.conn.get_packet()
+        except ChaosSocketError as m:
+            if debug:
+                print("Error getting packet from {!r}: {}".format(hname, m), file=sys.stderr)
+            return None,None
+        if opc == Opcode.ANS:
+            src = data[0] + data[1]*256
+            return src, data[2:]
+        elif opc == Opcode.LOS:
+            if debug:
+                print("LOS from {!r}: {}".format(hname, data), file=sys.stderr)
+            raise LOSError("LOS: {}".format(str(data,"ascii")))
+        elif opc == Opcode.CLS:
+            if debug:
+                print("CLS from {!r}: {}".format(hname, data), file=sys.stderr)
+            return None,None
+        elif opc == Opcode.FWD:
+            dest = data[0] + data[1]*256
+            print("FWD from {!r}: use host {:o}, contact {!r}".format(hname, dest, str(data[2:],"ascii")), file=sys.stderr)
+            # @@@@ This should be a separate exception so it can be handled, and FWD should be detected in other places too.
+            raise UnexpectedOpcode("Unexpected FWD from {}: use host {:o} contact {}".format(self.hname, dest, str(data[2:],"ascii")))
+        else:
+            raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(opcode_name(opc), self.hname, data))
+
+class StatusDict(SimpleDict):
+    contact = "STATUS"
+
+    def parse_status_data(self,src,data):
+        from struct import unpack
+        # First is the name of the node
+        # BGDFAX pads with spaces (instead of nulls)
+        hname = str(data[:32].rstrip(b'\x00 '),'ascii')
+        fstart = 32
+        dlen = len(data)
+        statuses = dict()
+        # Parse the data
+        try:
+            while fstart+4 < dlen:
+                # Two 16-bit words of subnet and field length
+                subnet,flen = unpack('H'*2,data[fstart:fstart+4])
+                # But subnet is +0400
+                assert (subnet > 0o400) and (subnet < 0o1000)
+                subnet -= 0o400
+                # Then a number of doublewords of info
+                if fstart+flen >= dlen:
+                    break
+                fields = unpack('{}I'.format(int(flen/2)), data[fstart+4:fstart+4+(flen*2)])
+                statuses[subnet] = dict(zip(('inputs','outputs','aborted','lost','crc_errors','hardware','bad_length','rejected'),
+                                                fields))
+                fstart += 4+flen*2
+        except AssertionError:
+            print('{} value error at {}: {!r}'.format(hname,fstart,data[fstart:]))
+        return hname,statuses
+
+    def dict_result(self):
+        src, data = self.result_packet()
+        if src is not None and data is not None:
+            hname, statuses = self.parse_status_data(src,data)
+            dname = dns_name_of_address(src, timeout=2)
+            return dict(dname=dname, hname=hname, status=statuses)
+        else:
+            return None
+
+class LoadDict(SimpleDict):
+    contact = "LOAD"
+    def parse_load_data(self, data):
+        lines = data.split(b"\r\n")
+        umatch = re.match(r"Users: (\d+)", str(lines[1],"ascii"))
+        lmatch = re.match(r"Fair Share: (\d+)%", str(lines[0],"ascii"))
+        return dict(users=int(umatch.group(1)) if umatch else None,
+                    share=int(lmatch.group(1)) if lmatch else None)
+    def dict_result(self):
+        src, data = self.result_packet()
+        if src is not None and data is not None:
+            return self.parse_load_data(data)
+
+def parse_idle_time_string(s):
+    # try to parse idle to a number (and consider weird representations like *:**)
+    # lispm FINGER servers only give HH:MM, while fingerd.py also can give NNd or *:**
+    # unix NAME servers also give MM or NNd (for days).
+    if isinstance(s,int):
+        return s
+    if s == "" or s is None:
+        return 0
+    elif s.startswith("*:**"):  # could be "*:**."
+        return 0xffff    # many minutes (@@@@ maybe should figure out where servers put the line)
+    # HH:MM?
+    imatch = re.match(r"(\d+):(\d+)", s)
+    if imatch:
+        return int(imatch.group(1))*60+int(imatch.group(2))
+    # NNd (days)?
+    imatch = re.match(r"(\d+)d", s)
+    if imatch:
+        return int(imatch.group(1))*7*24*60
+    # Plain minutes?
+    imatch = re.match(r"(\d+)", s)
+    if imatch:
+        return int(imatch.group(1))
+    # Don't know
+    return s
+
+class FingerDict(SimpleDict):
+    contact = "FINGER"
+    def parse_finger_data(self, data):
+        flds = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
+        # Let the caller do this or not
+        # flds[2] = parse_idle_time_string(flds[2])
+        return flds
+    def dict_result(self):
+        src, data = self.result_packet()
+        if src is not None and data is not None:
+            fields = self.parse_finger_data(data)
+            return dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])
+
+class NameDict:
+    # This gives the "finger" output as a list of dicts. It is complete overkill if you only want
+    # to know, e.g., who is logged on. But it is quite flexible and could be used to make a unified list
+    # of everyone at all hosts (cf bhostat_html).
+
+    def __init__(self, hname, args=[], options=None):
+        self.conn = StreamConn()
+        self.hname = hname
+        if options is not None and 'timeout' in options.keys():
+            self.timeout = options['timeout']
+        try:
+            self.conn.connect(hname, "NAME", args=args, options=options)
+        except socket.timeout as m:
+            raise ChaosError(m)
+
+    # Translate headers into labels for the resulting dict.
+    # You could give the first header special treatment, it *should* always be userid regardless of header(?)
+    # @@@@ *Perhaps* you could instead use heuristics, like:
+    # First is always userid. If it has "name" it is pname. If it its idle/tty it is that. If it has "location" it is that.
+    # Smells like regexps would work.
+    headerlabels = dict(userid=["-User-","User","Login"], # ITS, TOPS-20, Unix
+                        affiliation=["Affiliation"],      # Meta-header (ITS)
+                        pname=["--Full name--","Personal name","Name"], # ITS, TOPS-20, Unix
+                        jobname=["Jobnam","Subsys"], # ITS, TOPS-20
+                        idle=["Idle"],
+                        tty=["TTY"],
+                        location=["-Console location-","Console location"]) # ITS, TOPS-20
+    def headerlabel(self,h):
+        for lab,hdrs in self.headerlabels.items():
+            if h in hdrs:
+                return lab
+
+    def parse_header_line(self, hline):
+        hack_its_uname = False
+        headers = []
+        indexes = []
+        s = 0
+        # since regexps can't count, use explicit variants with --Header--, -Header-, and Header
+        for m in re.finditer("(--[A-Z]+[a-z]* ?[a-z]*--)|(-[A-Z]+[a-z]* ?[a-z]*-)|([A-Z]+[a-z]* ?[a-z]*)",hline): # "  +"
+            # save index of next header start
+            indexes.append(m.start() if m.start() != 1 else 0)
+            # save this header
+            headers.append(hline[m.start():m.end()].strip())
+            s = m.end()
+        if len(hline[s:].strip()) > 0:
+            headers.append(hline[s:].strip())
+        # ITS affiliation hack alert
+        if headers[0] == '-User-': # Check header before looking up in DNS, for speed
+            # Check if we're ITS - first find our FQDN
+            if re.match("^[0-7]+$",self.hname):
+                hn = dns_name_of_address(self.hname)
+            else:
+                hn = next((dns_name_of_address(a) for a in dns_addr_of_name_search(self.hname)),self.hname)
+            # Then check our host info
+            hi = get_dns_host_info(hn, timeout=2)
+            if hi and 'os' in hi and hi['os'].lower() == "its":
+                # inject an affiliation header
+                headers = headers[0:1]+["Affiliation"]+headers[1:]
+                hack_its_uname = True
+        return headers, indexes, hack_its_uname
+
+    def parse_data_lines(self, lines, indexes, hack_its_uname):
+        rows = []
+        for nl in lines:
+            row = []
+            istart = 1
+            s = 0
+            if hack_its_uname:
+                # Hack the first element
+                uname = nl[s:indexes[1]].strip()
+                # check for "UNAME FR" where F is affiliation and R is relation, and separate them.
+                # @@@@ Should probably separate F and R, too, but the caller can do that.
+                # Also strip the uniqifying digit on UNAME for multiple logins.
+                m = re.match(r"([A-Z0-9]+|___\d\d\d) +([A-Z]{1,2}|[$@+-]|-->)$",uname)
+                if m:
+                    # append them separately
+                    row.append(m.group(1).rstrip("0123456789"))
+                    row.append(m.group(2))
+                else:
+                    row.append(uname.rstrip("0123456789"))
+                    row.append("") # empty affiliation, perhaps
+                s = indexes[1]   # skip over this below
+                istart = 2
+            # Collect the elements of the row
+            for i in indexes[istart:]:
+                if not hack_its_uname:
+                    # Need to hack unix output: headers aren't left-aligned, need to "look backwards" from header offset
+                    if s > 0 and s < len(nl) and nl[s-1] != " ": # Not a space at the position under the header start
+                        s = nl.rfind(" ",0,s)+1
+                    # Also adjust the end, since the next column might also be misaligned
+                    if i < len(nl) and nl[i-1] != " ":
+                        i = nl.rfind(" ",s,i)+1
+                    row.append(nl[s:i].strip())
+                else:
+                    # Hack ITS Idle time "3." (which I don't remember what it means)
+                    # which is immediately next to the TTY, so the row has "3.T11" for idle 3 and TTY T11.
+                    # @@@@ Should use the header field name to decide whether to hack this.
+                    if re.match(r"(\d+)\.", nl[s:i].strip()):
+                        row.append(nl[s:i-1].strip())
+                    else:
+                        row.append(nl[s:i].strip())
+                s = i
+            # and the last one
+            row.append(nl[s:].strip())
+            rows.append(row)
+        return rows
+
+    def dict_result(self):
+        # Parse NAME output to give it structure. Ghastly, I'm sorry.
+
+        # Collect headers and save indexes of starts
+        # - Header heuristic: "[A-Z][a-z]+ ?[a-z]*" (with zero, one, or two dashes before+after)
+        # then read successive lines, and create rows based on header indexes.
+        # A gross hack is applied to detect and handle the affiliation part of ITS output (which doesn't have a header).
+        # Another slightly less gross hack is applied for unix output which doesn't have left-aligned headers
+
+        output = self.conn.get_string_until_eof().rstrip()
+        if "\t" in output:
+            output = output.expandtabs()
+            # Break it into lines
+        if "\r\n" in output:
+            lines = output.split("\r\n")
+        else:
+            lines = output.split("\n")
+            # Nobody there
+        if lines[0].startswith("No users") or lines[0] == "":
+            return None
+        # Parse headers
+        headers, indexes, hack_its_uname = self.parse_header_line(lines[0])
+        # Now collect the lines of data
+        rows = self.parse_data_lines(lines[1:], indexes, hack_its_uname)
+        # Now have headers and rows of data; construct a list of dicts
+        # where keys are (simplified standardized) headers
+        result = []
+        for row in rows:
+            r = dict()
+            for ri in range(len(row)):
+                h = self.headerlabel(headers[ri])
+                # avoid e.g. overwriting userid by Unix "Login Time". This makes dict comprehension hard though.
+                if h and h not in r.keys():
+                    r[h] = row[ri]
+            # If no userid found by header names, use the first item in the row
+            if 'userid' not in r and len(row) > 0:
+                r = dict(userid = row[0]) | r # make it appear first in the dict
+            result.append(r)
+        return result
+
+################ Get host name (and addr) using STATUS and/or DNS
+@functools.cache
+def host_name(addr, timeout=2):
+    name,_ = host_name_and_addr(addr, timeout=timeout)
+    return name
+@functools.cache
+def host_name_and_addr(addr, timeout=2):
+    if isinstance(addr,int):
+        if addr < 0o400:        # invalid address
+            return "{:o}".format(addr),addr
+    try:
+        s = Simple(addr, "STATUS", options=dict(timeout=timeout))
+        src, data = s.result()
+    except ChaosError as msg:
+        if debug:
+            print("Error while getting STATUS of {}: {}".format(addr,msg), file=sys.stderr)
+        src = None
+    if src:
+        # BGDFAX (a VAX) pads with spaces (instead of nulls)
+        name = str(data[:32].rstrip(b'\x00 '), "ascii")
+        return name,src
+    elif isinstance(addr,int):
+        if debug:
+            print("No STATUS from {:s}, trying DNS".format(addr), file=sys.stderr)
+        name = dns_name_of_address(addr, timeout=timeout, onlyfirst=True)
+        if debug:
+            print("Got DNS for {:s}: {}".format(addr,name), file=sys.stderr)
+        return name,addr
+    else:
+        return None,None
+
 ################ DNS
 # pip3 install dnspython
 import dns.resolver
@@ -584,6 +930,25 @@ import dns.resolver
 # Default DNS resolver for Chaosnet
 dns_resolver_name = 'DNS.Chaosnet.NET'
 dns_resolver_address = socket.gethostbyname(dns_resolver_name)
+# Default DNS searchlist
+default_dns_searchlist=["Chaosnet.NET"]
+
+def set_dns_search_list(nlist):
+    global default_dns_searchlist
+    default_dns_searchlist = nlist
+def local_domain():
+    try:
+        name,addr = host_name_and_addr("localhost") # requires late 2025 cbridge
+    except ChaosError:
+        return None
+    if addr and isinstance(addr,int):
+        name = dns_name_of_address(addr)
+    if name is None:
+        return None
+    if "." in name:
+        return name.split(".",maxsplit=1)[1]
+    else:
+        return name
 
 def set_dns_resolver_address(adorname):
     global dns_resolver_address
@@ -653,6 +1018,8 @@ def dns_addr_of_name(name, timeout=5):
     else:
         return r
 def dns_addr_of_name_search(name, timeout=5, searchlist=None):
+    if searchlist is None:
+        searchlist = default_dns_searchlist
     if "." in name or searchlist is None:
         return dns_addr_of_name(name, timeout=timeout)
     for s in searchlist:
@@ -742,3 +1109,7 @@ def dns_info_for(name, timeout=2, dns_address=dns_resolver_address, default_doma
                     return dict(name=n)|d
                 else:
                     return dict(name=n)
+
+# You typically want this, so do it
+if local_domain() is not None:
+    set_dns_search_list([local_domain(),"Chaosnet.NET"])
