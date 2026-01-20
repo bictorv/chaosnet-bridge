@@ -979,20 +979,23 @@ free_listener(struct listener *lsn)
 
 static pthread_mutex_t listener_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// unlink a listener from the list of registered_listeners
 static void
 unlink_listener(struct listener *ll, int dolock)
 {
   if (dolock) {
     PTLOCKN(listener_lock,"listener_lock");
   }
-  if (ll->lsn_prev == NULL) {
-    if (registered_listeners != NULL)
-      registered_listeners->lsn_prev = ll;
+  if (ll->lsn_prev == NULL) {	// first in list
+    // If ll is the last, its next will be NULL and registered_listeners too; otherwise cdr down ll.
     registered_listeners = ll->lsn_next;
+    if (registered_listeners != NULL)
+      registered_listeners->lsn_prev = ll->lsn_prev; // unlink ll completely
   } else {
-    ll->lsn_prev->lsn_next = ll->lsn_next;
+    // We're in the middle or at the end; ll has a prev
+    ll->lsn_prev->lsn_next = ll->lsn_next; // the next of the previous := this next
     if (ll->lsn_next != NULL)
-      ll->lsn_next->lsn_prev = ll->lsn_prev;
+      ll->lsn_next->lsn_prev = ll->lsn_prev; // the previous of the next := this previous
   }
   if (dolock) {
     PTUNLOCKN(listener_lock,"listener_lock");
@@ -1084,7 +1087,10 @@ find_matching_listener(struct chaos_header *ch, u_char *contact, int removep, in
       if (space) // undo
 	*space = ' ';
       val = ll->lsn_conn;
-      if (removep) unlink_listener(ll, 0);	// Remove it while we have lock
+      if (removep) {
+	unlink_listener(ll, 0);	// Remove it while we have lock
+	free_listener(ll);	// and free it too
+      }
       break;
     } else if (ncp_debug)
       printf("NCP checking listener \"%s\" against %s \"%s\" - mismatch\n", ll->lsn_contact, 
