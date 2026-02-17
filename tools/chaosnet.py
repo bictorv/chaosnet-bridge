@@ -93,6 +93,8 @@ class NCPConn:
         global debug
         debug = val
 
+    def abort(self):
+        self.sock.close()       # emergency close
     def close(self, msg=b"Thank you"):
         if debug:
             print("Closing {} with msg {}".format(self,msg), file=sys.stderr)
@@ -730,6 +732,8 @@ def parse_idle_time_string(s):
     if imatch:
         return int(imatch.group(1))
     # Don't know
+    # @@@@ This is likely the ITS/T20 "." next to idle time/tty messing things up
+    # print("#### Can't parse idle time {!r} ####".format(s), file=sys.stderr)
     return s
 
 class FingerDict(SimpleDict):
@@ -806,7 +810,7 @@ class NameDict:
                 hack_its_uname = True
         return headers, indexes, hack_its_uname
 
-    def parse_data_lines(self, lines, indexes, hack_its_uname):
+    def parse_data_lines(self, lines, indexes, headers, hack_its_uname):
         rows = []
         for nl in lines:
             row = []
@@ -829,7 +833,9 @@ class NameDict:
                 s = indexes[1]   # skip over this below
                 istart = 2
             # Collect the elements of the row
-            for i in indexes[istart:]:
+            for ix in range(istart,len(indexes)):
+                i = indexes[ix]
+                # for i in indexes[istart:]:
                 if not hack_its_uname:
                     # Need to hack unix output: headers aren't left-aligned, need to "look backwards" from header offset
                     if s > 0 and s < len(nl) and nl[s-1] != " ": # Not a space at the position under the header start
@@ -838,14 +844,12 @@ class NameDict:
                     if i < len(nl) and nl[i-1] != " ":
                         i = nl.rfind(" ",s,i)+1
                     row.append(nl[s:i].strip())
-                else:
-                    # Hack ITS Idle time "3." (which I don't remember what it means)
+                elif headers[ix] == "Idle" and nl[s:i].strip().endswith("."):
+                    # Hack ITS/TOPS-20 Idle time "3." (like "at top level input")
                     # which is immediately next to the TTY, so the row has "3.T11" for idle 3 and TTY T11.
-                    # @@@@ Should use the header field name to decide whether to hack this.
-                    if re.match(r"(\d+)\.", nl[s:i].strip()):
-                        row.append(nl[s:i-1].strip())
-                    else:
-                        row.append(nl[s:i].strip())
+                    row.append(nl[s:i-1].strip())
+                else:
+                    row.append(nl[s:i].strip())
                 s = i
             # and the last one
             row.append(nl[s:].strip())
@@ -875,7 +879,7 @@ class NameDict:
         # Parse headers
         headers, indexes, hack_its_uname = self.parse_header_line(lines[0])
         # Now collect the lines of data
-        rows = self.parse_data_lines(lines[1:], indexes, hack_its_uname)
+        rows = self.parse_data_lines(lines[1:], indexes, headers, hack_its_uname)
         # Now have headers and rows of data; construct a list of dicts
         # where keys are (simplified standardized) headers
         result = []
