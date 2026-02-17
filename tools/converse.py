@@ -496,7 +496,6 @@ class ConversationTab(AutoBottomScrollArea):
         super().__init__()
         self.prev_msg_datetime = None
         self.last_other = None
-        self.localtimezone = timezone(timedelta(hours=round(time.localtime().tm_gmtoff/60/60)))
 
         # This holds one conversation in a vertically scrolling container, contains the widgets, set as the centralWidget
         self.widget = QWidget() # widget that contains the collection of Vertical Box
@@ -515,7 +514,7 @@ class ConversationTab(AutoBottomScrollArea):
         if date is None:
             date = datetime.now()
         # Adjust date to local timezone
-        aslocal = date.astimezone(self.localtimezone)
+        aslocal = date.astimezone()
         if self.prev_msg_datetime is None or aslocal.date() != self.prev_msg_datetime.date():
             self.msglayout.addWidget(self.make_date_marker(aslocal))
             self.prev_msg_datetime = aslocal
@@ -593,7 +592,7 @@ class ConversationTab(AutoBottomScrollArea):
 
     def make_correspondent_line(self, other, date, diffhours, time=None):
         # Need to translate date to localtime for diffh to be useful.
-        nd = date.astimezone(self.localtimezone)
+        nd = date.astimezone()
         if self.last_other is None or other.lower() != self.last_other.lower():
             # New other end, show it together with the time
             tbox = QVBoxLayout()
@@ -1551,7 +1550,7 @@ class MainWindow(QMainWindow):
                 msg = self.input.toPlainText()
                 send_message(u,h, msg, timeout=getconf('send_message_timeout'),myhostname=getconf('my_chaos_hostname'))
                 if getconf('save_restore_messages_enabled'):
-                    self.message_store.save_message("to:{}@{}".format(u,h), make_send_message(msg))
+                    self.message_store.save_message("to:{}@{}".format(u,h), make_send_message(msg, date=datetime.now().astimezone()))
                 beep('message_sent')
                 ix = self.tbar.add_message(other, datetime.now(), 0, self.input.toPlainText(), is_from_net=False)
                 self.tbar.select_conversation(other)
