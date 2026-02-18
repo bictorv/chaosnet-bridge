@@ -410,7 +410,8 @@ class ConversationTabs(QTabWidget):
             self.destination_selector.add_destination(destination)
         # and make sure there is a watcher
         if self.destwatcher:
-            if settings.value('watcher_enabled'):
+            if getconf('watcher_enabled'):
+                qDebug("Starting watcher for {!r}".format(destination))
                 self.destwatcher.start_watcher(destination)
         return c
     def find_conversation(self, destination):
@@ -760,7 +761,10 @@ class DestinationSelector(QComboBox):
                         for d in new_dlist:
                             c = self.tabbar.find_conversation(d)
                             if c is None:
+                                qDebug("Adding conversation for {!r}".format(d))
                                 self.tabbar.add_conversation(d)
+                            else:
+                                qDebug("Already have conversation for {!r}: {!r}".format(d, c))
                     # also remove conversation tabs AFTER adding any new ones, to avoid stopping watcher
                     if debug:
                         qInfo("removing dlist: {!r}".format([removed for removed in dlist if removed not in new_dlist]))
@@ -925,7 +929,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
                                    "User is {}".format(ilevel))
         elif h in self.host_states:
             self.update_host_icon(h) # if there is state at least for the host
-        elif not settings.value('watcher_enabled'):
+        elif not getconf('watcher_enabled'):
             self.set_icon_for_dest(dest, QIcon(), None) # if watching is disabled
 
     # New handler for results
@@ -1902,7 +1906,7 @@ class MainWindow(QMainWindow):
         self.sendbutton.clicked.connect(self.sendit)
         self.sendlayout.addWidget(self.sendbutton)
 
-        if settings.value('multi_line_messages'):
+        if getconf('multi_line_messages'):
             self.input = self.make_message_multiline()
         else:
             self.input = self.make_message_oneliner()
@@ -1917,7 +1921,7 @@ class MainWindow(QMainWindow):
         self.destwatcher = ConverseDestWatcher()
         self.destwatcher.set_debug(debug)
         self.destwatcher.set_interval(getconf('watcher_interval'))
-        if not settings.value('watcher_enabled'):
+        if not getconf('watcher_enabled'):
             self.destwatcher.pause()
         self.destwatcher.set_tabbar(self.tbar)
         # End all the workers when application quits.
@@ -1982,9 +1986,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Chaosnet Converse {}".format(app.applicationVersion()))
         # Initialize settings
         set_dns_resolver_address(getconf('dns_server'))
-        self.resize(settings.value("MainWindowSize",getconf('MainWindowSize')))
-        if settings.value("MainWindowPosition"):
-            self.move(settings.value("MainWindowPosition"))
+        self.resize(getconf('MainWindowSize'))
+        if getconf("MainWindowPosition"):
+            self.move(getconf("MainWindowPosition"))
 
         # initialize layout etc
         self.init_layout_and_boxes()
@@ -1992,16 +1996,17 @@ class MainWindow(QMainWindow):
         di = settings.value('destination_list_index') # get this before doing the add_conversation below
         if settings.value('destination_list'):
             self.cbox.insertItems(0,settings.value('destination_list'))
-            if settings.value('restore_conversation_tabs'):
+            if getconf('restore_conversation_tabs'):
                 for d in settings.value('destination_list'):
                     if "@" in d:
-                        if verbose:
+                        if verbose or debug:
                             qInfo("Adding conversation for {!r}".format(d))
                         self.tbar.add_conversation(d)
                     else:
-                        if verbose:
+                        if verbose or debug:
                             qInfo("Bad destination {!r} in destination_list {!r}".format(d, settings.value('destination_list')))
                         break
+
         if di is not None:
             qDebug("Setting destination index {}".format(di))
             self.cbox.setCurrentIndex(di)
