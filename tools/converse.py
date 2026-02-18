@@ -49,7 +49,7 @@
 # Notifications: start off with terminal-notifier (https://github.com/julienXX/terminal-notifier)?
 
 
-import sys, re, multiprocessing, os, time
+import sys, re, os, time
 from datetime import datetime, timezone, timedelta
 from chaosnet import ChaosSocketError, ChaosError, CLSError, dns_name_of_address, dns_addr_of_name_search, set_dns_resolver_address, local_domain, get_dns_host_info
 from qsend import get_send_message, send_message, parse_send_message, make_send_message
@@ -58,9 +58,7 @@ from enum import auto, StrEnum
 # pip3 install nocasedict (see https://github.com/pywbem/nocasedict)
 from nocasedict import NocaseDict
 
-# For now, try pyqt6.
-# https://www.riverbankcomputing.com/static/Docs/PyQt6/api/qtwidgets/qtwidgets-module.html
-
+# For now, use pyqt6.
 from PyQt6.QtCore import Qt, QSettings, QPoint, QSize, QUrl, QThread, QTimer, qInfo, qDebug, qWarning, QRect, QSysInfo, QDir
 from PyQt6.QtCore import QCommandLineOption, QCommandLineParser, QRegularExpression, QStandardPaths
 from PyQt6.QtWidgets import (QPlainTextEdit, QTextEdit, QMainWindow, QSpacerItem, QSizePolicy)
@@ -78,7 +76,7 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.10.0")
+app.setApplicationVersion("0.10.2")
 
 ################ Default configuration
 debug = False
@@ -127,6 +125,7 @@ def getconf(opt):
     return settings.value(opt, default_config[opt] if opt in default_config else None)
 
 app.setStyleSheet(#"QTabBar {background-color: #e8e8e8;}\n"+ # Has no effect in the pyinstaller app, which is where it's needed
+    "QTabWidget::tab-bar {left : 0;}\n"+ # On macOS, tabs are normally vertically centered, this top-aligns them
     "MessageDisplayBox { border-radius: 7px; border: 1px solid grey; }\n"+
     "QMainWindow {"+"background-color: {};".format(getconf('background_color'))+"}\n")
 
@@ -259,18 +258,16 @@ class ConversationTabs(QTabWidget):
     destwatcher = None          # Destination watcher
     messages_unread = None      # dict dest -> any_messages_unread? (or number_of_messages_unread?)
 
-    def __init__(self, parent = None, force_top_valign=True):
+    def __init__(self, parent = None):
         super().__init__(parent)
         self.messages_unread = NocaseDict()
+        self.messages_unread_disabled = False
         self.unread_marker = self.make_icon("red")
         self.destination_selector = None
 
         # make the tabs go west AND horizontal
         self.setTabBar(ConversationTabBar())
         self.setTabPosition(QTabWidget.TabPosition.West)
-        if force_top_valign:                                      # On macOS, tabs are normally vertically centered
-            self.setStyleSheet("QTabWidget::tab-bar {left : 0;}")  # using stylesheet on initializing
-
         # set up currentChanged signal to also change destination_selector, and clear red icon
         self.currentChanged.connect(self.selected_tab_changed)
         # set up tabCloseRequested signal to do close_conversation which also removes from destination_list
@@ -323,10 +320,16 @@ class ConversationTabs(QTabWidget):
         # print("Made icon from pixmap for color {!r}: {!r}".format(colorspec,pm), file=sys.stderr)
         return QIcon(pm)
 
+    def set_messages_unread_disabled(self, value):
+        self.messages_unread_disabled = value
     def messages_unread_for_dest(self, dest):
+        if self.messages_unread_disabled:
+            return False
         val = self.messages_unread is not None and dest in self.messages_unread and self.messages_unread[dest]
         return val
     def set_messages_unread_for_dest(self, dest, value):
+        if self.messages_unread_disabled:
+            return
         if self.messages_unread is None:
             self.messages_unread = NocaseDict()
         self.messages_unread[dest] = value
@@ -380,7 +383,8 @@ class ConversationTabs(QTabWidget):
         if c != self.currentWidget():
             qDebug("Added msg to non-current conversation {}, marking it as unread".format(destination))
             self.set_messages_unread_for_dest(destination, True)
-            self.set_conversation_icon(c, self.unread_marker)
+            if not self.messages_unread_disabled:
+                self.set_conversation_icon(c, self.unread_marker)
         else:
             qDebug("Added msg to current conversation {}, marking it as read".format(destination))
             self.set_messages_unread_for_dest(destination, False)
@@ -1063,6 +1067,7 @@ class MessageStorage:
         n = 0
         savefile = getconf('conversation_save_file')
         try:
+            self.main_window.disable_unread_markers()
             with open(savefile, "r") as f:
                 while True:
                     destuser, msg = self.read_message(f)
@@ -1070,7 +1075,7 @@ class MessageStorage:
                     if destuser is None or msg is None:
                         break   # assume EOF/done
                     n = n+1
-                    _,uname,host,date,diffh,text,_ = parse_send_message(msg, destuser=destuser, searchlist=getconf('dns_search_list'))
+                    _,uname,host,date,diffh,text = parse_send_message(msg, destuser=destuser, searchlist=getconf('dns_search_list'))
                     self.main_window.add_message(uname, host, date, diffh, text, is_from_net=not destuser.startswith("to:"))
             # Clear all "unread" markers.
             self.main_window.clear_all_unread_markers()
@@ -1078,6 +1083,8 @@ class MessageStorage:
             pass                # we're done
         except OSError as m:
             qInfo("Failed to restore messages: {}".format(m))
+        finally:
+            self.main_window.enable_unread_markers()
         # @@@@ Put this also in status field
         qInfo("Restored {} messages from {!r}, {} bytes".format(n, savefile, os.path.getsize(savefile)))
 
@@ -1149,7 +1156,7 @@ class MessageReceiver:
         if vals is None:
             progress_callback.emit((vals,"No message received by get_send_message!")) # perhaps for some other user
             return
-        destuser,uname,host,date,diffh,text,raw = vals
+        destuser,uname,host,date,diffh,text = vals
         if destuser is None:
             progress_callback.emit((destuser,"Message for no user received?")) # Invalid request
             return
@@ -1175,7 +1182,7 @@ class MessageReceiver:
                 progress_callback.emit(("TOPS-20 From: header being removed",m.group(0)))
                 text = text[m.end():].lstrip()
         if destuser.lower() == self.myuser:
-            return (uname,host,date,diffh,text,raw)
+            return (uname,host,date,diffh,text)
         else:
             progress_callback.emit(("Message for other user slipped through",destuser))
 
@@ -1201,7 +1208,7 @@ class MessageReceiver:
         if data is None:
             qDebug("No message received?!")
             return
-        uname, host, date, diffhours, text, raw = data
+        uname, host, date, diffhours, text = data
         if self.debugp:
             qDebug("Message received from {!r} at {!r}".format(uname,host))
         self.main_window.add_message(uname, host, date, diffhours, text, True)
@@ -1648,11 +1655,21 @@ class MainWindow(QMainWindow):
             qDebug("Failed to replace input field!? still {!r}".format(self.input))
         if v and not isinstance(self.input, MessageInputMultiLine):
             qDebug("Installing new MessageInputMultiLine")
+            old_txt = self.input.toPlainText()
+            old_pos = self.input.cursorPosition() # get the QLineEdit position
             new = self.make_message_multiline()
+            new.setPlainText(old_txt) # in case there was text in the old input field
+            new_cursor = new.textCursor()
+            new_cursor.setPosition(old_pos) # move the cursor
+            new.setTextCursor(new_cursor)
             replace_input(new)
         elif not v and not isinstance(self.input, MessageInputBox):
             qDebug("Installing new MessageInputBox")
+            old_txt = self.input.toPlainText()
+            old_pos = self.input.textCursor().position() # get QPlainTextEdit position
             new = self.make_message_oneliner()
+            new.setText(old_txt.replace("\n"," ")) # in case there was text in the old input field
+            new.setCursorPosition(old_pos)         # update the position
             replace_input(new)
 
     def set_save_restore_messages(self, value=None):
@@ -1722,6 +1739,10 @@ class MainWindow(QMainWindow):
             self.destwatcher.start_watcher(self.cbox.itemText(i))
         pass
 
+    def disable_unread_markers(self):
+        self.tbar.set_messages_unread_disabled(True)
+    def enable_unread_markers(self):
+        self.tbar.set_messages_unread_disabled(False)
     def clear_all_unread_markers(self):
         self.tbar.set_messages_unread_for_all(False)
 
@@ -1757,9 +1778,9 @@ class MainWindow(QMainWindow):
                 # print("Setting icon for {!r} to {!r}".format(title,icon), file=sys.stderr)
                 act.setIcon(icon)
             return act
-        def boolean_setting_action(title, handler, conf):
+        def boolean_setting_action(title, handler, conf, shortcut=None):
             # @@@@ should generate handler based on conf
-            a = make_action(title, handler)
+            a = make_action(title, handler, shortcut=shortcut)
             a.setCheckable(True)
             a.setChecked(getconf(conf))
             return a
@@ -1796,7 +1817,8 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.restore_conversations_action)
         self.multi_line_messages_action = boolean_setting_action("Use multi-line messages",
                                                                  self.set_multi_line_messages,
-                                                                 'multi_line_messages')
+                                                                 'multi_line_messages',
+                                                                 shortcut="Ctrl+Shift+M")
         settings_menu.addAction(self.multi_line_messages_action)
         settings_menu.addAction(make_action("Set lines in multi-line message input...",
                                             self.set_multi_line_message_lines))
