@@ -17,8 +17,6 @@
 #    limitations under the License.
 
 # TODO:
-# x? if restore_conversation_tabs, add conversations for new destinations after editing them or adding them
-# x? make sure destinations are always saved when added
 # - keep order of conversations in synch with destination list: add at top (except initially), and after editing
 # - do actual sending in a separate thread, interruptible by Cancel button. Cf how MessageReceiver works, but not persistent.
 # - Update documentation (constantly)
@@ -76,7 +74,7 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.10.2")
+app.setApplicationVersion("0.10.3")
 
 ################ Default configuration
 debug = False
@@ -107,7 +105,7 @@ default_config = dict(
     # Sigh. DNS is re-used everywhere, but needs search list, which isn't global. This is somewhat reasonable.
     dns_search_list=[local_domain(), "Chaosnet.net"],
     dns_server="DNS.Chaosnet.net",
-    MainWindowSize=QSize(600,400), # @@@@ make this depend on font size @@@@ make font configurable?
+    MainWindowSize=QSize(650,400), # @@@@ make this depend on font size @@@@ make font configurable?
     # MainWindowPosition=None,
     # Sounds:
     sound_effects=True,
@@ -364,6 +362,8 @@ class ConversationTabs(QTabWidget):
             self.tabIcon(i)
     def update_all_icons(self):
         # @@@@ to work properly after changing idle/away limits, need the idle time, but it isn't saved. Should be!
+        if self.is_dummy_page():
+            return
         for i in range(self.count()):
             d = self.tabText(i)
             if not self.messages_unread_for_dest(d):
@@ -415,7 +415,8 @@ class ConversationTabs(QTabWidget):
         return c
     def find_conversation(self, destination):
         # find the conversation for a message destination
-        return next((self.widget(i) for i in range(self.count()) if self.tabText(i).lower() == destination.lower()),None)
+        if not self.is_dummy_page():
+            return next((self.widget(i) for i in range(self.count()) if self.tabText(i).lower() == destination.lower()),None)
     def select_conversation(self, destination):
         c = self.find_conversation(destination)
         if c:
@@ -451,8 +452,8 @@ class ConversationTabs(QTabWidget):
             self.destwatcher.remove_watcher(destination)
     def remove_all_conversations(self):
         # first clear the conversations
-        for i in range(self.count()):
-            if self.widget(i) != self.dummy_page:
+        if not self.is_dummy_page():
+            for i in range(self.count()):
                 qDebug("Clearing conversation with {!r}".format(self.tabText(i)))
                 self.widget(i).clear_conversation()
         # then remove all tabs
@@ -460,8 +461,8 @@ class ConversationTabs(QTabWidget):
         self.add_dummy_page()
         
     def save_conversations(self):
-        for i in range(self.count()):
-            if self.widget(i) != self.dummy_page:
+        if not self.is_dummy_page():
+            for i in range(self.count()):
                 self.widget(i).save_conversation(i)
         
 
@@ -489,8 +490,8 @@ class ConversationTabs(QTabWidget):
                 qInfo("Clearing conversation with {!r}".format(destination))
             c.clear_conversation()
     def clear_all_conversations(self):
-        for i in range(self.count()):
-            if self.widget(i) != self.dummy_page:
+        if not self.is_dummy_page():
+            for i in range(self.count()):
                 if verbose:
                     qInfo("Clearing conversation with {!r}".format(self.tabText(i)))
                 self.widget(i).clear_conversation()
@@ -646,7 +647,8 @@ class DestinationSelector(QComboBox):
             if txt != canonical:
                 self.setItemText(newidx,canonical)
         else:
-            qInfo("Bad itemtext {!r}, ignoring".format(txt))
+            if verbose:
+                qInfo("Bad itemtext {!r}, ignoring".format(txt))
             return
         qDebug("Saving destination index {}".format(newidx))
         settings.setValue('destination_list_index', newidx)
@@ -664,7 +666,8 @@ class DestinationSelector(QComboBox):
                 self.tabbar.setCurrentIndex(i)
             else:
                 # print("current_destination_changed: can't find conversation with {}".format(dest), file=sys.stderr)
-                qInfo("Destination changed to {!r}, adding a conversation for it".format(dest))
+                if verbose:
+                    qInfo("Destination changed to {!r}, adding a conversation for it".format(dest))
                 if getconf('restore_conversation_tabs'):
                     self.tabbar.add_conversation(dest)
     def find_destination(self, dest):
@@ -732,8 +735,9 @@ class DestinationSelector(QComboBox):
                 # Canonicalize/expand host names
                 new_dlist = [self.canonicalize_dest(d.strip()) for d in input.strip().split("\n")]
                 # @@@@ also remove duplicates after expansion
-                qInfo("Old dlist: {!r}".format(dlist))
-                qInfo("New dlist: {!r}".format(new_dlist))
+                if debug:
+                    qInfo("Old dlist: {!r}".format(dlist))
+                    qInfo("New dlist: {!r}".format(new_dlist))
                 badd = next((d for d in new_dlist if not re.match(r"^[\w_.-]+@[\w_.-]+$",d)),None)
                 if badd:
                     response = QMessageBox.warning(self,"Syntax error","<b>Syntax error<:/b> Destination should be user@host: "+badd,
@@ -758,7 +762,8 @@ class DestinationSelector(QComboBox):
                             if c is None:
                                 self.tabbar.add_conversation(d)
                     # also remove conversation tabs AFTER adding any new ones, to avoid stopping watcher
-                    qInfo("removing dlist: {!r}".format([removed for removed in dlist if removed not in new_dlist]))
+                    if debug:
+                        qInfo("removing dlist: {!r}".format([removed for removed in dlist if removed not in new_dlist]))
                     for d in [removed for removed in dlist if removed not in new_dlist]:
                         qDebug("removing conversation {!r}".format(d))
                         self.tabbar.remove_conversation(d)
@@ -935,7 +940,8 @@ class ConverseDestWatcher(ChaosUserWatcher):
         if self.debugp:
             qDebug("got_result: host {!r} up-p {!r} users {!r}".format(host,host_up_p,users))
         if self.paused:
-            qInfo("got_result: watching is paused, ignoring result")
+            if debug:
+                qInfo("got_result: watching is paused, ignoring result")
             return
         # Update icon based on up-p if it changed
         if host not in self.host_states or self.host_states[host] != host_up_p:
@@ -1189,9 +1195,11 @@ class MessageReceiver:
 
     # These run in the "main thread"
     def receiver_finished(self, val):
-        qInfo("Receiver finished: {!r}".format(val))
+        if verbose:
+            qInfo("Receiver finished: {!r}".format(val))
     def receiver_progress(self, val):
-        qInfo("Receiver: {!r}".format(val))
+        if verbose:
+            qInfo("Receiver: {!r}".format(val))
     def receiver_error(self,data):
         try:
             etype, exc, trace_string = data
@@ -1271,9 +1279,11 @@ class ScreenLockWatcher:
             if self.debugp:
                 qDebug("No change in locked status")
     def screen_locked_finished(self, val):
-        qInfo("Screen lock watcher finished: {!r}".format(val))
+        if verbose:
+            qInfo("Screen lock watcher finished: {!r}".format(val))
     def screen_locked_progress(self, val):
-        qInfo("Screen lock watcher: {!r}".format(val))
+        if verbose:
+            qInfo("Screen lock watcher: {!r}".format(val))
     def screen_locked_error(self,data):
         try:
             etype, exc, trace_string = data
@@ -1458,7 +1468,7 @@ class MainWindow(QMainWindow):
     def set_icon_color(self, conf_field, action, color=None):
         c = self.edit_background_color(conf_field) if not color else color
         if c:
-            if self.debugp:
+            if debug:
                 qDebug("Setting icon for {!r} to {!r}".format(action,c))
             action.setIcon(self.make_icon(c))   # the menu action icon
             self.destwatcher.initialize_icons() # the destination icons
@@ -1475,10 +1485,14 @@ class MainWindow(QMainWindow):
         self.tbar.remove_all_conversations()
     def clear_current_conversation(self):
         currdest = self.tbar.tabText(self.tbar.currentIndex())
+        if self.tbar.is_dummy_page():
+            return
         if currdest and len(currdest) > 0:
             qDebug("Clearing conversation with {}".format(currdest))
             self.tbar.clear_conversation(currdest)
     def remove_current_conversation(self):
+        if self.tbar.is_dummy_page():
+            return
         currdest = self.tbar.tabText(self.tbar.currentIndex())
         if currdest and len(currdest) > 0:
             qDebug("Removing conversation with {}".format(currdest))
@@ -1501,14 +1515,13 @@ class MainWindow(QMainWindow):
                 return
         # Reset settings
         settings.clear()
-        # for s in list(default_config.keys()) + ["MainWindowSize", "MainWindowPosition"]:
-        #     settings.setValue(s,default_config[s] if s in default_config else None)
         # Also update effect of settings: background colors
         self.reset_background_colors()
         # also fix watcher icons
         self.reset_icon_colors()
         self.destwatcher.set_interval(getconf('watcher_interval'))
         self.set_destination_checks_enabled(getconf('watcher_enabled')) # this has side effects
+        # self.clear_saved_messages()
         # Resize to default
         if getconf('MainWindowSize'):
             self.resize(getconf('MainWindowSize'))
@@ -1519,6 +1532,7 @@ class MainWindow(QMainWindow):
             # Else find the middle of the screen we're on
             scr = app.screenAt(self.pos())
             sz = scr.size()
+            wsz = getconf('MainWindowSize')
             self.move(QPoint(round((sz.width()-wsz.width())/2), round((sz.height()-wsz.height())/2)))
 
     def sendit(self):
@@ -1682,13 +1696,14 @@ class MainWindow(QMainWindow):
         settings.setValue('save_restore_messages_enabled', checked)
         self.message_store.init_conversation_save_file()
 
-    def clear_saved_messages(self):
-        r = QMessageBox.question(self, "Clear saved messages?",
-                                 "Do you want to clear all saved messages?")
-        if r == QMessageBox.StandardButton.No:
-            qInfo("Cancelled clearing saved messages")
-        else:
-            self.message_store.clear_messages()
+    def clear_saved_messages(self, force=False):
+        if not force:
+            r = QMessageBox.question(self, "Clear saved messages?",
+                                     "Do you want to clear all saved messages?")
+            if r == QMessageBox.StandardButton.No:
+                qInfo("Cancelled clearing saved messages")
+                return
+        self.message_store.clear_messages()
 
     def set_conversation_save_file(self, fname=None):
         qDebug("set_conversation_save_file: {!r}".format(fname))
@@ -1698,7 +1713,6 @@ class MainWindow(QMainWindow):
                                               os.path.dirname(getconf('conversation_save_file')),
                                               # filter=QDir.Filter.Files | QDir.Filter.Hidden | QDir.Filter.Writable,
                                               options=QFileDialog.Option.DontConfirmOverwrite)
-            qInfo("getSaveFileName: {!r} , {!r}".format(fname, filter))
         if fname and len(fname) > 0:
             if os.path.isfile(fname) and not os.access(fname, os.W_OK | os.R_OK):
                 QMessageBox.information(self,"Not read/writable",
@@ -1981,10 +1995,12 @@ class MainWindow(QMainWindow):
             if settings.value('restore_conversation_tabs'):
                 for d in settings.value('destination_list'):
                     if "@" in d:
-                        qInfo("Adding conversation for {!r}".format(d))
+                        if verbose:
+                            qInfo("Adding conversation for {!r}".format(d))
                         self.tbar.add_conversation(d)
                     else:
-                        qInfo("Bad destination {!r} in destination_list {!r}".format(d, settings.value('destination_list')))
+                        if verbose:
+                            qInfo("Bad destination {!r} in destination_list {!r}".format(d, settings.value('destination_list')))
                         break
         if di is not None:
             qDebug("Setting destination index {}".format(di))
