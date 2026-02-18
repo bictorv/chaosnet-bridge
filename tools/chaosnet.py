@@ -753,6 +753,7 @@ class NameDict:
     # This gives the "finger" output as a list of dicts. It is complete overkill if you only want
     # to know, e.g., who is logged on. But it is quite flexible and could be used to make a unified list
     # of everyone at all hosts (cf bhostat_html).
+    # NOTE that since the "finger" output isn't very standardized, there are a few hacks here.
 
     def __init__(self, hname, args=[], options=None):
         self.conn = StreamConn()
@@ -783,6 +784,7 @@ class NameDict:
 
     def parse_header_line(self, hline):
         hack_its_uname = False
+        hack_unix_headers = False
         headers = []
         indexes = []
         s = 0
@@ -795,64 +797,58 @@ class NameDict:
             s = m.end()
         if len(hline[s:].strip()) > 0:
             headers.append(hline[s:].strip())
-        # ITS affiliation hack alert
-        if headers[0] == '-User-': # Check header before looking up in DNS, for speed
-            # Check if we're ITS - first find our FQDN
-            if re.match("^[0-7]+$",self.hname):
-                hn = dns_name_of_address(self.hname)
-            else:
-                hn = next((dns_name_of_address(a) for a in dns_addr_of_name_search(self.hname)),self.hname)
-            # Then check our host info
-            hi = get_dns_host_info(hn, timeout=2)
-            if hi and 'os' in hi and hi['os'].lower() == "its":
-                # inject an affiliation header
-                headers = headers[0:1]+["Affiliation"]+headers[1:]
-                hack_its_uname = True
-        return headers, indexes, hack_its_uname
+        # OS specific hacks
+        hi = get_dns_host_info(get_canonical_name(self.hname), timeout=2)
+        if hi and 'os' in hi:
+            if hi['os'].lower() == "its":
+                # ITS affiliation hack alert
+                if headers[0] == '-User-':
+                    # inject an affiliation header
+                    headers = headers[0:1]+["Affiliation"]+headers[1:]
+                    hack_its_uname = True
+            elif hi['os'].lower() in ["unix","linux","macos"]: # @@@@ add as required
+                # Need a hack because headers aren't left-adjusted
+                hack_unix_headers = True
+        return headers, indexes, hack_its_uname, hack_unix_headers
 
-    def parse_data_lines(self, lines, indexes, headers, hack_its_uname):
+    def parse_data_lines(self, lines, indexes, headers, hack_its_uname=False, hack_unix_headers=False):
         rows = []
         for nl in lines:
             row = []
-            istart = 1
-            s = 0
-            if hack_its_uname:
-                # Hack the first element
-                uname = nl[s:indexes[1]].strip()
-                # check for "UNAME FR" where F is affiliation and R is relation, and separate them.
-                # @@@@ Should probably separate F and R, too, but the caller can do that.
-                # Also strip the uniqifying digit on UNAME for multiple logins.
-                m = re.match(r"([A-Z0-9]+|___\d\d\d) +([A-Z]{1,2}|[$@+-]|-->)$",uname)
-                if m:
-                    # append them separately
-                    row.append(m.group(1).rstrip("0123456789"))
-                    row.append(m.group(2))
-                else:
-                    row.append(uname.rstrip("0123456789"))
-                    row.append("") # empty affiliation, perhaps
-                s = indexes[1]   # skip over this below
-                istart = 2
-            # Collect the elements of the row
-            for ix in range(istart,len(indexes)):
-                i = indexes[ix]
-                # for i in indexes[istart:]:
-                if not hack_its_uname:
-                    # Need to hack unix output: headers aren't left-aligned, need to "look backwards" from header offset
+            hadj = 0            # header adjust...
+            for i in range(len(indexes)):
+                hdr = headers[i+hadj] # the current header
+                s = indexes[i]
+                e = indexes[i+1] if i+1 < len(indexes) else len(nl) # the next field start
+                fld = nl[s:e].strip()
+                if hack_its_uname and hdr == "-User-":
+                    # Hack the first element
+                    # check for "UNAME FR" where F is affiliation and R is relation, and separate them.
+                    # @@@@ Should probably separate F and R, too, but the caller can do that.
+                    # Also strip the uniqifying digit on UNAME for multiple logins.
+                    m = re.match(r"([A-Z0-9]+|___\d\d\d) +([A-Z]{1,2}|[$@+-]|-->)$",fld)
+                    if m:
+                        # append them separately
+                        row.append(m.group(1).rstrip("0123456789"))
+                        row.append(m.group(2))
+                    else:
+                        row.append(fld.rstrip("0123456789"))
+                        row.append("") # empty affiliation, perhaps
+                    hadj = 1           # adjust for affiliation already added
+                elif hdr == "Idle" and fld.endswith("."):
+                    # Hack ITS/TOPS-20 Idle time "3." (meaning something like "at top level input")
+                    # which is immediately next to the TTY, so the row has "3.T11" for idle 3 and TTY T11.
+                    row.append(fld[:-1])
+                elif hack_unix_headers:
+                    # Hack unix output: headers aren't left-aligned, need to "look backwards" from header offset
                     if s > 0 and s < len(nl) and nl[s-1] != " ": # Not a space at the position under the header start
                         s = nl.rfind(" ",0,s)+1
                     # Also adjust the end, since the next column might also be misaligned
-                    if i < len(nl) and nl[i-1] != " ":
-                        i = nl.rfind(" ",s,i)+1
-                    row.append(nl[s:i].strip())
-                elif headers[ix] == "Idle" and nl[s:i].strip().endswith("."):
-                    # Hack ITS/TOPS-20 Idle time "3." (like "at top level input")
-                    # which is immediately next to the TTY, so the row has "3.T11" for idle 3 and TTY T11.
-                    row.append(nl[s:i-1].strip())
+                    if e < len(nl) and nl[i-1] != " ":
+                        e = nl.rfind(" ",s,e)+1
+                    row.append(nl[s:e].strip())
                 else:
-                    row.append(nl[s:i].strip())
-                s = i
-            # and the last one
-            row.append(nl[s:].strip())
+                    row.append(fld)
             rows.append(row)
         return rows
 
@@ -877,9 +873,9 @@ class NameDict:
         if lines[0].startswith("No users") or lines[0] == "":
             return None
         # Parse headers
-        headers, indexes, hack_its_uname = self.parse_header_line(lines[0])
+        headers, indexes, hack_its_uname, hack_unix_headers = self.parse_header_line(lines[0])
         # Now collect the lines of data
-        rows = self.parse_data_lines(lines[1:], indexes, headers, hack_its_uname)
+        rows = self.parse_data_lines(lines[1:], indexes, headers, hack_its_uname, hack_unix_headers)
         # Now have headers and rows of data; construct a list of dicts
         # where keys are (simplified standardized) headers
         result = []
@@ -1003,6 +999,12 @@ def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
             return n
     r = DNSRecord(dns.rdatatype.PTR, name, parse_ptr, timeout=timeout, options=dict(onlyfirst=onlyfirst)).result
     return r[0] if r and len(r) > 0 else r
+@functools.cache
+def get_canonical_name(hname, timeout=5):
+    if re.match("^[0-7]+$",hname):
+        return dns_name_of_address(hname)
+    else:
+        return next((dns_name_of_address(a) for a in dns_addr_of_name_search(hname)),hname)
 @functools.cache
 def get_dns_host_info(name, timeout=5):
     def parse_hinfo(d, options=None):
