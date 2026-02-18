@@ -20,13 +20,12 @@ from chaosnet import StreamConn, PacketConn, ChaosError, EOFError, dns_name_of_a
 from datetime import datetime, timezone, timedelta
 import time
 
-# Listens to SEND, returns 6 values or None:
+# Listens to SEND, returns 5 values or None:
 # destuser: the user for whom the message is
 # uname, host: the username and host the message is from
 # datestamp: the datestamp of the message (might be in a remote timezone, beware)
 # diffhours: timezone difference (in rounded hours) between the datestamp and local time
 # text: the text of the message
-# pkt: the raw original message
 def get_send_message(searchlist=None, conn=None):
     from getpass import getuser
     me = getuser()
@@ -76,7 +75,7 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
         else:
             mytzp = re.match(r"([-+])(\d\d)(\d\d)", time.strftime("%z"))
             mytz = (int(mytzp[2])*60+int(mytzp[3]))*(1 if mytzp[1] == "+" else -1)
-        for f in ["%m/%d/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
+        for f in ["%m/%d/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S","%d-%b-%Y %I:%M%p"]:
             try:
                 dt = datetime.strptime(date,f)
                 break
@@ -85,17 +84,15 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
                 # print("Error parsing date:",e, file=sys.stderr)
         now = datetime.now()
         if dt is None:
-            # Try to parse 3:17pm. This could be east or west of here.
+            # Try to parse 3:17pm, produced e.g. by ITS :REPLY. This could be east or west of here.
             # Heuristics which work with a diff < 12 hours (e.g. not Japan vs California):
             # Subtract local hour from remote hour; if > 12 or < 12, subtract/add 24.
             # This gives the #hours ahead the sender is (so display e.g. "12:24:42 (-9 h)"
-            m = re.match(r" ?([0-9]+):([0-9]+)([ap]m)", date)
-            if m:
-                hr,min,ap = m.group(1,2,3)
-                hr,min = int(hr),int(min)
-                if ap == "pm":
-                    hr += 12 # use 24-hour time
-                # @@@@ check if too far off?
+            try:
+                # Note: no seconds in this format, so messages may appear to do time jumps,
+                # e.g. when doing :QSEND (which produces seconds) followed by :REPLY (which doesn't).
+                pdt = datetime.strptime(date, "%I:%M%p")
+                hr,min = pdt.hour, pdt.minute
                 diffh = round(((hr-now.hour)*60+min-now.minute)/60)
                 if diffh > 12:
                     diffh -= 24
@@ -103,11 +100,12 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
                     diffh += 24
                 tz = mytz + diffh*60
                 dt = now.replace(hour=hr, minute=min)
+                # check if too far off
                 if now.hour + diffh < 0 or now.hour + diffh > 23:
                     off = datetime.timedelta(days=-1 if now+hour.diffh < 0 else 1)
                     dt = dt + off
-            # else:
-            #     print("Failed to parse partial timespec {!r}".format(date), file=sys.stderr)
+            except ValueError as e:
+                print("Failed to parse timespec {!r}: {}".format(date,e), file=sys.stderr)
         elif tz is not None:
             diffh = round((tz-mytz)/60)
         else:
@@ -124,7 +122,7 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
         # @@@@ hmm
         rest = pkt
     # print("dt is {!r}, date is {!r}".format(dt, date), file=sys.stderr)
-    return destuser,uname,host,dt if dt else date,diffh,rest,pkt
+    return destuser,uname,host,dt if dt else date,diffh,rest
 
 def make_send_message(text,uname=None, hostname=None, date=None):
     from getpass import getuser
