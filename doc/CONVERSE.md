@@ -61,6 +61,8 @@ To manually refresh the online status, use `Refresh online status` in the Conver
 
 You can change interval between online checks (default 5 minutes), the idle/away time limits (default 10/120 minutes), and the colors of idle/away dots in the Settings menu.
 
+To be a "good converse partner", you should use the fingerd.py server which tells others if you're online (and how idle you are), so they know that/if you're reachable. On macOS, it is significantly better at finding your idle time than the named.py server.
+
 ### Destination input
 
 The destination can be input in this part, using the syntax `user@host`, where `user` is the remote userid and `host` is the name of a Chaosnet host. If the destination is new, it will be saved and can be selected from the drop-down menu. Selecting a destination here also selects the matching Conversation tab.
@@ -78,12 +80,14 @@ The message to be sent is input here. You can send it by pressing [Control-S] (o
 
 The message input field can be one-line (the default), or multi-line, depending on the `Use multi-line messages` setting.  When using one-line input, [Enter] also sends the message.
 
+You can switch between one-line and multi-line input by using the `Ctrl+Shift+M` (or `Command-Shift-M`) keyboard shortcut.
+
 For multi-line messages, you can set the number of lines in the input window with the `Set lines in multi-line message input` setting.
 
 Messages are restricted to ASCII, for compatibility with older systems.
 
 ## Settings
-**This section needs updating, but items are, hopefully, self-evident.**
+**This section needs updating, but items are, hopefully, self-explanatory.**
 
 The window geometry and position is saved between sessions. Also destinations are saved, and attempts are made to preserve the currently selected destination.
 
@@ -110,7 +114,7 @@ Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.
 - [ ] There should be a sounds menu for selecting sounds for incoming/outgoing/alert messages.
 - [ ] You may want to set an auto-reply (if you go AFK), and there should be a setting for at what idle time the auto-reply is sent. *(And it should ideally be sent if your screen is locked, too.) (Perhaps the auto-reply should be implemented using a CLS packet with the message, to avoid auto-auto-replies?)*
 - [ ] There could be a Dock icon counter for unseen incoming messages, on macOS.
-- [ ] You could dream of a "group chat" setting, which automatically sends messages to a set of destinations. *Need to handle replies sensibly though (so they go to all in the group). Probably a new/compatible protocol for group handling, which uses SEND for transport?*
+- [ ] You could dream of a "group chat" setting, which automatically sends messages to a set of destinations. *Need to handle replies sensibly though (so they go to all in the group). Perhaps a new/compatible protocol for group handling, using SEND for transport?*
 - [ ] If the dnspython requirement is awkward, it could be replaced by a HOSTAB client, but it might not be as fast?
 
 Let me know if you (want (me) to) implement any of this, or if you have more ideas!
@@ -122,3 +126,11 @@ Let me know if you (want (me) to) implement any of this, or if you have more ide
 - Sound effects are only really tested/implemented under macOS, using `afplay`.
 - Screen locking is only detected on macOS.
 - The default file name for storing messages is probably not portable outside Linux/macOS OSs.
+
+## Please help!
+
+If you run Linux, Windows or some other non-macOS system:
+
+- Sound effects might not work - let me know if they do, and/or how to make them work
+- Screen lock detection does not work. It's used in order to not check online status while your screen is locked, so rather useful. Let me know how to do it and I'll implement it!
+- Idle detection for fingerd.py on macOS detects your actual idle time (wrt mouse/keyboard) while for other OSs the output of the `/usr/bin/w` program is used, which only checks idle time for terminal windows. Find a way to check actual idle time for your OS, and I'll implement it.
