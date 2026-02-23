@@ -841,6 +841,15 @@ class ConverseDestWatcher(ChaosUserWatcher):
     def set_tabbar(self, tb):
         self.tabbar = tb
 
+    def idle_level(self, idle):
+        return self.IdleLevel.ACTIVE if idle < getconf('idle_limit') else self.IdleLevel.IDLE if idle < getconf('away_limit') else self.IdleLevel.AWAY
+
+    # To be used after changing idle/away limits
+    def refresh_idle_levels(self):
+        for d in self.dest_states.keys():
+            lev, idle = self.dest_states[d]
+            self.dest_states[d] = (self.idle_level(idle), idle)
+
     def set_icon_for_dest(self, dest, icon, tooltip):
         if self.tabbar:
             c = self.tabbar.find_conversation(dest)
@@ -873,7 +882,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
         self.refresh_watcher(h)
     def get_status_for_dest(self, dest):
         if dest in self.dest_states:
-            return self.dest_states[dest]
+            return self.dest_states[dest][0]
         u,h = dest.split("@", maxsplit=1)
         if h in self.host_states:
             return self.host_states[h]
@@ -920,10 +929,11 @@ class ConverseDestWatcher(ChaosUserWatcher):
                                        "Host is {}".format("up (user not online)" if host_up_p else "down"))
     def update_dest_icon(self, dest):
         u,h = dest.split("@",maxsplit=1)
-        # qDebug("dest states: {!r}".format(self.dest_states))
+        if verbose or self.debugp:
+            qInfo("dest {} states: {!r}".format(dest, self.dest_states))
         if dest in self.dest_states: # if there is state for this user
-            ilevel = self.dest_states[dest]
-            if self.debugp:
+            ilevel = self.dest_states[dest][0]
+            if self.debugp or verbose:
                 qDebug("setting icon for {}, idle level is {}".format(dest,ilevel))
             self.set_icon_for_dest(dest, self.idle_icon_list[ilevel],
                                    "User is {}".format(ilevel))
@@ -960,7 +970,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
             u,h = d.lower().split("@",maxsplit=1)
             if self.debugp:
                 qDebug("checking old state for {}".format(d))
-            if h == host.lower() and u not in map(lambda x: x[0].lower(), users):
+            if h == host.lower() and u not in map(lambda x: x[0].lower(),users):
                 # No longer logged in, set the host-based icon
                 if self.debugp:
                     qDebug("{} is not in {!r}, resetting icon".format(d, users))
@@ -971,15 +981,21 @@ class ConverseDestWatcher(ChaosUserWatcher):
                 if self.debugp:
                     qDebug("{} is in {!r}, not resetting icon".format(d, users))
         # Check the idleness of logged-in users
+        watched = self.watched_users(host)
+        if self.debugp:
+            qDebug("Watched users for host {} is {!r}".format(host, watched))
         for user,idle in users:
-            dest = "{}@{}".format(user,host).lower()
-            ilevel = self.IdleLevel.ACTIVE if idle < getconf('idle_limit') else self.IdleLevel.IDLE if idle < getconf('away_limit') else self.IdleLevel.AWAY
-            if dest not in self.dest_states or self.dest_states[dest] != ilevel:
-                if verbose:
-                    qInfo("{} is now {}".format(dest, ilevel))
-                self.dest_states[dest] = ilevel
-                # update icon (also updates tooltip)
-                self.update_dest_icon(dest)
+            if user.lower() in watched:
+                dest = "{}@{}".format(user,host).lower()
+                ilevel = self.idle_level(idle)
+                if dest not in self.dest_states or self.dest_states[dest][0] != ilevel:
+                    if verbose:
+                        qInfo("{} is now {}".format(dest, ilevel))
+                    self.dest_states[dest] = (ilevel, idle)
+                    # update icon (also updates tooltip)
+                    self.update_dest_icon(dest)
+            elif verbose or self.debugp:
+                qDebug("Got result for {} at {} but not being watched".format(user,host))
 
     # New handler for errors
     def watcher_error(self, data):
@@ -1335,6 +1351,8 @@ class MainWindow(QMainWindow):
             if input != getconf('idle_limit'):
                 # avoid saving the default_config value
                 settings.setValue('idle_limit', input)
+                # update levels
+                self.destwatcher.refresh_idle_levels()
                 # refresh icons
                 self.tbar.update_all_icons()
         else:
@@ -1346,6 +1364,8 @@ class MainWindow(QMainWindow):
             if input != getconf('away_limit'):
                 # avoid saving the default_config value
                 settings.setValue('away_limit', input)
+                # update levels
+                self.destwatcher.refresh_idle_levels()
                 # refresh icons
                 self.tbar.update_all_icons()
         else:
@@ -1521,6 +1541,8 @@ class MainWindow(QMainWindow):
         settings.clear()
         # Also update effect of settings: background colors
         self.reset_background_colors()
+        # update levels
+        self.destwatcher.refresh_idle_levels()
         # also fix watcher icons
         self.reset_icon_colors()
         self.destwatcher.set_interval(getconf('watcher_interval'))
@@ -1776,6 +1798,80 @@ class MainWindow(QMainWindow):
         new.setup_height()
         return new
 
+    def collect_all_destinations(self):
+        # @@@@ this should run in a worker, and results should appear asynchronously
+        from PyQt6.QtCore import QThreadPool
+        from watcher import Worker
+        from chaosnet import ChaosSocketError, ChaosError, BroadcastFingerDict, BroadcastLoadDict, NameDict
+        def finger_collector(subnets):
+            result = []
+            try:
+                rs = BroadcastFingerDict(subnets).dict_result()
+            except ChaosSocketError:
+                raise
+            except ChaosError as m:
+                qDebug("Broadcast {} FINGER: {}".format(subnets, m))
+            else:
+                result = ["{}@{}".format(r['fields']['uname'],r['host']) for r in rs if len(r['fields']['uname']) > 0]
+            qInfo("FINGER {} gives {}".format(subnets, result))
+            return result
+        def finger_result(result):
+            for dest in result:
+                self.tbar.add_conversation(dest)
+        def load_collector(subnets):
+            result = []
+            try:
+                rs = BroadcastLoadDict(subnets).dict_result()
+            except ChaosSocketError:
+                raise
+            except ChaosError as m:
+                qDebug("Broadcast {} LOAD: {}".format(subnets, m))
+            else:
+                result = [r['host'] for r in rs if r['load']['users'] > 0]
+            qInfo("LOAD {} gives {}".format(subnets, result))
+            return result
+        def name_collector(host):
+            ulist = []
+            try:
+                qInfo("Starting NAME for {}".format(host))
+                r = NameDict(host, options=dict(timeout=5)).dict_result()
+                qInfo("Got NAME for {}: {!r}".format(host,r))
+            except ChaosSocketError:
+                raise
+            except ChaosError as m:
+                qDebug("NAME {}: {}".format(host, m))
+            else:
+                # filter out not-logged-in jobs
+                ulist = ["{}@{}".format(l['userid'],host) for l in r if not re.match(r"(___[0-9]{3})|(\?\?\?)", l['userid'])]
+            qInfo("NAME {} gives {}".format(host, ulist))
+            return ulist
+        def name_result(result):
+            for dest in result:
+                self.tbar.add_conversation(dest)
+        def load_result(result):
+            qInfo("LOAD result is {!r}".format(result))
+            for host in result:
+                nw = Worker(lambda progress_callback: name_collector(host))
+                nw.signals.result.connect(name_result)
+                qInfo("LOAD starting worker for {}".format(host))
+                tp.start(nw)
+        try:
+            self.collect_all_destinations_action.setEnabled(False)
+            subnets = [-1]
+            tp = QThreadPool()
+            finger_worker = Worker(lambda progress_callback: finger_collector(subnets))
+            finger_worker.signals.result.connect(finger_result)
+            qInfo("Starting FINGER worker for {}".format(subnets))
+            tp.start(finger_worker)
+            load_worker = Worker(lambda progress_callback: load_collector(subnets))
+            load_worker.signals.result.connect(load_result)
+            qInfo("Starting LOAD worker for {}".format(subnets))
+            tp.start(load_worker)
+            # qInfo("Waiting for Done")
+            # qInfo("Done: {!r}".format(tp.waitForDone(60*1000)))
+        finally:
+            self.collect_all_destinations_action.setEnabled(True)
+
     def closeEvent(self,event):
         settings.setValue("MainWindowSize",self.size())
         settings.setValue("MainWindowPosition",self.pos())
@@ -1818,6 +1914,8 @@ class MainWindow(QMainWindow):
                                           shortcut="Ctrl+R")
         self.refresh_action.setEnabled(getconf('watcher_enabled'))
         my_menu.addAction(self.refresh_action)
+        self.collect_all_destinations_action = make_action("Collect all online users", self.collect_all_destinations)
+        my_menu.addAction(self.collect_all_destinations_action)
 
         settings_menu = self_menu.addMenu("Settings")
         settings_menu.addAction(make_action("Edit destination menu", self.cbox.edit_destination_list))
@@ -1919,7 +2017,7 @@ class MainWindow(QMainWindow):
         self.tbar.set_destbox(self.cbox)
         # Watch the destinations online/offline etc
         self.destwatcher = ConverseDestWatcher()
-        self.destwatcher.set_debug(debug)
+        self.destwatcher.set_debug(debug or verbose)
         self.destwatcher.set_interval(getconf('watcher_interval'))
         if not getconf('watcher_enabled'):
             self.destwatcher.pause()
@@ -2052,6 +2150,8 @@ def parse_args(app):
         verbose = True
     if parser.value(iopt):
         settings.setValue('watcher_interval', int(parser.value(iopt)))
+        if verbose or debug:
+            qInfo("Set watcher_interval to {}".format(getconf('watcher_interval')))
     if parser.isSet(ropt):
         global reset_on_startup
         reset_on_startup = True
@@ -2091,7 +2191,7 @@ if __name__ == '__main__':
                 default_config['my_chaos_hostname'] = fqdn
 
     try:
-        if not debug:
+        if not debug and not verbose:
             # Just ignore all qDebug printouts
             qDebug = lambda x: x
             pass

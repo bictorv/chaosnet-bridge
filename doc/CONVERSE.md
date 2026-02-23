@@ -63,6 +63,8 @@ You can change interval between online checks (default 5 minutes), the idle/away
 
 To be a "good converse partner", you should use the fingerd.py server which tells others if you're online (and how idle you are), so they know that/if you're reachable. On macOS, it is significantly better at finding your idle time than the named.py server.
 
+To easily get a list of possible destinations, use `Collect all online users` in the `Converse` menu. It scans the Chaosnet for online users and adds destinations (and conversation tabs) for those who are missing.
+
 ### Destination input
 
 The destination can be input in this part, using the syntax `user@host`, where `user` is the remote userid and `host` is the name of a Chaosnet host. If the destination is new, it will be saved and can be selected from the drop-down menu. Selecting a destination here also selects the matching Conversation tab.

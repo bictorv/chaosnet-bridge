@@ -657,6 +657,21 @@ class SimpleDict:
         else:
             raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(opcode_name(opc), self.hname, data))
 
+class BroadcastSimpleDict(SimpleDict):
+    collected = None
+    def __init__(self, subnets, args=[], options=None):
+        self.collected = dict()
+        if options is None:
+            options = dict()
+        if 'timeout' not in options:
+            options['timeout'] = 2 # default timeout
+        for src,data in BroadcastConn(subnets, self.contact, options=options, args=args):
+            if src in self.collected:
+                if debug:
+                    print("Already collected data from {:o} for {!r}".format(src,contact), file=sys.stderr)
+                continue
+            self.collected[src] = data
+
 class StatusDict(SimpleDict):
     contact = "STATUS"
 
@@ -696,6 +711,15 @@ class StatusDict(SimpleDict):
         else:
             return None
 
+class BroadcastStatusDict(BroadcastSimpleDict, StatusDict):
+    def dict_result(self):
+        vals = []
+        for src in self.collected.keys():
+            hname, statuses = self.parse_status_data(src, self.collected[src])
+            dname = dns_name_of_address(src, timeout=2)
+            vals.append(dict(host=dname, addr=src, name=hname, status=statuses))
+        return vals
+
 class LoadDict(SimpleDict):
     contact = "LOAD"
     def parse_load_data(self, data):
@@ -708,6 +732,15 @@ class LoadDict(SimpleDict):
         src, data = self.result_packet()
         if src is not None and data is not None:
             return self.parse_load_data(data)
+
+class BroadcastLoadDict(BroadcastSimpleDict, LoadDict):
+    def dict_result(self):
+        vals = []
+        for src in self.collected.keys():
+            load = self.parse_load_data(self.collected[src])
+            dname = dns_name_of_address(src, timeout=2)
+            vals.append(dict(host=dname, addr=src, load=load))
+        return vals
 
 def parse_idle_time_string(s):
     # try to parse idle to a number (and consider weird representations like *:**)
@@ -748,6 +781,16 @@ class FingerDict(SimpleDict):
         if src is not None and data is not None:
             fields = self.parse_finger_data(data)
             return dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])
+
+class BroadcastFingerDict(BroadcastSimpleDict, FingerDict):
+    def dict_result(self):
+        vals = []
+        for src in self.collected.keys():
+            fields = self.parse_finger_data(self.collected[src])
+            dname = dns_name_of_address(src, timeout=2)
+            vals.append(dict(host=dname, addr=src, 
+                             fields=dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])))
+        return vals
 
 class NameDict:
     # This gives the "finger" output as a list of dicts. It is complete overkill if you only want
@@ -829,10 +872,16 @@ class NameDict:
                     m = re.match(r"([A-Z0-9]+|___\d\d\d) +([A-Z]{1,2}|[$@+-]|-->)$",fld)
                     if m:
                         # append them separately
-                        row.append(m.group(1).rstrip("0123456789"))
+                        if m.group(1).startswith("___"):
+                            row.append(m.group(1))
+                        else:
+                            row.append(m.group(1).rstrip("0123456789"))
                         row.append(m.group(2))
                     else:
-                        row.append(fld.rstrip("0123456789"))
+                        if fld.startswith("___"):
+                            row.append(fld)
+                        else:
+                            row.append(fld.rstrip("0123456789"))
                         row.append("") # empty affiliation, perhaps
                     hadj = 1           # adjust for affiliation already added
                 elif hdr == "Idle" and fld.endswith("."):

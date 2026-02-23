@@ -294,12 +294,14 @@ class ChaosUserWatcher:
                 r = None
             if r:
                 end = time.time()
-                progress_callback.emit((host,"NAME: host {} responded in {:.2f}s, users logged in: {!r}".format(host,
+                progress_callback.emit((host,"NAME: host {} responded in {:.2f}s, watching {!r}, users logged in: {!r}".format(host,
                                                                                                             end-start,
+                                                                                                            users,
                                                                                                             [d['userid'] for d in r])))
                 # return status of the users we're looking for
+                # No, return status of all users. ( if d['userid'].lower() in users)
                 return host, host_up_this_time, [(d['userid'],parse_idle_time_string(d['idle']))
-                                                 for d in r if d['userid'].lower() in users]
+                                                 for d in r]
         progress_callback.emit((host,"No methods gave any users, host is {}".format("up" if host_up_this_time else "down")))
         return host, host_up_this_time,[]
 
@@ -440,6 +442,13 @@ class ChaosUserWatcher:
             if self.debugp:
                 qDebug("Starting {!r}".format(watcher))
             self.threadpool.start(watcher)
+
+    def watched_users(self, host):
+        if host in self.workers.keys():
+            watcher, users = self.workers[host]
+            return users
+        else:
+            return []
 
 class MainWindow(QMainWindow):
     def __init__(self, *args, **kwargs):
