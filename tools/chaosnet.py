@@ -657,6 +657,13 @@ class SimpleDict:
         else:
             raise UnexpectedOpcode("Unexpected opcode {} from {} ({})".format(opcode_name(opc), self.hname, data))
 
+    def dict_result(self):
+        src, data = self.result_packet()
+        if src is not None and data is not None:
+            return self.packet_to_dict(src, data)
+        else:
+            return None
+
 class BroadcastSimpleDict(SimpleDict):
     collected = None
     def __init__(self, subnets, args=[], options=None):
@@ -671,6 +678,13 @@ class BroadcastSimpleDict(SimpleDict):
                     print("Already collected data from {:o} for {!r}".format(src,contact), file=sys.stderr)
                 continue
             self.collected[src] = data
+    def dict_result(self):
+        # Return a list of the dict's, with a source field having the source address.
+        # Caller gets to use dns_name_of_address(src, timeout=2) if they want.
+        vals = []
+        for src in self.collected.keys():
+            vals.append(dict(source=src) | self.packet_to_dict(src, self.collected[src]))
+        return vals
 
 class StatusDict(SimpleDict):
     contact = "STATUS"
@@ -702,23 +716,84 @@ class StatusDict(SimpleDict):
             print('{} value error at {}: {!r}'.format(hname,fstart,data[fstart:]))
         return hname,statuses
 
-    def dict_result(self):
-        src, data = self.result_packet()
-        if src is not None and data is not None:
-            hname, statuses = self.parse_status_data(src,data)
-            dname = dns_name_of_address(src, timeout=2)
-            return dict(dname=dname, hname=hname, status=statuses)
-        else:
-            return None
-
+    def packet_to_dict(self, src, data):
+        hname, statuses = self.parse_status_data(src,data)
+        return dict(hname=hname, status=statuses)
 class BroadcastStatusDict(BroadcastSimpleDict, StatusDict):
-    def dict_result(self):
-        vals = []
-        for src in self.collected.keys():
-            hname, statuses = self.parse_status_data(src, self.collected[src])
-            dname = dns_name_of_address(src, timeout=2)
-            vals.append(dict(host=dname, addr=src, name=hname, status=statuses))
-        return vals
+    # The mix is enough
+    pass
+
+class UptimeDict(SimpleDict):
+    contact = "UPTIME"
+    def parse_packet_data(self, data):
+        # cf RFC 868
+        s = int(unpack("I",data[0:4])[0]/60)
+        return timedelta(seconds=s),s
+    def packet_to_dict(src, data):
+        updelta, upsec = self.parse_packet_data(data)
+        dname = dns_name_of_address(src, timeout=2)
+        return dict(dname=dname, addr=src, delta=updelta, sec=upsec)
+class BroadcastUptimeDict(BroadcastSimpleDict, UptimeDict):
+    pass
+
+class TimeDict(SimpleDict):
+    contact = "TIME"
+    def parse_packet_data(self, data):
+        # cf RFC 868
+        # @@@@ Prepare for 2036 and adjust offset when MSB is not set
+        t = unpack("I",data[0:4])[0]-2208988800
+        dt = t-time.time()
+        return datetime.fromtimestamp(t),t,dt
+    def packet_to_dict(self, src, data):
+         dt, ts, delta = self.parse_packet_data(data)
+         dname = dns_name_of_address(src, timeout=2)
+         return dict(dname=dname, addr=src, dt=dt, timestamp=ts, delta=delta)
+class BroadcastTimeDict(BroadcastSimpleDict, TimeDict):
+    pass
+
+class DumpRoutingTableDict(SimpleDict):
+    contact = "DUMP-ROUTING-TABLE"
+    def parse_packet_data(self, data):
+        rtt = dict()
+        # Parse routing table info
+        for sub in range(0,int(len(data)/4)):
+            sn = unpack('H',data[sub*4:sub*4+2])[0]
+            if sn != 0:
+                rtt[sub] = dict(zip(('method','cost'),unpack('H'*2,data[sub*4:sub*4+4])))
+        return rtt
+    def packet_to_dict(self, src, data):
+        rtt = self.parse_packet_data(data)
+        dname = dns_name_of_address(src, timeout=2)
+        return dict(dname=dname, addr=src, routingtable=rtt)
+class BroadcastDumpRoutingTableDict(BroadcastSimpleDict, DumpRoutingTableDict):
+    pass
+
+class LastSeenDict(SimpleDict):
+    # cbridge specific
+    contact = "LASTCN"
+    def parse_packet_data(self,data):
+        cn = dict()
+        i = 0
+        while i < int(len(data)/2):
+            flen = unpack('H',data[i*2:i*2+2])[0]
+            assert flen >= 7
+            addr = unpack('H',data[i*2+2:i*2+4])[0]
+            inp = unpack('I',data[i*2+4:i*2+4+4])[0]
+            via = unpack('H',data[i*2+4+4:i*2+4+4+2])[0]
+            age = unpack('I',data[i*2+4+4+2:i*2+4+4+2+4])[0]
+            if (flen > 7):
+                fc = unpack('H',data[i*2+4+4+2+4:i*2+4+4+2+4+2])[0]
+                cn[addr] = dict(input=inp,via=via,age=age,fc=fc)
+            else:
+                cn[addr] = dict(input=inp,via=via,age=age,fc='')
+            i += flen
+        return cn
+    def packet_to_dict(self, src, data):
+        cn = self.parse_packet_data(data)
+        dname = dns_name_of_address(src, timeout=2)
+        return dict(dname=dname, addr=src, lastseen=cn)
+class BroadcastLastSeenDict(BroadcastSimpleDict, LastSeenDict):
+    pass
 
 class LoadDict(SimpleDict):
     contact = "LOAD"
@@ -728,19 +803,29 @@ class LoadDict(SimpleDict):
         lmatch = re.match(r"Fair Share: (\d+)%", str(lines[0],"ascii"))
         return dict(users=int(umatch.group(1)) if umatch else None,
                     share=int(lmatch.group(1)) if lmatch else None)
-    def dict_result(self):
-        src, data = self.result_packet()
-        if src is not None and data is not None:
-            return self.parse_load_data(data)
-
+    def packet_to_dict(self, src, data):
+        return self.parse_load_data(data)
 class BroadcastLoadDict(BroadcastSimpleDict, LoadDict):
-    def dict_result(self):
-        vals = []
-        for src in self.collected.keys():
-            load = self.parse_load_data(self.collected[src])
-            dname = dns_name_of_address(src, timeout=2)
-            vals.append(dict(host=dname, addr=src, load=load))
-        return vals
+    pass
+
+class FingerDict(SimpleDict):
+    contact = "FINGER"
+    def parse_finger_data(self, data):
+        flds = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
+        # Let the caller do this or not
+        # flds[2] = parse_idle_time_string(flds[2])
+        return flds
+    def packet_to_dict(self, src, data):
+        fields = self.parse_finger_data(data)
+        return dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])
+class BroadcastFingerDict(BroadcastSimpleDict, FingerDict):
+    pass
+
+class DNSDict(SimpleDict):
+    # Also cbridge specific: "simple" protocol where contact arg is the (binary) query, and the ANS is the (binary) answer.
+    contact = "DNS"
+    # @@@@ TODO but not really used anywhere (except bhostat.py)
+    pass
 
 def parse_idle_time_string(s):
     # try to parse idle to a number (and consider weird representations like *:**)
@@ -768,29 +853,6 @@ def parse_idle_time_string(s):
     # @@@@ This is likely the ITS/T20 "." next to idle time/tty messing things up
     # print("#### Can't parse idle time {!r} ####".format(s), file=sys.stderr)
     return s
-
-class FingerDict(SimpleDict):
-    contact = "FINGER"
-    def parse_finger_data(self, data):
-        flds = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
-        # Let the caller do this or not
-        # flds[2] = parse_idle_time_string(flds[2])
-        return flds
-    def dict_result(self):
-        src, data = self.result_packet()
-        if src is not None and data is not None:
-            fields = self.parse_finger_data(data)
-            return dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])
-
-class BroadcastFingerDict(BroadcastSimpleDict, FingerDict):
-    def dict_result(self):
-        vals = []
-        for src in self.collected.keys():
-            fields = self.parse_finger_data(self.collected[src])
-            dname = dns_name_of_address(src, timeout=2)
-            vals.append(dict(host=dname, addr=src, 
-                             fields=dict(uname=fields[0], affiliation=fields[4], pname=fields[3], idle=fields[2], location=fields[1])))
-        return vals
 
 class NameDict:
     # This gives the "finger" output as a list of dicts. It is complete overkill if you only want
