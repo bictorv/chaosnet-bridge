@@ -17,6 +17,8 @@
 #    limitations under the License.
 
 # TODO:
+# - maybe (optionally) make collect_all_destinations run periodically?
+# -- or maybe go all the way and include a NAME/FINGER display you can click on to start conversations?
 # - keep order of conversations in synch with destination list: add at top (except initially), and after editing
 # - do actual sending in a separate thread, interruptible by Cancel button. Cf how MessageReceiver works, but not persistent.
 # - Update documentation (constantly)
@@ -287,12 +289,14 @@ class ConversationTabs(QTabWidget):
         painter.drawPrimitive(QStyle.PrimitiveElement.PE_FrameTabWidget, option)
 
     def add_dummy_page(self):
-        qDebug("Adding dummy page")
+        if debug:
+            qDebug("Adding dummy page")
         self.setTabBarAutoHide(True) # hide the silly "tab header"
         self.addTab(self.dummy_page,"No conversations active")
     def remove_dummy_page(self):
         if self.is_dummy_page():
-            qDebug("Removing dummy page")
+            if debug:
+                qDebug("Removing dummy page")
             self.removeTab(0)
         self.setTabBarAutoHide(False) # show also single tab headers
     def is_dummy_page(self):
@@ -656,7 +660,8 @@ class DestinationSelector(QComboBox):
         if self.tabbar:
             # Keep destination_list in sync with tab selection
             dest = self.itemText(newidx)
-            qDebug("current_destination_changed: itemtext is {!r}".format(dest))
+            if debug:
+                qDebug("current_destination_changed: itemtext is {!r}".format(dest))
             if self.currentIndex() != newidx:
                 # print("current_destination_changed: new index {} not current ({}), changing it".format(newidx, self.currentIndex()), file=sys.stderr)
                 self.setCurrentIndex(newidx)
@@ -698,7 +703,8 @@ class DestinationSelector(QComboBox):
                 r = QMessageBox.question(self, "Conversation exists",
                                          "Conversation messages for destination {} exists. Do you want to remove the messages and conversation too?".format(dest))
                 if r == QMessageBox.StandardButton.No:
-                    qInfo("Cancelled removing destination {}".format(dest))
+                    if verbose:
+                        qInfo("Cancelled removing destination {}".format(dest))
                     QMessageBox.information(self,"Keeping destination",
                                             "Keeping destination {}".format(dest))
                     return
@@ -929,11 +935,11 @@ class ConverseDestWatcher(ChaosUserWatcher):
                                        "Host is {}".format("up (user not online)" if host_up_p else "down"))
     def update_dest_icon(self, dest):
         u,h = dest.split("@",maxsplit=1)
-        if verbose or self.debugp:
+        if self.debugp:
             qInfo("dest {} states: {!r}".format(dest, self.dest_states))
         if dest in self.dest_states: # if there is state for this user
             ilevel = self.dest_states[dest][0]
-            if self.debugp or verbose:
+            if self.debugp:
                 qDebug("setting icon for {}, idle level is {}".format(dest,ilevel))
             self.set_icon_for_dest(dest, self.idle_icon_list[ilevel],
                                    "User is {}".format(ilevel))
@@ -961,7 +967,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
         if host not in self.host_states or self.host_states[host] != host_up_p:
             # @@@@ Do something more meaningful here, like notification
             if verbose:
-                qInfo("Host {} is now {}".format(host, "up" if host_up_p else "down"))
+                qInfo("{}: Host {} is now {}".format(datetime.now().strftime("%d-%b-%Y %T"), host, "up" if host_up_p else "down"))
             self.host_states[host] = host_up_p
             # update icon for all destinations matching host
             self.update_host_icon(host)
@@ -990,7 +996,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
                 ilevel = self.idle_level(idle)
                 if dest not in self.dest_states or self.dest_states[dest][0] != ilevel:
                     if verbose:
-                        qInfo("{} is now {}".format(dest, ilevel))
+                        qInfo("{}: {} is now {}".format(datetime.now().strftime("%d-%b-%Y %T"), dest, ilevel))
                     self.dest_states[dest] = (ilevel, idle)
                     # update icon (also updates tooltip)
                     self.update_dest_icon(dest)
@@ -1041,9 +1047,10 @@ class MessageStorage:
 
     def init_conversation_save_file(self):
         fn = getconf('conversation_save_file')
-        qDebug("conversation_save_file {!r} does {}".format(
-            fn, "exist" if os.path.isfile(fn) else "NOT exist"))
-        if getconf('save_restore_messages_enabled') and not os.path.isfile(fn):
+        exists = os.path.isfile(fn)
+        qDebug("conversation_save_file {!r} {}{}".format(
+            fn, "exists" if exists else "does NOT exist", ", size {}".format(os.path.getsize(fn) if exists else "")))
+        if getconf('save_restore_messages_enabled') and not exists:
             try:
                 # create it
                 qDebug("Creating {!r}".format(fn))
@@ -1288,12 +1295,12 @@ class ScreenLockWatcher:
         if status != self.screen_is_now_locked:
             self.screen_is_now_locked = status
             if status:
-                if self.debugp:
-                    qDebug("screen is now locked, pausing watchers")
+                if verbose:
+                    qInfo("{}: screen is now locked, pausing watchers".format(datetime.now().strftime("%d-%b-%Y %T")))
                 self.destwatcher.pause()
             else:
-                if self.debugp:
-                    qDebug("screen is now locked, unpausing watchers")
+                if verbose:
+                    qInfo("{}: screen is now UNlocked, unpausing watchers".format(datetime.now().strftime("%d-%b-%Y %T")))
                 self.destwatcher.unpause()
         else:
             if self.debugp:
@@ -1727,7 +1734,8 @@ class MainWindow(QMainWindow):
             r = QMessageBox.question(self, "Clear saved messages?",
                                      "Do you want to clear all saved messages?")
             if r == QMessageBox.StandardButton.No:
-                qInfo("Cancelled clearing saved messages")
+                if verbose:
+                    qInfo("Cancelled clearing saved messages")
                 return
         self.message_store.clear_messages()
 
@@ -1748,7 +1756,8 @@ class MainWindow(QMainWindow):
             settings.setValue('conversation_save_file', fname)
             self.message_store.init_conversation_save_file()
         else:
-            qInfo("Cancelled setting message save file")
+            if verbose:
+                qInfo("Cancelled setting message save file")
 
     def set_sound_effects(self):
         qDebug("Setting Sound effects to {!r}".format(self.sound_effects_action.isChecked()))
@@ -1799,7 +1808,13 @@ class MainWindow(QMainWindow):
         return new
 
     def collect_all_destinations(self):
-        # @@@@ this should run in a worker, and results should appear asynchronously
+        # Collect all currently online destinations, asynchronously adding them using tbar.add_conversation.
+        # First broadcast FINGER; if no response, broadcast LOAD to see which hosts to run NAME on.
+        # @@@@ Generalize this:
+        # - make it a PersistentWorker optionally running only once,
+        # - parametrize what to do with discovered destinations (or rather, the finger/name data), prossibly a signal?
+        # Then use it both for this and for the usual watcher (which then becomes more asynchronous in the NAME phase),
+        # and for the generic finger/name data display thing (a QTableView using a ModelView, cf https://www.pythonguis.com/tutorials/pyqt6-qtableview-modelviews-numpy-pandas/)
         from PyQt6.QtCore import QThreadPool
         from watcher import Worker
         from chaosnet import ChaosSocketError, ChaosError, BroadcastFingerDict, BroadcastLoadDict, NameDict
@@ -1812,12 +1827,14 @@ class MainWindow(QMainWindow):
             except ChaosError as m:
                 qDebug("Broadcast {} FINGER: {}".format(subnets, m))
             else:
-                result = ["{}@{}".format(r['fields']['uname'],r['host']) for r in rs if len(r['fields']['uname']) > 0]
-            qInfo("FINGER {} gives {}".format(subnets, result))
+                result = ["{}@{}".format(r['uname'],dns_name_of_address(r['source'], timeout=2)) for r in rs if len(r['uname']) > 0]
+            qDebug("FINGER {} gives {}".format(subnets, result))
             return result
         def finger_result(result):
             for dest in result:
-                self.tbar.add_conversation(dest)
+                if not self.tbar.find_conversation(dest):
+                    qInfo("Found new destination {} (FINGER)".format(dest))
+                    self.tbar.add_conversation(dest)
         def load_collector(subnets):
             result = []
             try:
@@ -1827,15 +1844,16 @@ class MainWindow(QMainWindow):
             except ChaosError as m:
                 qDebug("Broadcast {} LOAD: {}".format(subnets, m))
             else:
-                result = [r['host'] for r in rs if r['load']['users'] > 0]
-            qInfo("LOAD {} gives {}".format(subnets, result))
+                result = [dns_name_of_address(r['source'], timeout=2) for r in rs if r['users'] > 0]
+            qDebug("LOAD {} gives {}".format(subnets, result))
             return result
         def name_collector(host):
             ulist = []
             try:
-                qInfo("Starting NAME for {}".format(host))
+                start = time.time()
+                qDebug("Starting NAME for {}".format(host))
                 r = NameDict(host, options=dict(timeout=5)).dict_result()
-                qInfo("Got NAME for {}: {!r}".format(host,r))
+                qDebug("Got NAME for {} in {:.2f}s: {!r}".format(host,time.time()-start,r))
             except ChaosSocketError:
                 raise
             except ChaosError as m:
@@ -1843,29 +1861,31 @@ class MainWindow(QMainWindow):
             else:
                 # filter out not-logged-in jobs
                 ulist = ["{}@{}".format(l['userid'],host) for l in r if not re.match(r"(___[0-9]{3})|(\?\?\?)", l['userid'])]
-            qInfo("NAME {} gives {}".format(host, ulist))
+            qDebug("NAME {} gives {}".format(host, ulist))
             return ulist
         def name_result(result):
             for dest in result:
+                if not self.tbar.find_conversation(dest):
+                    qInfo("Found new destination {} (NAME)".format(dest))
                 self.tbar.add_conversation(dest)
         def load_result(result):
-            qInfo("LOAD result is {!r}".format(result))
+            qDebug("LOAD result is {!r}".format(result))
             for host in result:
                 nw = Worker(lambda progress_callback: name_collector(host))
                 nw.signals.result.connect(name_result)
-                qInfo("LOAD starting worker for {}".format(host))
+                qDebug("LOAD starting worker for {}".format(host))
                 tp.start(nw)
         try:
             self.collect_all_destinations_action.setEnabled(False)
-            subnets = [-1]
+            subnets = [-1]      # @@@@ configurable?
             tp = QThreadPool()
             finger_worker = Worker(lambda progress_callback: finger_collector(subnets))
             finger_worker.signals.result.connect(finger_result)
-            qInfo("Starting FINGER worker for {}".format(subnets))
+            qDebug("Starting FINGER worker for {}".format(subnets))
             tp.start(finger_worker)
             load_worker = Worker(lambda progress_callback: load_collector(subnets))
             load_worker.signals.result.connect(load_result)
-            qInfo("Starting LOAD worker for {}".format(subnets))
+            qDebug("Starting LOAD worker for {}".format(subnets))
             tp.start(load_worker)
             # qInfo("Waiting for Done")
             # qInfo("Done: {!r}".format(tp.waitForDone(60*1000)))
@@ -2017,7 +2037,7 @@ class MainWindow(QMainWindow):
         self.tbar.set_destbox(self.cbox)
         # Watch the destinations online/offline etc
         self.destwatcher = ConverseDestWatcher()
-        self.destwatcher.set_debug(debug or verbose)
+        self.destwatcher.set_debug(debug)
         self.destwatcher.set_interval(getconf('watcher_interval'))
         if not getconf('watcher_enabled'):
             self.destwatcher.pause()
@@ -2026,8 +2046,8 @@ class MainWindow(QMainWindow):
         def end_all_watchers():
             if self.screen_lock_watcher:
                 self.screen_lock_watcher.stop_screen_lock_watcher()
-            self.receiver.stop_receiver() # can't stop, it's hanging in listen - perhaps close its socket from behind?
-            self.destwatcher.end_all_watchers()
+            self.receiver.stop_receiver()
+            self.destwatcher.end_all_watchers() # @@@@ this should abort their conns (like the receiver does)
         app.aboutToQuit.connect(end_all_watchers)
         self.tbar.set_watcher(self.destwatcher)
         if QSysInfo.productType() == "macos":
@@ -2073,8 +2093,9 @@ class MainWindow(QMainWindow):
                           " background-color: {}; ".format(getconf('from_me_color'))+
                           " color: {};".format("white" if qGray(QColor(getconf('from_me_color')).rgba()) < 128 else "black")+
                           "}\n")
-        qDebug("app styleSheet now:")
-        qDebug(app.styleSheet())
+        if debug:
+            qDebug("app styleSheet now:")
+            qDebug(app.styleSheet())
 
     def __init__(self):
         super().__init__()
@@ -2136,11 +2157,13 @@ def parse_args(app):
     dopt = QCommandLineOption(["d","debug"],"Debug messages")
     vopt = QCommandLineOption(["V","verbose"],"Verbose messages")
     ropt = QCommandLineOption(["R","reset"],"Reset all settings")
+    dumpopt = QCommandLineOption(["D","dump-settings"],"Dump all settings")
     parser.addOption(dopt)
     parser.addOption(vopt)
     parser.addOption(copt)
     parser.addOption(iopt)
     parser.addOption(ropt)
+    parser.addOption(dumpopt)
     parser.process(app)
     if parser.isSet(dopt):
         global debug
@@ -2155,6 +2178,10 @@ def parse_args(app):
     if parser.isSet(ropt):
         global reset_on_startup
         reset_on_startup = True
+    if parser.isSet(dumpopt):
+        qInfo("Settings:")
+        for k in ["MainWindowPosition"] + list(default_config.keys()):
+            qInfo(" {} = {!r}".format(k, getconf(k)))
     return parser.value(copt)
 
 if __name__ == '__main__':
