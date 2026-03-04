@@ -38,7 +38,7 @@ def get_send_message(searchlist=None, conn=None):
             ncp.send_cls("User {!r} is not logged in.".format(destuser))
             return None
         ncp.send_opn()      # accept the connection
-        pkt = ncp.get_string_until_eof()
+        pkt = ncp.get_string_until_eof().rstrip()
         return parse_send_message(pkt, destuser, sourcehost, searchlist)
     except ChaosError as m:
         print("Error!",m, file=sys.stderr)
@@ -75,7 +75,9 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
         else:
             mytzp = re.match(r"([-+])(\d\d)(\d\d)", time.strftime("%z"))
             mytz = (int(mytzp[2])*60+int(mytzp[3]))*(1 if mytzp[1] == "+" else -1)
-        for f in ["%m/%d/%y %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S","%d-%b-%Y %I:%M%p"]:
+        # ITS, TOPS-20, Multics, ...
+        for f in ["%m/%d/%y %H:%M:%S","%d-%b-%Y %I:%M%p","%m/%d/%y %H:%M",
+                  "%Y-%m-%d %H:%M:%S","%d-%b-%y %H:%M:%S","%d-%b-%Y %H:%M:%S"]:
             try:
                 dt = datetime.strptime(date,f)
                 break
@@ -106,6 +108,8 @@ def parse_send_message(pkt, destuser=None, sourcehost=None, searchlist=None):
                     dt = dt + off
             except ValueError as e:
                 print("Failed to parse timespec {!r}: {}".format(date,e), file=sys.stderr)
+                dt = now
+                tz = mytz
         elif tz is not None:
             diffh = round((tz-mytz)/60)
         else:
