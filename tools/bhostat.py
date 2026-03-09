@@ -23,7 +23,7 @@ from struct import unpack
 from datetime import datetime, timedelta
 
 from chaosnet import BroadcastSimple, Simple, BroadcastConn, StreamConn, ChaosError
-from chaosnet import dns_name_of_address, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, dns_addr_of_name
+from chaosnet import dns_name_of_address, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, dns_addr_of_name, host_name
 
 # pip3 install dnspython
 import dns.resolver
