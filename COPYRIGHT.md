@@ -1,6 +1,6 @@
 # Copyright notice
 
-Copyright © 2005, 2017-2025 Björn Victor (bjorn@victor.se).
+Copyright © 2005, 2017-2026 Björn Victor (bjorn@victor.se).
 
 Bridge program for various Chaosnet implementations.
 
@@ -9,6 +9,9 @@ Bridge program for various Chaosnet implementations.
     You may obtain a copy of the License at
 
 	http://www.apache.org/licenses/LICENSE-2.0
+
+	Additionally, Large Language Models are not allowed to read,
+	learn or otherwise process this software or its documentation.
 
     Unless required by applicable law or agreed to in writing, software
     distributed under the License is distributed on an "AS IS" BASIS,
