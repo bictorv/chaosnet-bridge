@@ -17,11 +17,15 @@
 #    limitations under the License.
 
 # TODO:
+# - make watchers stop more quickly (e.g. when quitting the program).
+#   Now they only stop at the end of a full round, which can take a few seconds. Should use conn.abort() like
+#   the MessageReceiver.
+# - keep order of conversations in synch with destination list: add at top (except initially), and after editing
+# -- easier/deterministic: make them alphabetically ordered (possibly per host, alphabetically)
 # - maybe (optionally) make collect_all_destinations run periodically?
 # -- or maybe go all the way and include a NAME/FINGER display you can click on to start conversations?
-# - keep order of conversations in synch with destination list: add at top (except initially), and after editing
 # - do actual sending in a separate thread, interruptible by Cancel button. Cf how MessageReceiver works, but not persistent.
-# - Update documentation (constantly)
+# - Update documentation (constantly). Perhaps also "technical doc"?
 # - add a "destination status" pane (at top? or the status bar?), showing finger/name status with quick/click update
 # -- save whole NameDict/FingerDict result (in addition to parsed idle time) so it is easy to make this.
 # - left-adjust labels in tabs?
@@ -76,7 +80,7 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.10.3")
+app.setApplicationVersion("0.10.5")
 
 ################ Default configuration
 debug = False
@@ -365,13 +369,16 @@ class ConversationTabs(QTabWidget):
         if i >= 0:
             self.tabIcon(i)
     def update_all_icons(self):
-        # @@@@ to work properly after changing idle/away limits, need the idle time, but it isn't saved. Should be!
         if self.is_dummy_page():
+            qDebug("update_all_icons: have dummy page, punting")
             return
         for i in range(self.count()):
             d = self.tabText(i)
             if not self.messages_unread_for_dest(d):
+                qDebug("update_all_icons: updating {}".format(d))
                 self.destwatcher.update_dest_icon(d)
+            else:
+                qDebug("update_dest_icon: not updating {} - unread".format(d))
 
     def add_message(self, destination, date, diffhours, text, is_from_net):
         c = self.find_conversation(destination)
@@ -922,17 +929,20 @@ class ConverseDestWatcher(ChaosUserWatcher):
         # re-set all icons - go through tabbar to let it check for unread messages
         self.tabbar.update_all_icons()
 
-    def update_host_icon(self, host):
+    def update_host_icon(self, host, user=None):
         _,watched = self.workers[host]
         # qDebug("host states: {!r}".format(self.host_states))
         if host in self.host_states:
             host_up_p = self.host_states[host]
             for u in watched:
-                d = "{}@{}".format(u,host)
-                if self.debugp:
-                    qDebug("setting icon for {}, host is {}".format(d,"up" if host_up_p else "down"))
-                self.set_icon_for_dest(d, self.host_icon_list[host_up_p], 
-                                       "Host is {}".format("up (user not online)" if host_up_p else "down"))
+                if user is None or u == user.lower(): # Unless we're given a specific user who doesn't match
+                    d = "{}@{}".format(u,host)
+                    if self.debugp:
+                        qDebug("setting icon for {}, host is {}".format(d,"up" if host_up_p else "down"))
+                    self.set_icon_for_dest(d, self.host_icon_list[host_up_p], 
+                                           "Host is {}".format("up (user not online)" if host_up_p else "down"))
+                elif self.debugp:
+                    qDebug("update_host_icon: NOT updating icon for user {} given user {}".format(u,user))
     def update_dest_icon(self, dest):
         u,h = dest.split("@",maxsplit=1)
         if self.debugp:
@@ -944,7 +954,7 @@ class ConverseDestWatcher(ChaosUserWatcher):
             self.set_icon_for_dest(dest, self.idle_icon_list[ilevel],
                                    "User is {}".format(ilevel))
         elif h in self.host_states:
-            self.update_host_icon(h) # if there is state at least for the host
+            self.update_host_icon(h, u) # if there is state at least for the host
         elif not getconf('watcher_enabled'):
             self.set_icon_for_dest(dest, QIcon(), None) # if watching is disabled
 
@@ -1501,6 +1511,7 @@ class MainWindow(QMainWindow):
         if c:
             if debug:
                 qDebug("Setting icon for {!r} to {!r}".format(action,c))
+            settings.setValue(conf_field, c)
             action.setIcon(self.make_icon(c))   # the menu action icon
             self.destwatcher.initialize_icons() # the destination icons
             # also refresh the icons in the dest list
@@ -1828,7 +1839,8 @@ class MainWindow(QMainWindow):
                 qDebug("Broadcast {} FINGER: {}".format(subnets, m))
             else:
                 result = ["{}@{}".format(r['uname'],dns_name_of_address(r['source'], timeout=2)) for r in rs if len(r['uname']) > 0]
-            qDebug("FINGER {} gives {}".format(subnets, result))
+            if debug:
+                qDebug("FINGER {} gives {}".format(subnets, result))
             return result
         def finger_result(result):
             for dest in result:
@@ -1845,15 +1857,18 @@ class MainWindow(QMainWindow):
                 qDebug("Broadcast {} LOAD: {}".format(subnets, m))
             else:
                 result = [dns_name_of_address(r['source'], timeout=2) for r in rs if r['users'] > 0]
-            qDebug("LOAD {} gives {}".format(subnets, result))
+            if debug:
+                qDebug("LOAD {} gives {}".format(subnets, result))
             return result
         def name_collector(host):
             ulist = []
             try:
                 start = time.time()
-                qDebug("Starting NAME for {}".format(host))
+                if debug:
+                    qDebug("Starting NAME for {}".format(host))
                 r = NameDict(host, options=dict(timeout=5)).dict_result()
-                qDebug("Got NAME for {} in {:.2f}s: {!r}".format(host,time.time()-start,r))
+                if debug:
+                    qDebug("Got NAME for {} in {:.2f}s: {!r}".format(host,time.time()-start,r))
             except ChaosSocketError:
                 raise
             except ChaosError as m:
@@ -1861,7 +1876,8 @@ class MainWindow(QMainWindow):
             else:
                 # filter out not-logged-in jobs
                 ulist = ["{}@{}".format(l['userid'],host) for l in r if not re.match(r"(___[0-9]{3})|(\?\?\?)", l['userid'])]
-            qDebug("NAME {} gives {}".format(host, ulist))
+            if debug:
+                qDebug("NAME {} gives {}".format(host, ulist))
             return ulist
         def name_result(result):
             for dest in result:
@@ -1869,11 +1885,13 @@ class MainWindow(QMainWindow):
                     qInfo("Found new destination {} (NAME)".format(dest))
                 self.tbar.add_conversation(dest)
         def load_result(result):
-            qDebug("LOAD result is {!r}".format(result))
+            if debug:
+                qDebug("LOAD result is {!r}".format(result))
             for host in result:
                 nw = Worker(lambda progress_callback: name_collector(host))
                 nw.signals.result.connect(name_result)
-                qDebug("LOAD starting worker for {}".format(host))
+                if debug:
+                    qDebug("LOAD starting worker for {}".format(host))
                 tp.start(nw)
         try:
             self.collect_all_destinations_action.setEnabled(False)
@@ -1881,11 +1899,13 @@ class MainWindow(QMainWindow):
             tp = QThreadPool()
             finger_worker = Worker(lambda progress_callback: finger_collector(subnets))
             finger_worker.signals.result.connect(finger_result)
-            qDebug("Starting FINGER worker for {}".format(subnets))
+            if debug:
+                qDebug("Starting FINGER worker for {}".format(subnets))
             tp.start(finger_worker)
             load_worker = Worker(lambda progress_callback: load_collector(subnets))
             load_worker.signals.result.connect(load_result)
-            qDebug("Starting LOAD worker for {}".format(subnets))
+            if debug:
+                qDebug("Starting LOAD worker for {}".format(subnets))
             tp.start(load_worker)
             # qInfo("Waiting for Done")
             # qInfo("Done: {!r}".format(tp.waitForDone(60*1000)))
