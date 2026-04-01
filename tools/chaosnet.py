@@ -20,6 +20,8 @@
 import socket, sys, time, re
 import functools
 from enum import IntEnum, auto
+from struct import unpack
+from datetime import datetime, timedelta
 
 # The directories of these need to match the "socketdir" ncp setting in cbridge.
 stream_socket_address = '/tmp/chaos_stream'
@@ -353,7 +355,7 @@ class BroadcastConn(PacketConn):
         h = bytes("{} {}".format(",".join(map(str,subnets)),contact),"ascii")
         for a in args:
             if isinstance(a,str):
-                h += b" "+bytes(a)
+                h += b" "+bytes(a,"ascii")
             else:
                 h += b" "+a
         if options is not None:
@@ -623,6 +625,9 @@ class BroadcastSimple:
 class SimpleDict:
     # Caller handle CLSError, LOSError and socket.error
     def __init__(self, hname, args=[], options=None):
+        self.single_run(hname, args, options)
+    # Make this callable by BroadcastSimpleDict classes.
+    def single_run(self, hname, args=[], options=None):
         self.conn = PacketConn()
         self.hname = hname
         if options is None:
@@ -672,12 +677,29 @@ class BroadcastSimpleDict(SimpleDict):
             options = dict()
         if 'timeout' not in options:
             options['timeout'] = 2 # default timeout
-        for src,data in BroadcastConn(subnets, self.contact, options=options, args=args):
+        # Allow host names/addresses too
+        sn = [s for s in subnets if isinstance(s,int) and s < 0o400]
+        hn = [s for s in subnets if not(isinstance(s,int) and s < 0o400)]
+        # First broadcast on the subnets
+        for src,data in BroadcastConn(sn, self.contact, options=options, args=args):
             if src in self.collected:
                 if debug:
-                    print("Already collected data from {:o} for {!r}".format(src,contact), file=sys.stderr)
+                    print("Already collected data from {:o} for {!r}".format(src,self.contact), file=sys.stderr)
                 continue
             self.collected[src] = data
+        # Then check individual hosts
+        hlist = [ha for ha in hn if isinstance(ha,int)]
+        for h in [he for he in hn if not(isinstance(he,int))]:
+            ha = dns_addr_of_name_search(h)
+            if ha is not None:      # @@@@ how can I do this test in a list comprehension?
+                hlist.append(ha[0]) # first address is sufficient
+        for h in hlist:
+            if h not in self.collected.keys(): # unless we already know
+                if debug:
+                    print("Individual host {:o} for {!r}".format(h, self.contact), file=sys.stderr)
+                self.single_run(h, args, options) # Set it up
+                src,data = self.result_packet()   # get the result
+                self.collected[src] = data        # save it
     def dict_result(self):
         # Return a list of the dict's, with a source field having the source address.
         # Caller gets to use dns_name_of_address(src, timeout=2) if they want.
@@ -729,7 +751,7 @@ class UptimeDict(SimpleDict):
         # cf RFC 868
         s = int(unpack("I",data[0:4])[0]/60)
         return timedelta(seconds=s),s
-    def packet_to_dict(src, data):
+    def packet_to_dict(self, src, data):
         updelta, upsec = self.parse_packet_data(data)
         dname = dns_name_of_address(src, timeout=2)
         return dict(dname=dname, addr=src, delta=updelta, sec=upsec)
@@ -863,7 +885,7 @@ class NameDict:
     def __init__(self, hname, args=[], options=None):
         self.conn = StreamConn()
         self.hname = hname
-        if options is not None and 'timeout' in options.keys():
+        if options is not None and 'timeout' in options:
             self.timeout = options['timeout']
         try:
             self.conn.connect(hname, "NAME", args=args, options=options)
@@ -1000,8 +1022,12 @@ class NameDict:
             # If no userid found by header names, use the first item in the row
             if 'userid' not in r and len(row) > 0:
                 r = dict(userid = row[0]) | r # make it appear first in the dict
+            # Make sure all the other headers are there
+            for h in self.headerlabels:
+                if h not in r:
+                    r[h] = ""
             result.append(r)
-        return result
+        return dict(source = self.conn.remote, lines=result)
 
 ################ Get host name (and addr) using STATUS and/or DNS
 @functools.cache
@@ -1111,11 +1137,11 @@ def dns_name_of_address(addrstring, onlyfirst=False, timeout=5):
     r = DNSRecord(dns.rdatatype.PTR, name, parse_ptr, timeout=timeout, options=dict(onlyfirst=onlyfirst)).result
     return r[0] if r and len(r) > 0 else r
 @functools.cache
-def get_canonical_name(hname, timeout=5):
+def get_canonical_name(hname, timeout=5, onlyfirst=False):
     if re.match("^[0-7]+$",hname):
-        return dns_name_of_address(hname)
+        return dns_name_of_address(hname, onlyfirst=onlyfirst, timeout=timeout)
     else:
-        return next((dns_name_of_address(a) for a in dns_addr_of_name_search(hname)),hname)
+        return next((dns_name_of_address(a, onlyfirst=onlyfirst, timeout=timeout) for a in dns_addr_of_name_search(hname, timeout=timeout)),hname)
 @functools.cache
 def get_dns_host_info(name, timeout=5):
     def parse_hinfo(d, options=None):
