@@ -669,9 +669,10 @@ class SimpleDict:
         else:
             return None
 
+# Add a "callback" parameter, a fun which is called for each result as they are collected, with the dict as param
 class BroadcastSimpleDict(SimpleDict):
     collected = None
-    def __init__(self, subnets, args=[], options=None):
+    def __init__(self, subnets, args=[], options=None, callback=None):
         self.collected = dict()
         if options is None:
             options = dict()
@@ -686,6 +687,8 @@ class BroadcastSimpleDict(SimpleDict):
                 if debug:
                     print("Already collected data from {:o} for {!r}".format(src,self.contact), file=sys.stderr)
                 continue
+            if callback is not None:
+                callback(dict(source=src) | self.packet_to_dict(src,data))     # @@@@ do we need self too?
             self.collected[src] = data
         # Then check individual hosts
         hlist = [ha for ha in hn if isinstance(ha,int)]
@@ -699,6 +702,8 @@ class BroadcastSimpleDict(SimpleDict):
                     print("Individual host {:o} for {!r}".format(h, self.contact), file=sys.stderr)
                 self.single_run(h, args, options) # Set it up
                 src,data = self.result_packet()   # get the result
+                if callback is not None:
+                    callback(dict(source=src) | self.packet_to_dict(src,data))     # @@@@ do we need self too?
                 self.collected[src] = data        # save it
     def dict_result(self):
         # Return a list of the dict's, with a source field having the source address.
