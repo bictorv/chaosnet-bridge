@@ -1,4 +1,4 @@
-# Copyright © 2024 Björn Victor (bjorn@victor.se)
+# Copyright © 2024-2026 Björn Victor (bjorn@victor.se)
 # Extension of bhostat.py to produce results in HTML rather than plain text.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,8 +13,11 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from bhostat import Status, ChaosUptime, ChaosTime, ChaosFinger, ChaosDumpRoutingTable, ChaosName, ChaosLoadName, ChaosLoad, ChaosLastSeen, ChaosSimpleStatus, debug, SimpleStreamProtocol
-from chaosnet import dns_name_of_address, get_dns_host_info, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, host_name, ChaosError, EOFError
+# @@@@ make tooltips for short host names
+
+from bhostat import ChaosSimpleStatus, debug
+from chaosnet import BroadcastStatusDict, BroadcastUptimeDict, BroadcastTimeDict, BroadcastDumpRoutingTableDict, BroadcastLastSeenDict, NamesDict, BroadcastLoadDict, BroadcastLoadDict, BroadcastFingerDict
+from chaosnet import dns_name_of_address, get_dns_host_info, dns_info_for, dns_resolver_name, dns_resolver_address, set_dns_resolver_address, host_name, get_canonical_name, parse_idle_time_string, ChaosError, EOFError
 from datetime import timedelta
 import sys, html, re
 
@@ -42,111 +45,105 @@ class HTMLtable():
     def end(self):
         return "</table>"
 
+def name_host_with_tooltip(addr, user=None):
+    if isinstance(addr,int) or re.match("^[0-7]+$",addr):
+        hname = host_name(addr)
+        dname = dns_name_of_address(addr, timeout=2)
+    else:
+        hname = addr[:addr.find(".")]
+        dname = get_canonical_name(addr)
+    if user is None:
+        return "<a title={}>{}</a>".format(dname,hname)
+    else:
+        return "<a title='Whois {1}@{0}' href='hinfo.py?service[]=name&host={0}&user={1}'>{2}</a>".format(dname,user,user)
 
-class HTMLStatus(Status):
+class HTMLSimple:
+    def __init__(self, hosts, args=[], options=None):
+        result = self.getter_class(hosts, args=args, options=options).dict_result()
+        print(self.header())
+        self.printer(result)
+        print(self.footer())
+    def footer(self):
+        # default implementation
+        return self.table.end()
+
+class HTMLStatus(HTMLSimple):
+    getter_class = BroadcastStatusDict
+
     def header(self):
         self.table = HTMLtable([("Addr","status_num"),
                                 ("Name","status_name")]+
                                list(map(lambda h: (h,"status_num"),["Net", "In", "Out", "Abort", "Lost", "crcerr", "ram", "Badlen", "Rejected"])))
         return self.table.start('status_table','status')+self.table.header()
-    def footer(self):
-        return self.table.end()
-        # return "</table>"
-    def printer(self,src,data):
-        hname,statuses = self.parse_status_data(src,data)
-        # Now print it
-        # Find the DNS name if possible
-        dname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-        if dname is None:
-            first = hname
-        elif dname.lower().startswith(hname.lower()+".") or dname.lower() == hname.lower():
-            # don't use title unless it clarifies something
-            first = dname
-        else:                   # make a pretty title
-            first = "<a title=\"{}\">{}</a>".format(html.escape(hname,quote=True), dname)
-        if statuses is not None:
-            # Put name for later rows with "display: none" so it doesn't show, but table can be sorted,
-            # and change the attribute after sorting.
-            # Make link decoration (for sorting headers) a frame, like Lispm?
-            srcaddr = "{:o}".format(src)
-            for s in statuses:
-                print(self.table.row([srcaddr,first,
-                                      "<a href='hinfo.py?service[]=dns&host={0:o}'>{0:o}</a>".format(s)]
-                                     +list(statuses[s].values())))
-                # Only print the name for the first subnet entry
-                # first = ""
-                # srcaddr = ""
+    def printer(self,result):
+        for r in result:
+            # Find the DNS name if possible
+            src = r['source']
+            dname = dns_name_of_address(src,onlyfirst=False,timeout=2)
+            if dname is None:
+                first = r['hname']
+            elif dname.lower().startswith(r['hname'].lower()+".") or dname.lower() == r['hname'].lower():
+                # don't use title unless it clarifies something
+                first = dname
+            else:                   # make a pretty title
+                first = "<a title=\"{}\">{}</a>".format(html.escape(r['hname'],quote=True), dname)
+            if r['status'] is not None:
+                # Put name for later rows with "display: none" so it doesn't show, but table can be sorted,
+                # and change the attribute after sorting.
+                # Make link decoration (for sorting headers) a frame, like Lispm?
+                srcaddr = "{:o}".format(src)
+                for s in r['status']:
+                    print(self.table.row([srcaddr,first,
+                                          "<a href='hinfo.py?service[]=dns&host={0:o}'>{0:o}</a>".format(s)]
+                                         +list(r['status'][s].values())))
+                    # Only print the name for the first subnet entry
+                    # first = ""
+                    # srcaddr = ""
 
-class HTMLUptime(ChaosUptime):
+class HTMLUptime(HTMLSimple):
+    getter_class = BroadcastUptimeDict
     def header(self):
         self.table = HTMLtable([("Addr","status_num"),("Name","status_name"),("Uptime","status_num")])
         return self.table.start('uptime_table','uptime')+self.table.header()
-    def footer(self):
-        return self.table.end()
-    def printer(self,src,data):
-        up,s = self.parse_uptime_data(data)
-        # Now print it
-        # find the DNS name if possible
-        if up is not None:
-            dname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-            if dname is None:
-                first = "{:o}".format(src)
-            else:
-                first = dname
-            print(self.table.row(["{:o}".format(src),first,(up,dict(sorttable_customkey=s))]))
+    def printer(self,result):
+        for up in [r for r in result if r is not None]:
+            print(self.table.row(["{:o}".format(up['source']),up['dname'],(up['delta'],dict(sorttable_customkey=up['sec']))]))
 
-class HTMLTime(ChaosTime):
+class HTMLTime(HTMLSimple):
+    getter_class = BroadcastTimeDict
     def header(self):
         self.table = HTMLtable([("Addr","status_num"),("Name","status_name"),("Time","status_center"),("Delta","status_center")])
         return self.table.start('time_table','time')+self.table.header()
-        # return "<table id='time_table' class=\"time sortable \">\n<thead><tr><th class=\"status_num\">Addr</th><th class=\"status_name\">Name</th><th>Time</th><th>Delta</th></tr></thead>"
-    def footer(self):
-        return self.table.end()
-    def printer(self,src,data):
-        ts,t,dt = self.parse_time_data(data)
-        # Now print it
-        # find the DNS name if possible
-        # print("<!-- {} {} {} -->".format(ts,t,dt), file=sys.stderr)
-        if t is not None:
-            dname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-            if dname is None:
-                first = "{:o}".format(src)
-            else:
-                first = dname
-            print(self.table.row(["{:o}".format(src),first,(ts,dict(sorttable_customkey=t)),
-                                  ("{}{}".format("+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))),dict(sorttable_customkey=dt))]))
-            # print("<tr><td class=\"status_num\">{:o}</td><td class=\"status_name\">{}</td><td sorttable_customkey=\"{}\">{}</td><td sorttable_customkey=\"{}\" class=\"status_center\">{}{}</td></tr>"
-            #           .format(src,first,t,ts,dt,"+" if dt >= 0 else "-",timedelta(milliseconds=abs(1000*dt))))
+    def printer(self,result):
+        for t in [r for r in result if r is not None]:
+            print(self.table.row(["{:o}".format(t['source']),t['dname'],(t['dt'],dict(sorttable_customkey=t['timestamp'])),
+                                  ("{}{}".format("+" if t['delta'] >= 0 else "-",timedelta(milliseconds=abs(1000*t['delta']))),dict(sorttable_customkey=t['delta']))]))
 
-class HTMLDumpRoutingTable(ChaosDumpRoutingTable):
+class HTMLDumpRoutingTable(HTMLSimple):
+    getter_class = BroadcastDumpRoutingTableDict
     def header(self):
         self.table = HTMLtable([("Addr","status_num"),("Host","status_name"),("Net","status_num"),("Meth","status_num"),("Cost","status_num")])
         return self.table.start('routing_table','routing')+self.table.header()
-    def footer(self):
-        return self.table.end()
-    def printer(self,src,data):
-        # hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
-        saddr = "{:o}".format(src)
-        hname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-        rtt = self.parse_routing_data(data)
-        for sub in rtt:
-            print(self.table.row([saddr,hname,"{:o}".format(sub),"{:o}".format(rtt[sub]['method']),rtt[sub]['cost']]))
+    def printer(self,result):
+        for rtt in result:
+            hname = rtt['dname']
+            saddr = "{:o}".format(rtt['source'])
+            for sub in rtt['routingtable']:
+                print(self.table.row([saddr,hname,"{:o}".format(sub),"{:o}".format(rtt['routingtable'][sub]['method']),rtt['routingtable'][sub]['cost']]))
 
-class HTMLLastSeen(ChaosLastSeen):
+class HTMLLastSeen(HTMLSimple):
+    getter_class = BroadcastLastSeenDict
     def header(self):
         self.table = HTMLtable([("Addr","status_num"),("Host","status_name"),("Seen","status_name"),("SeenAddr","status_num"),("#in","status_num"),("Via","status_num"),("FC","status_num"),("Age","status_num")])
         return self.table.start('lastseen_table','lastseen')+self.table.header()
-    def footer(self):
-        return self.table.end()
-    def printer(self,src,data):
-        # hname = "{} ({:o})".format(host_name("{:o}".format(src)), src)
-        saddr = "{:o}".format(src)
-        hname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-        cn = self.parse_lastcn_data(data)
-        for addr in cn:
-            e = cn[addr]
-            a = timedelta(seconds=e['age'])
-            print(self.table.row([saddr,hname,dns_name_of_address(addr,onlyfirst=False,timeout=2),"{:o}".format(addr),e['input'],"{:o}".format(e['via']),e['fc'],(a,dict(sorttable_customkey=e['age']))]))
+    def printer(self,result):
+        for r in result:
+            saddr = "{:o}".format(r['source'])
+            hname = r['dname']
+            for addr in r['lastseen']:
+                e = r['lastseen'][addr]
+                a = timedelta(seconds=e['age'])
+                print(self.table.row([saddr,hname,dns_name_of_address(addr,onlyfirst=False,timeout=2),"{:o}".format(addr),e['input'],"{:o}".format(e['via']),e['fc'],(a,dict(sorttable_customkey=e['age']))]))
 
 class GroupAffiliation:
     # Show a cute tooltip for the affiliation.
@@ -266,175 +263,97 @@ class HTMLDNSinfo:
         
 
 
-class HTMLName(ChaosName,GroupAffiliation):
-    def __init__(self, hosts, options=None, args=[]):
-        self.args = args
-        for host in hosts:
-            try:
-                p = SimpleStreamProtocol(host,"NAME",options=options,args=args)
-                self.formatter(p,host,len(hosts)>1)
-            except EOFError:
-                if len(hosts) > 1:
-                    print("<h3>[{}]</h3>".format(host))
-                print("<p>No info from {}</p>".format(host))
-            except ChaosError as m:
-                print(m, file=sys.stderr)
-                pass
-    def formatter(self,p,host,print_individual_header):
-        # Parse NAME output to give it structure.
-        # Read first line
-        # - if it is short: "No users", empty etc, just show it
-        # - headers: collect and save indexes of starts
-        #   Header heuristic: "[A-Z][a-z]+ ?[a-z]*" (with zero, one, or two dashes before+after)
-        # if headers, read successive lines, and create rows based on header indexes.
-        # A gross hack is applied to detect and handle the affiliation part of ITS output (which doesn't have a header).
-        hack_its_uname = False
-        if self.args and len(self.args) > 0:
-            # probably /W, and that output is too hairy
-            print("<pre>", end='')
-            p.copy_until_eof()
-            print("</pre>")
-            return
-        line = str(p.conn.get_line(),"ascii")
-        if '\t' in line:
-            if debug:
-                print("Found tab in NAME output from {}".format(host), file=sys.stderr)
-            line = line.expandtabs()
-        if re.search("  +",line):
-            headers = []
-            indexes = []
-            rows = []
-            s = 0
-            # since regexps can't count, use explicit variants with --Header--, -Header-, and Header
-            for m in re.finditer("(--[A-Z]+[a-z]* ?[a-z]*--)|(-[A-Z]+[a-z]* ?[a-z]*-)|([A-Z]+[a-z]* ?[a-z]*)",line): # "  +"
-                # save index of next header start
-                indexes.append(m.start() if m.start() != 1 else 0)
-                # save this header
-                headers.append(line[m.start():m.end()].strip())
-                s = m.end()
-            if len(line[s:].strip()) > 0:
-                headers.append(line[s:].strip())
-            # @@@@ ITS affiliation hack alert
-            if headers[0] == '-User-':
-                # Check header before looking up in DNS, for speed
-                hn = dns_name_of_address(host) if re.match("^[0-7]+$",host) else host
-                hi = get_dns_host_info(hn, timeout=2)
-                if hi and 'os' in hi and hi['os'].lower() == "its":
-                    # add an empty affiliation header
-                    headers = headers[0:1]+[""]+headers[1:]
-                    hack_its_uname = True
-            try:
-                nl = str(p.conn.get_line(),"ascii")
-                while len(nl) > 0:
-                    row = []
-                    istart = 1
-                    s = 0
-                    if hack_its_uname:
-                        # Hack the first element
-                        uname = nl[s:indexes[1]].strip()
-                        # check for "UNAME FR" where F is affiliation and R is relation
-                        m = re.match("([A-Z]+) +([A-Z]{1,2}|[$@+-]|-->)$",uname)
-                        if m:
-                            # append them separately
-                            # row.append("<a href='hinfo.py?service=name&host={}&user={}>{}</a>".format(host,m.group(1),m.group(1)))
-                            row.append(m.group(1))
-                            row.append(self.group_affiliation_desc(m.group(2)))
-                        else:
-                            row.append(uname)
-                            row.append("") # empty affiliation, perhaps
-                        s = indexes[1]   # skip over
-                        istart = 2
-                    # Collect the elements of the row
-                    for i in indexes[istart:]:
-                        row.append(nl[s:i].strip())
-                        s = i
-                    # and the last one
-                    row.append(nl[s:].strip())
-                    rows.append(row)
-                    nl = str(p.conn.get_line(),"ascii")
-            except ChaosError as m:
-                # print(m,file=sys.stderr)
-                pass
-            tbl = HTMLtable(list(map(lambda h: (h,"status_name"), headers)))
-            if print_individual_header:
-                print("<h3>[{}]</h3>".format(host))
-            print(tbl.start('name_table','name')+tbl.header())
-            for r in rows:
-                r[0] = "<a href='hinfo.py?service[]=name&host={}&user={}'>{}</a>".format(host,r[0],r[0])
-                print(tbl.row(r))
-            print(tbl.end())
-        else:
-            # no headers, just use first line
-            if print_individual_header:
-                print("<h3>[{}]</h3>".format(host))
-            if len(line.strip()) == 0:
-                print("<p>(No info.)</p>")
-            elif len(line) < 20:  # short msg, like "No users"
-                print("<p>{}</p>".format(html.escape(line)))
+class HTMLName(HTMLSimple,GroupAffiliation):
+    getter_class = NamesDict
+    def header(self):
+        self.table = HTMLtable([("User","status_name"),("","status_name"),("Personal name","status_name"),
+                                ("Jobname","status_name"), ("Idle","status_num"),
+                                ("TTY","status_name"), ("Host","status_name"),("Location","status_name")])
+        return self.table.start('name_table','name')+self.table.header()
+    def printer(self, result):
+        for hn in result:
+            if isinstance(hn['source'], int):
+                hname = dns_name_of_address(hn['source'], timeout=2)
             else:
-                print("<pre>{}</pre>".format(html.escape(line)))
-
-class HTMLLoadName(ChaosLoadName):
-    def call_name(self, hname, options=None):
-        self.print_header(hname)
-        HTMLName([hname], options=options)
-    def print_header(self, hname):
-        print("<h3>[{}]</h3>".format(hname))
-    def print_n_users(self, n):
-        print("<p>Users: {}</p>".format(n))
-    def nonprinter(self,datas):
-        if len(datas) > 0:
-            hnames = []
-            # Collect the host names of empty hosts - use short name here
-            for src,d in datas:
-                hnames.append(host_name("{:o}".format(src)))
-            # Report it.
-            print("<p>No users on "+", ".join(hnames)+".</p>")
-
-class HTMLLoad(ChaosLoad):
-    def header(self):
-        self.table = HTMLtable([("Host","status_name"),("Fair Share","status_num"),("Users","status_num")])
-        return self.table.start('load_table','load')+self.table.header()
+                hname = get_canonical_name(hn['source'])
+            for n in hn['lines']:
+                print(self.table.row([
+                    name_host_with_tooltip(hn['source'], n['userid']),
+                    self.group_affiliation_desc(n['affiliation']), n['pname'], n['jobname'], 
+                    (n['idle'],dict(sorttable_customkey=parse_idle_time_string(n['idle']))),
+                    n['tty'], name_host_with_tooltip(hn['source']), n['location']]))
+                
+class HTMLLoadName(HTMLName):
+    def __init__(self, hosts, args=[], options=None):
+        llist = BroadcastLoadDict(hosts, args=args, options=options).dict_result()
+        self.nousers = [l['source'] for l in llist if l['users'] == 0]
+        nlist = NamesDict(["{:o}".format(l['source']) for l in llist if l['users'] > 0], args=args, options=options).dict_result()
+        print(self.header())
+        self.printer([n for n in nlist if n is not None])
+        print(self.footer())
     def footer(self):
-        return self.table.end()
-    def printer(self, src, data):
-        try:
-            hname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-        except:
-            hname = "{:o}".format(src)
-        fields = list(map(lambda x: str(x.split(b':')[1],'ascii').strip('.\0 '),data.split(b"\r\n")))
-        print("{!r}".format(fields[1]), file=sys.stderr)
-        print(self.table.row(["<a href='hinfo.py?service[]=name&host={0}'>{0}</a>".format(hname) if fields[1] != "0" else hname,
-                              fields[0],fields[1]]))
+        if len(self.nousers) == 0:
+            return super().footer()
+        else:
+            return super().footer() + "\n<p>No users on {}.</p>".format(", ".join(map(lambda s: host_name(s), self.nousers)))
 
-
-class HTMLFinger(ChaosFinger,GroupAffiliation):
+class HTMLLoad(HTMLSimple):
+    getter_class = BroadcastLoadDict
     def header(self):
-        # debug = True
+        self.table = HTMLtable([("Host","status_name"),("Fair Share %","status_num"),("Users","status_num")])
+        return self.table.start('load_table','load')+self.table.header()
+    def printer(self, result):
+        for r in result:
+            print(self.table.row(["<a href='hinfo.py?service[]=name&host={0}'>{0}</a>".format(dns_name_of_address(r['source'],onlyfirst=False,timeout=2)), r['share'], r['users']]))
+
+
+class HTMLFinger(HTMLSimple,GroupAffiliation):
+    getter_class = BroadcastFingerDict
+    def header(self):
+        self.free_lispm = []
         self.table = HTMLtable([("User","status_name"),("","status_name"),("Name","status_name"),("Host","status_name"),
                                 ("Idle","status_num"),("Location","status_name")])
         return self.table.start('finger_table','finger')+self.table.header()
+    def printer(self,result):
+        for hn in result:
+            if len(hn['uname']) == 0:
+                self.free_lispm.append(hn)
+            else:
+                hname = host_name(hn['source'])
+                # uname affiliation pname hname idle loc
+                print(self.table.row([hn['uname'],self.group_affiliation_desc(hn['affiliation']), hn['pname'], hname,
+                                      (hn['idle'],dict(sorttable_customkey=parse_idle_time_string(hn['idle']))),
+                                      hn['location']]))
     def footer(self):
-        return self.table.end()
-    def printer(self,src,data):
-        hname = host_name("{:o}".format(src))
-        fields,idle = self.parse_finger_data(data)
-        if fields[0] == "":
-            return False
-        # uname affiliation pname hname idle loc
-        print(self.table.row([fields[0],self.group_affiliation_desc(fields[4]),fields[3],hname,(fields[2],dict(sorttable_customkey=idle)),fields[1]]))
-        return True
-    def nonprinter(self,freelist):
-        if len(freelist) > 0:
-            print("<h3>Free (lisp) machines:</h3>")
-            tbl = HTMLtable([("Host","status_name"),("Location","status_name"),("Idle","status_num")])
-            print(tbl.start('free_lispm','finger')+tbl.header())
-            for src,data in freelist:
-                hname = host_name("{:o}".format(src))
-                f = list(map(lambda x: str(x,'ascii'),data.split(b"\215")))
-                print(tbl.row([hname,f[1],"{:s}".format(f[2]) if f[2] != "" else ""]))
-            print(tbl.end())
+        if len(self.free_lispm) == 0:
+            return super().footer() + "\n<p>No free lisp machines.</p>"
         else:
-            print("<p>No free lisp machines.</p>")
+            s = "<h3>Free (lisp) machines:</h3>\n"
+            tbl = HTMLtable([("Host","status_name"),("Location","status_name"),("Idle","status_num")])
+            s += tbl.start('free_lispm','finger')+tbl.header()
+            for hn in self.free_lispm:
+                hname = host_name(hn['source'])
+                s += tbl.row([hname,hn['location'],hn['idle']])
+            s += tbl.end()
+            return super().footer() + s
 
-                
+# Just for debug/development
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Chaosnet simple protocol client',
+                                         epilog="If the service is unknown and a host is given, "+\
+                                         "tries to contact the service at the host and prints its output. "+\
+                                         "If no service arg is given, but the first subnet arg is the name of a known service, "+\
+                                         "and another subnet arg exists, the first subnet arg is used as service arg.")
+    parser.add_argument("subnets", metavar="SUBNET/HOST", nargs='+', #type=int, 
+                            help="Hosts to contact or Subnets (octal) to broadcast on, -1 for all subnets, or 0 for the local subnet")
+    args = parser.parse_args()
+    if -1 in args.subnets and len(args.subnets) != 1:
+        # "all" supersedes all other
+        args.subnets = [-1]
+    elif 0 in args.subnets and len(args.subnets) != 1:
+        # "local" supersedes all other
+        args.subnets = [0]
+    # Parse "subnet" args as octal numbers (if they can be)
+    args.subnets = list(map(lambda x: int(x,8) if isinstance(x,str) and (x.isdigit() or x =="-1") else x, args.subnets))
+    HTMLLoadName(args.subnets)

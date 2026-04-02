@@ -881,6 +881,12 @@ def parse_idle_time_string(s):
     # print("#### Can't parse idle time {!r} ####".format(s), file=sys.stderr)
     return s
 
+class NamesDict:
+    # Takes a list of hosts and returns a list of results
+    def __init__(self, hosts, args=[], options=None):
+        self.hresults = [NameDict(h, args=args, options=options).dict_result() for h in hosts]
+    def dict_result(self):
+        return self.hresults
 class NameDict:
     # This gives the "finger" output as a list of dicts. It is complete overkill if you only want
     # to know, e.g., who is logged on. But it is quite flexible and could be used to make a unified list

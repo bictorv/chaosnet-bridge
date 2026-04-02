@@ -71,17 +71,18 @@ if host and srvc and len(srvc) == 1:
             u = "" if user is None or s.lower() != 'name' else ", ".join(user)+" at "
             hh = ", ".join(map(lambda h: h if isinstance(h,str) else "all subnets" if h == -1 else "subnet {:o}".format(h) if h < 0x400 else "host {:o}".format(h),hs[:5]+(["..."] if len(hs) > 5 else [])))
             if 'svg' in x:
-                print("<object type='image/svg+xml' data='{}' width='30%' height='100%' style='float: right;'></object>".
+                print("<object type='image/svg+xml' data='{}' width='20%' height='100%' style='float: right;'></object>".
                       format(x['svg']))
-            # @@@@ Add Refresh button
             print("<h2>{} for {}{}".format(sname,u, hh))
+            # Add Refresh button
             print('<button value="Refresh" title="Refresh {} - last refreshed {}" type="button" onclick="loadService(\'{}\',\'{}\',\'{}\')">&#10226;</button>'.format(sname,time.strftime("%a, %d %b %Y %H:%M:%S %Z", time.localtime()),
                                                                                                                                                                       os.getenv('QUERY_STRING'),s,sname))
+            print('<button value="Clear" title="Clear section" type="button" onclick="clearService(\'{}\')">&#10005;</button>'.format(s))
             print("</h2>")
             if user and s.lower() == 'name':
-                x['s'](hs,dict(timeout=3),args=["/W {}".format(",".join(user))])
+                x['s'](hs,options=dict(timeout=3),args=["/W {}".format(",".join(user))])
             else:
-                x['s'](hs,dict(timeout=3))
+                x['s'](hs,options=dict(timeout=3))
     else:
         print("<!-- no such service: '{}' -->".format(s), file=sys.stderr)
 else:
