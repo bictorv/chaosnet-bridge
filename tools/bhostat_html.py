@@ -265,6 +265,17 @@ class HTMLDNSinfo:
 
 class HTMLName(HTMLSimple,GroupAffiliation):
     getter_class = NamesDict
+    def __init__(self, hosts, args=[], options=None):
+        result = self.getter_class(hosts, args=args, options=options).dict_result()
+        if len(result) == 1 and 'rawlines' in result[0]:
+            # Skip table header/footer for rawlines case.
+            # This doesn't handle a mix of rawlines and non-rawlines, but this is the typical case.
+            self.printer(result)
+        else:
+            print(self.header())
+            self.printer(result)
+            print(self.footer())
+
     def header(self):
         self.table = HTMLtable([("User","status_name"),("","status_name"),("Personal name","status_name"),
                                 ("Jobname","status_name"), ("Idle","status_num"),
@@ -276,12 +287,15 @@ class HTMLName(HTMLSimple,GroupAffiliation):
                 hname = dns_name_of_address(hn['source'], timeout=2)
             else:
                 hname = get_canonical_name(hn['source'])
-            for n in hn['lines']:
-                print(self.table.row([
-                    name_host_with_tooltip(hn['source'], n['userid']),
-                    self.group_affiliation_desc(n['affiliation']), n['pname'], n['jobname'], 
-                    (n['idle'],dict(sorttable_customkey=parse_idle_time_string(n['idle']))),
-                    n['tty'], name_host_with_tooltip(hn['source']), n['location']]))
+            if 'rawlines' in hn:
+                print("<pre>{}</pre>".format(hn['rawlines']))
+            else:
+                for n in hn['lines']:
+                    print(self.table.row([
+                        name_host_with_tooltip(hn['source'], n['userid']),
+                        self.group_affiliation_desc(n['affiliation']), n['pname'], n['jobname'], 
+                        (n['idle'],dict(sorttable_customkey=parse_idle_time_string(n['idle']))),
+                        n['tty'], name_host_with_tooltip(hn['source']), n['location']]))
                 
 class HTMLLoadName(HTMLName):
     def __init__(self, hosts, args=[], options=None):

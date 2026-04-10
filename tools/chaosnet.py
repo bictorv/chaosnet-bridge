@@ -896,6 +896,7 @@ class NameDict:
     def __init__(self, hname, args=[], options=None):
         self.conn = StreamConn()
         self.hname = hname
+        self.args = args
         if options is not None and 'timeout' in options:
             self.timeout = options['timeout']
         try:
@@ -1008,7 +1009,9 @@ class NameDict:
         output = self.conn.get_string_until_eof().rstrip()
         if "\t" in output:
             output = output.expandtabs()
-            # Break it into lines
+        if len(self.args) > 0:  # can't handle /whois-like output
+            return dict(source = self.conn.remote, rawlines=output.replace("\r\n","\n"))
+        # Break it into lines
         if "\r\n" in output:
             lines = output.split("\r\n")
         else:

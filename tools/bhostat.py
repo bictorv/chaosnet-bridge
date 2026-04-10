@@ -134,9 +134,11 @@ class ChaosLoadName:
 
 class ChaosName:
     def __init__(self, hosts, options=None, args=[]):
-        self.print_header()
-        for host in hosts:
-            self.print_lines(NameDict(host, args, options).dict_result())
+        r = [NameDict(host, args, options).dict_result() for host in hosts]
+        if len(r) > 0 and 'rawlines' not in r[0]:
+            self.print_header()
+        for hn in r:
+            self.print_lines(hn)
     def print_header(self):
         print("{:10s} {:3s} {:20s} {:7s} {:>6s} {:3s}  {:10s} {:s}".format(
             'User','','Personal name','Jobname','Idle','TTY',"Host",'Location'))
@@ -146,10 +148,13 @@ class ChaosName:
                 hname = dns_name_of_address(hn['source'], onlyfirst=True, timeout=2)
             else:
                 hname = get_canonical_name(hn['source'], onlyfirst=True)
-            for n in hn['lines']:
-                print("{:10s} {:3s} {:20s} {:7s} {:>6s} {:3s}  {:10s} {:s}".format(
-                    n['userid'], n['affiliation'], n['pname'], n['jobname'], n['idle'], n['tty'], 
-                    hname, n['location']))
+            if 'rawlines' in hn:
+                print(hn['rawlines'])
+            else:
+                for n in hn['lines']:
+                    print("{:10s} {:3s} {:20s} {:7s} {:>6s} {:3s}  {:10s} {:s}".format(
+                        n['userid'], n['affiliation'], n['pname'], n['jobname'], n['idle'], n['tty'], 
+                        hname, n['location']))
 
 # The DUMP-ROUTING-TABLE protocol
 class ChaosDumpRoutingTable:
