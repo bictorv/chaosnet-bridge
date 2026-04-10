@@ -147,7 +147,6 @@ def send_message(user,athost,text,timeout=5,myhostname=None):
     ncp.connect(athost,"SEND",[user],options=dict(timeout=timeout))
     msg = make_send_message(text)
     # data with LISPM newlines etc
-    # @@@@ may get UnicodeEncodeError; need validation and/or error handling
     bb = bytes(msg,"ascii").translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
     ncp.send_data(bb)
 
@@ -169,6 +168,9 @@ if __name__ == '__main__':
         # print("input was {!r}".format(msg), file=sys.stderr)
     else:
         msg = " ".join(args.message)
+    # Make it ascii, if possible
+    import unicodedata
+    msg = unicodedata.normalize("NFKD",msg).encode("ascii","ignore").decode()
 
     try:
         send_message(m.group(1),m.group(2),msg)
