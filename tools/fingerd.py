@@ -21,106 +21,176 @@ import os
 
 from chaosnet import PacketConn, ChaosError
 
+cachetime = 30                  # seconds to cache info we're collecting and sending back
 # -d
 debug = False
 
-def get_fullname(user):
-    import pwd
-    try:
-        p = pwd.getpwnam(str(user,"ascii"))
-        if debug:
-            print("user {} = {}".format(user,p), file=sys.stderr)
-        return p.pw_gecos.replace("ö","o").replace("å","a").replace("ä","a")
-    except KeyError:
-        if debug:
-            print("user {} not found".format(user), file=sys.stderr)
-        return ""
+class FingerDaemon:
 
-def get_console_user():
-    r = subprocess.run(["/usr/bin/w","-h"], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-    rout = r.stdout.splitlines()
-    if len(rout) > 0:
-        for l in rout:
-            u,con,rest = l.split(maxsplit=2)
-            if con == b'console':
-                return u
-        if debug:
-            print("Can't find console, using first line for uname: {}".format(rout[0]), file=sys.stderr)
-        uname,rest = rout[0].split(maxsplit=1)
-        return uname
-    return b""
+    def __init__(self, user=None, pname=None, location=None, affiliation=None):
+        self.user = user
+        self.pname = pname
+        self.location = location
+        self.affiliation = affiliation
 
-# Use this on macOS; detects idle time not only in terminal windows
-def get_idle_time_macos():
-    r = subprocess.run(["/usr/sbin/ioreg","-r","-c","IOHIDSystem"], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-    rout = r.stdout.splitlines()
-    hididletime = next((line for line in rout if b"HIDIdleTime" in line), None)
-    if hididletime is None:
-        if debug:
-            print("Can't find idle time", file=sys.stderr)
-        return 0
-    m = re.match(r".*\"HIDIdleTime\" = ([0-9]+)",str(hididletime,"ascii"))
-    if m:
-        if debug:
-            print("Idle time {} => {} sec".format(m.group(1), round(int(m.group(1))/1000000000)), file=sys.stderr)
-        return round(int(m.group(1))/1000000000)
-    elif debug:
-        print("Can't parse idle time: {!r}".format(str(hididletime,"ascii")), file=sys.stderr)
+    def set_location(self, loc):
+        self.location = loc
+    def set_affiliation(self, aff):
+        self.affiliation = aff
+    def set_user(self, uname):
+        self.user = uname
+    def set_pname(self, pn):
+        self.pname = pn
 
-def get_idle_time(user):
-    import platform
-    if platform.system() == "Darwin":
-        idle = get_idle_time_macos()
-        if idle is not None:    # else failed somehow
-            return idle
-    r = subprocess.run(["/usr/bin/w","-h",user], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-    rout = r.stdout.splitlines()
-    idle = 65534
-    if len(rout) > 0:
-        for l in rout:
-            idl = 65534
-            u,con,src,login,i,what = l.split(maxsplit=5)
-            if i == b'-':
-                idl = 0
-            elif re.fullmatch(b'[0-9]+', i):
-                idl = int(i)*60
-            elif b':' in i:
-                ids = i.split(b':')
-                if len(ids) == 2:
-                    if ids[1].endswith(b'm'):
-                        ids[1] = ids[1][:-1]
-                    idl = int(ids[0])*60 + int(ids[1])
-            else:
-                ids = str(i,"ascii")
-                m = re.match(r'(\d+(\.\d+)?)s',ids)
-                if m is not None:
-                    idl = float(m[1])
-                else:
-                    m = re.match(r'(\d+)d(ay)?', ids)
-                    if m is not None:
-                        idl = int(m[1])*24*60*60
+    def auto_location(self):
+        # Get the location reported by ipinfo.io, assuming we're connected to the Internet.
+        # Concatenate city, region, countrycode. Skip region if it's the same as the city.
+        from urllib.request import urlopen
+        from urllib.error import URLError
+        import json
+        try:
+            resp = None
+            with urlopen("https://ipinfo.io") as f:
+                resp = json.load(f)
+            if resp:
+                loc = []
+                if 'city' in resp:
+                    loc.append(resp['city'])
+                if 'region' in resp:
+                    if 'city' in resp:
+                        if resp['region'] != resp['city']:
+                            loc.append(resp['region'])
                     else:
-                        print("Unknown idle format: {}".format(ids), file=sys.stderr)
+                        loc.append(resp['region'])
+                if 'country' in resp:
+                    loc.append(resp['country'])
+                return ", ".join(loc)
+        except URLError as m:
             if debug:
-                print("Idle time {} parsed to {}".format(i,idl), file=sys.stderr)
-            if idl < idle:
-                idle = idl
-    else:
-        print("No lines from w: {}".format(rout), file=sys.stderr)
-    return idle
+                print("Error checking ipinfo.io: {}".format(m), file=sys.stderr)
 
-def idlestring_min(sec):
-    min = sec//60
-    if min == 0:
-        return b''
-    elif min < 60:
-        return bytes("0:{:02}".format(min), "ascii")
-    elif min < 24*60:
-        return bytes("{}:{:02}".format(min//(60), min % (60)), "ascii")
-    elif min < 7*24*60:
-        return bytes("{}d".format(min//(60*24)),"ascii")
-    else:
-        return b"*:**"
+    def get_fullname(self, user):
+        import pwd
+        if user is None:
+            user = self.get_current_user()
+        try:
+            p = pwd.getpwnam(user)
+            if debug:
+                print("user {} = {}".format(user,p.pw_gecos), file=sys.stderr)
+            import unicodedata
+            # Make it ascii, if you can
+            return unicodedata.normalize("NFKD",p.pw_gecos).encode("ascii","ignore").decode()
+        except KeyError:
+            if debug:
+                print("user {} not found".format(user), file=sys.stderr)
+            return ""
+
+    def get_current_user(self):
+        import getpass
+        return getpass.getuser()
+
+    def get_console_user(self):
+        r = subprocess.run(["/usr/bin/w","-h"], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        rout = r.stdout.splitlines()
+        if len(rout) > 0:
+            for l in rout:
+                u,con,rest = l.split(maxsplit=2)
+                if con == b'console':
+                    return str(u,"ascii")
+            if debug:
+                print("Can't find console, using first line for uname: {}".format(rout[0]), file=sys.stderr)
+            uname,rest = rout[0].split(maxsplit=1)
+            return str(uname,"ascii")
+
+    # Use this on macOS; detects idle time not only in terminal windows
+    def get_idle_time_macos(self):
+        r = subprocess.run(["/usr/sbin/ioreg","-r","-c","IOHIDSystem"], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        rout = r.stdout.splitlines()
+        hididletime = next((line for line in rout if b"HIDIdleTime" in line), None)
+        if hididletime is None:
+            if debug:
+                print("Can't find idle time", file=sys.stderr)
+            return 0
+        m = re.match(r".*\"HIDIdleTime\" = ([0-9]+)",str(hididletime,"ascii"))
+        if m:
+            if debug:
+                print("Idle time {} => {} sec".format(m.group(1), round(int(m.group(1))/1000000000)), file=sys.stderr)
+            return round(int(m.group(1))/1000000000)
+        elif debug:
+            print("Can't parse idle time: {!r}".format(str(hididletime,"ascii")), file=sys.stderr)
+
+    def parse_idle_time(self, i):
+        if i == '-':
+            return 0
+        elif re.fullmatch('[0-9]+', i):
+            return int(i)*60
+        elif ':' in i:
+            ids = i.split(':')
+            if len(ids) == 2:
+                if ids[1].endswith('m'):
+                    ids[1] = ids[1][:-1]
+                return int(ids[0])*60 + int(ids[1])
+        else:
+            m = re.match(r'(\d+(\.\d+)?)s',i)
+            if m is not None:
+                return float(m[1])
+            else:
+                m = re.match(r'(\d+)d(ay)?', i)
+                if m is not None:
+                    return int(m[1])*24*60*60
+                else:
+                    print("Unknown idle format: {}".format(i), file=sys.stderr)
+
+    def get_idle_time(self, user):
+        import platform
+        if platform.system() == "Darwin" and user == self.get_current_user():
+            idle = self.get_idle_time_macos()
+            if idle is not None:    # else failed somehow
+                return idle
+        r = subprocess.run(["/usr/bin/w","-h",user], stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        rout = r.stdout.splitlines()
+        idle = 65534
+        if len(rout) > 0:
+            for l in rout:
+                u,con,src,login,i,what = l.split(maxsplit=5)
+                idl = parse_idle_time(str(i,"ascii"))
+                if idl is not None and idl < idle:
+                    idle = idl
+        else:
+            print("No lines from w: {}".format(rout), file=sys.stderr)
+        return idle
+
+    def idlestring_min(self, sec):
+        min = sec//60
+        if min == 0:
+            return ''
+        elif min < 60:
+            return "0:{:02}".format(min)
+        elif min < 24*60:
+            return "{}:{:02}".format(min//(60), min % (60))
+        elif min < 7*24*60:
+            return "{}d".format(min//(60*24))
+        else:
+            return "*:**"
+
+    def get_and_handle_finger_request(self, conn=None, last=0):
+        c = PacketConn() if conn is None else conn
+        h = c.listen("FINGER")
+        if debug:
+            print("Conn from {}".format(h), file=sys.stderr)
+        # get some real data to send
+        if time.time() - last > cachetime:
+            self.user = self.get_console_user() if self.user is None else self.user
+            self.pname = self.get_fullname(self.user) if self.pname is None else self.pname
+            self.location = self.auto_location() if self.location is None else self.location
+            if self.location is None:
+                self.location = "Home"
+            self.affiliation = "-" if self.affiliation is None else self.affiliation
+            self.idle = self.get_idle_time(self.user)
+            if debug:
+                print("Updated u,p,i,is,loc: {} {} {} {} {}".format(self.user,self.pname,self.idle,self.idlestring_min(self.idle), self.location), file=sys.stderr)
+        c.send_ans(b"\215".join(map(lambda s: bytes(s,"ascii"),[self.user,self.location,self.idlestring_min(self.idle),self.pname,self.affiliation]))+b"\215")
+        
 
 
 if __name__ == '__main__':
@@ -138,33 +208,24 @@ if __name__ == '__main__':
     if args.debug:
         debug = True
         print(args, file=sys.stderr)
+
+    fd = FingerDaemon()
     if args.location:
-        loc = bytes(args.location,"ascii")
+        fd.location = args.location
     else:
-        loc = os.getenvb(b"LOCATION",b"Home")
+        fd.location = os.getenv("LOCATION")
 
     if args.affiliation:
-        aff = bytes(args.affiliation[0],"ascii")
+        fd.affiliation = args.affiliation[0]
     else:
-        aff = os.getenvb(b"AFFILIATION",b"-")
+        fd.affiliation = os.getenv("AFFILIATION")
 
     # Update data only occasionally (once per minute)
     last = 0
     while True:
         try:
-            c = PacketConn()
-            h = c.listen("FINGER")
-            if debug:
-                print("Conn from {}".format(h), file=sys.stderr)
-            # get some real data to send
-            if time.time() - last > args.cachetime:
-                uname = get_console_user()
-                pname = bytes(get_fullname(uname),"ascii")
-                idle = get_idle_time(uname)
-                last = time.time()
-                if debug:
-                    print("Updated u,p,i,is: {} {} {} {}".format(uname,pname,idle,idlestring_min(idle)), file=sys.stderr)
-            c.send_ans(b"\215".join([uname,loc,idlestring_min(idle),pname,aff])+b"\215")
+            fd.get_and_handle_finger_request(last=last)
+            last = time.time()
         except (BrokenPipeError, socket.error, ChaosError) as msg:
             if debug:
                 print("Error: {}".format(msg), file=sys.stderr)
