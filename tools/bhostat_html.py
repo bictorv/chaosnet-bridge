@@ -48,10 +48,16 @@ class HTMLtable():
 def name_host_with_tooltip(addr, user=None):
     if isinstance(addr,int) or re.match("^[0-7]+$",addr):
         hname = host_name(addr)
+        dot = hname.find(".")
+        if dot >= 0:
+            hname = hname[:dot]
         dname = dns_name_of_address(addr, timeout=2)
     else:
-        hname = addr[:addr.find(".")]
         dname = get_canonical_name(addr)
+        hname = dname
+        dot = hname.find(".")
+        if dot >= 0:
+            hname = hname[:dot]
     if user is None:
         return "<a title={}>{}</a>".format(dname,hname)
     else:
@@ -287,6 +293,10 @@ class HTMLName(HTMLSimple,GroupAffiliation):
                 hname = dns_name_of_address(hn['source'], timeout=2)
             else:
                 hname = get_canonical_name(hn['source'])
+            if isinstance(hname,str):
+                dot = hname.find(".")
+                if dot >= 0:
+                    hname = hname[:dot]
             if 'rawlines' in hn:
                 print("<pre>{}</pre>".format(hn['rawlines']))
             else:
