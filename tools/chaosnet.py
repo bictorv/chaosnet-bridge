@@ -906,9 +906,11 @@ class NameDict:
 
     # Translate headers into labels for the resulting dict.
     # You could give the first header special treatment, it *should* always be userid regardless of header(?)
-    # @@@@ *Perhaps* you could instead use heuristics, like:
-    # First is always userid. If it has "name" it is pname. If it its idle/tty it is that. If it has "location" it is that.
-    # Smells like regexps would work.
+    # Now, just enumerate all the known header variants.
+    # There are heuristics you can dream up, but it's difficult to generalize them.
+    # Examples of problems: linux uses a header "Login Time", but macOS has separate "Login" (date) and "Time";
+    #  Multics (currently) has a single space between "Idle" and "-- Location --".
+    # To a certain extent you can use the DNS HINFO (see below).
     headerlabels = dict(userid=["-User-","--User--","User","Login"], # ITS, Multics, TOPS-20, Unix
                         affiliation=["Affiliation"],      # Meta-header (ITS)
                         pname=["--Full name--","-- Full Name --","Personal name","Name"], # ITS, Multics, TOPS-20, Unix
@@ -916,7 +918,7 @@ class NameDict:
                         job=["Job"],                 # TOPS-20
                         idle=["Idle"],
                         tty=["TTY"],
-                        location=["-Console location-","Console location"]) # ITS, TOPS-20
+                        location=["-Console location-","Console location","-- Location --"]) # ITS, TOPS-20, Multics
     def headerlabel(self,h):
         for lab,hdrs in self.headerlabels.items():
             if h in hdrs:
@@ -929,8 +931,6 @@ class NameDict:
         indexes = []
         s = 0
         for m in re.finditer("|".join(["({})".format("|".join(h)) for h in self.headerlabels.values()]),hline):
-            # since regexps can't count, use explicit variants with --Header--, -Header-, and Header
-            # "(--[A-Z]+[a-z]* ?[a-z]*--)|(-- [A-Z]+[a-z]* ?[a-z]* --)|(-[A-Z]+[a-z]* ?[a-z]*-)|([A-Z]+[a-z]* ?[a-z]*)",hline): # "  +"
             # save index of next header start
             indexes.append(m.start() if m.start() != 1 else 0)
             # save this header
