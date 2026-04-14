@@ -1,4 +1,4 @@
-# Copyright © 2020 Björn Victor (bjorn@victor.se)
+# Copyright © 2020, 2026 Björn Victor (bjorn@victor.se)
 # Chaosnet client for FILE protocol
 # Demonstrates the Packet API for the NCP of cbridge, the bridge program for various Chaosnet implementations.
 
@@ -31,7 +31,7 @@
 # Writing files still doesn't work well with ITS, e.g. writing chsgtv/chasta.8
 
 import socket, io
-import sys, subprocess, threading, time
+import sys, subprocess, threading, time, os
 import re, string
 import functools
 import codecs
@@ -46,6 +46,9 @@ from pathlib import Path
 import dns.resolver
 from getpass import getpass
 
+from chaosnet import PacketConn, Opcode, opcode_name, ChaosSocketError
+from chaosnet import dns_info_for, set_dns_resolver_address, set_dns_search_list, local_domain
+
 dns_resolver_name = 'DNS.Chaosnet.NET'
 dns_resolver_addr = None
 
@@ -55,28 +58,6 @@ from concurrent.futures import ThreadPoolExecutor
 packet_address = '/tmp/chaos_packet'
 # -d
 debug = False
-  
-# Chaos packet opcodes
-class Opcode(IntEnum):
-    RFC = 1
-    OPN = auto()
-    CLS = auto()
-    FWD = auto()
-    ANS = auto()
-    SNS = auto()
-    STS = auto()
-    RUT = auto()
-    LOS = auto()
-    LSN = auto()
-    MNT = auto()
-    EOF = auto()                          # with NCP, extended with optional "wait" data part which is never sent on the wire
-    UNC = auto()
-    BRD = auto()
-    ACK = 0o177                           # new opcode to get an acknowledgement from NCP when an EOF+wait has been acked
-    DAT = 0o200
-    SMARK = 0o201                       # synchronous mark
-    AMARK = 0o202                       # asynchronous mark
-    DWD = 0o300
 
 # Lispm character set
 class LMchar:
@@ -230,119 +211,18 @@ class DNFError(FatalError):
 class NLIError(FatalError):
     pass
 
-
-class NCPConn:
-    sock = None
-    active = False
-    contact = None
-
-    def __init__(self):
-        self.get_socket()
-    def __str__(self):
-        return "<{} {} {}>".format(type(self).__name__, self.contact, "active" if self.active else "passive")
-    def __del__(self):
-        if debug:
-            print("{!s} being deleted".format(self))
-
-    def close(self, msg="Thank you"):
-        if debug:
-            print("Closing {} with msg {}".format(self,msg), file=sys.stderr)
-        self.send_packet(Opcode.CLS, msg)
-        try:
-            self.sock.close()
-        except socket.error as msg:
-            print('Socket error closing:',msg)
-        self.sock = None
-
-    # Construct a 4-byte packet header for chaos_packet connections
-    def packet_header(self, opc, plen):
-        return bytes([opc, 0, plen & 0xff, int(plen/256)])
-
-    def get_socket(self):
-        address = '/tmp/chaos_packet'
-        # Create a Unix socket
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-
-        # Connect the socket to the port where the server is listening
-        try:
-            self.sock.connect(address)
-            return self.sock
-        except socket.error as msg:
-            print('Socket errror:',msg, file=sys.stderr)
-            sys.exit(1)
-
-
-    def send_packet(self, opcode, data):
-        # print("send pkt {} {} {!r}".format(Opcode(opcode).name, type(data), data))
-        if isinstance(data, str):
-            msg = bytes(data,"ascii")
-        else:
-            msg = data
-        if debug:
-            print("> {} {} {}".format(self,Opcode(opcode).name, len(msg)), file=sys.stderr)
-        self.sock.sendall(self.packet_header(Opcode(opcode), len(msg)) + msg)
-
-    def get_packet(self):
-        # Read header to see how long the pkt is
-        hdr = self.sock.recv(4)
-        # First is opcode
-        opc = hdr[0]
-        # then zero
-        assert(hdr[1] == 0)
-        # then length
-        length = hdr[2] + hdr[3]*256
-        assert(length <= 488)
-        if debug:
-            print("< {} {} {}".format(self,Opcode(opc).name, length), file=sys.stderr)
-        data = self.sock.recv(length)
-        # print("< {} {!s}".format(len(data), str(data.translate(bytes.maketrans(b'\211\215\214\212',b'\t\n\f\r')),"utf8")))
-        return (opc,data)
-
-    def rfc(self, contact,host,args=[]):
-        h = bytes(("{} {}"+" {}"*len(args)).format(host,contact.upper(),*args),"ascii")
-        if debug:
-            print("RFC: {}".format(h), file=sys.stderr)
-        self.send_packet(Opcode.RFC, h)
-        opc, data = self.get_packet()
-        if opc == Opcode.CLS:
-            raise FileError(b'CLS',data)
-        elif opc != Opcode.OPN:
-            print("Unexpected RFC response for {} from {}: {} {} (wanted OPN)".format(contact,host, Opcode(opc).name, data), file=sys.stderr)
-            return False
-        if debug:
-            print("OPN {!r}".format(data), file=sys.stderr)
-        if self.ostype == None and host != str(data,'ascii'):
-            if debug:
-                print("Checking DNS info for {}".format(str(data,'ascii')), file=sys.stderr)
-            self.dnsinfo = dns_info_for(str(data,'ascii'))
-            self.host = self.dnsinfo['name'] if self.dnsinfo and 'name' in self.dnsinfo else str(data,'ascii')
-            self.ostype = self.dnsinfo['os'] if self.dnsinfo and 'os' in self.dnsinfo else None
-        self.active = True
-        self.contact = contact
-        return True
-
+class FileConn(PacketConn):
     def listen(self, contact, expected_host=None):
-        if debug:
-            print("Listen for {} (expected {})".format(contact,expected_host))
-        self.send_packet(Opcode.LSN,contact)
-        self.active = False
-        self.contact = contact
-        opc, data = self.get_packet()
-        rh = str(data,"ascii")
-        if opc != Opcode.RFC:
-            # Raise exception
-            print("Unexpected response {} ({}) in input handler for {} (wanted RFC)".format(Opcode(opc).name, data, ofh), file=sys.stderr)
-            return None
-        elif expected_host != None and expected_host != rh:
-            print("Unexpected host sent RFC: {} (expected {})".format(rh, expected_host))
-            self.send_packet(Opcode.CLS,"You are the wrong host to RFC this contact")
+        remote, args = super().listen(contact)
+        if expected_host != None and expected_host != remote:
+            print("Unexpected host sent RFC: {} (expected {})".format(remote, expected_host))
+            self.send_cls(b"You are the wrong host to RFC this contact")
             # Raise exception
             return None
         else:
             if debug:
-                print("RFC {!r}".format(data), file=sys.stderr)
-            self.send_packet(Opcode.OPN,"")
-            return rh
+                print("RFC {} {!r}".format(remote,args), file=sys.stderr)
+            return remote
         
     def read_until_smark(self):
         if debug:
@@ -351,26 +231,29 @@ class NCPConn:
         # @@@@ cf SmrKin, but there it might read duplicates/ooo pkts?
         while opc != Opcode.SMARK:
             if opc not in (Opcode.SMARK, Opcode.AMARK, Opcode.EOF, Opcode.DAT, Opcode.DWD):
-                raise FileError(b'UNC', bytes("read_until_smark: Unexpected opcode {}".format(Opcode(opc).name),"ascii"))
+                raise FileError(b'UNC', bytes("read_until_smark: Unexpected opcode {}".format(opcode_name(opc)),"ascii"))
             if debug:
-                print("read_until_smark: read {} data len {} ({:15})".format(Opcode(opc).name, len(d), d), file=sys.stderr)
+                print("read_until_smark: read {} data len {} ({:15})".format(opcode_name(opc), len(d), d), file=sys.stderr)
             opc, d = self.get_packet()
 
-class File(NCPConn):
+class File(FileConn):
     ncp = None
     curr_tid = 1
     dnsinfo = None
 
-    def __init__(self, host, version=1):
+    def __init__(self):
+        super().__init__()
+        self.homedir = ""
+        self.dataconn = None
+        self.xecutor = ThreadPoolExecutor()
+
+    def connect(self, host, version=1, args=[], options=None):
         self.dnsinfo = dns_info_for(host)
         self.host = self.dnsinfo['name'] if self.dnsinfo and 'name' in self.dnsinfo else host
         self.ostype = self.dnsinfo['os'] if self.dnsinfo and 'os' in self.dnsinfo else None
-        self.homedir = ""
-        self.dataconn = None
-        self.get_socket()
-        self.rfc("FILE", host, [version])
-        self.xecutor = ThreadPoolExecutor()
-
+        if debug:
+            print("connect to {} ({}, os {})".format(host, self.host, self.ostype), file=sys.stderr)
+        return super().connect(host, "FILE", args=[version], options=options)
 
     def next_tid(self):
         self.curr_tid = self.curr_tid+1
@@ -397,9 +280,13 @@ class File(NCPConn):
 
     def dataconn_listener(self, ofh, ifh):
         # Just make a conn for the ofh, and return when there is an RFC
-        conn = NCPConn()
+        conn = FileConn()
+        if debug:
+            conn.set_debug(True)
         self.dataconn = conn
+        # @@@@ use/check rh?
         rh = conn.listen(str(ofh,'ascii'))
+        conn.send_opn()
         return conn
 
     def undata_connection(self, tid, ifh):
@@ -449,7 +336,7 @@ class File(NCPConn):
             elif opc == Opcode.CLS:
                 raise FileError(b'CLS', d)
             else:
-                raise FileError(b'UNC', bytes("Unexpected response {} ({}) in data handler for {} (wanted DAT or EOF)".format(Opcode(opc).name, d, outstream),"ascii"))
+                raise FileError(b'UNC', bytes("Unexpected response {} ({}) in data handler for {} (wanted DAT or EOF)".format(opcode_name(opc), d, outstream),"ascii"))
 
 
     def write_handler(self, instream, ncp, binary=False):
@@ -464,14 +351,14 @@ class File(NCPConn):
                 if debug:
                     print("WH for {} and {} done, sending EOF and closing, returning {}".format(instream,ncp,nbytes), file=sys.stderr)
                 # Need to wait for EOF to be acked - extend NCP protocol by data in EOF pkt, which is normally not there
-                ncp.send_packet(Opcode.EOF,"wait")
+                ncp.send_eof(True)
                 print("!", file=sys.stderr, end='', flush=True)
                 # but we notice the waiting only by delaying the next pkt, so, invent an ACK pkt as response to EOF+wait
                 opc, d = ncp.get_packet()
                 if opc != Opcode.ACK:
-                    raise FileError(b'BUG', bytes("unexpected opcode in response to EOF+wait: {} ({})".format(Opcode(opc).name, d), "ascii"))
+                    raise FileError(b'BUG', bytes("unexpected opcode in response to EOF+wait: {} ({})".format(opcode_name(opc), d), "ascii"))
                 print("\n", end='', file=sys.stderr, flush=True)
-                ncp.send_packet(Opcode.SMARK,"")
+                ncp.send_packet(Opcode.SMARK,b"")
                 time.sleep(2)
                 return nbytes
             if not binary:
@@ -480,7 +367,7 @@ class File(NCPConn):
             if binary:
                 ncp.send_packet(Opcode.DWD, d)
             else:
-                ncp.send_packet(Opcode.DAT, d)
+                ncp.send_data(d)
             print(".", file=sys.stderr, end='', flush=True)
 
     # send_command(tid, fh, cmd, options = on same line as cmd, args = on consecutive lines)
@@ -500,7 +387,7 @@ class File(NCPConn):
                 m = m+LMchar.RETURN+LMchar.RETURN.join(args)+LMchar.RETURN
         if debug:
             print("send_command: {!r}".format(m), file=sys.stderr)
-        self.send_packet(Opcode.DAT, m)
+        self.send_data(m)
 
     # get_response => (tid, fh, cmd, array-of-results)
     def get_response(self):
@@ -521,7 +408,7 @@ class File(NCPConn):
             return []
         else:
             # raise exception
-            raise FileError(b"UNC",bytes("Unexpected opcode {} ({}) (wanted DAT or EOF)".format(Opcode(opc).name, data), "ascii"))
+            raise FileError(b"UNC",bytes("Unexpected opcode {} ({}) (wanted DAT or EOF)".format(opcode_name(opc), data), "ascii"))
 
     # parse_response(first line of reply) => rest of line after "tid fh cmd", split at spaces
     def parse_response(self, rsp, expected_tid=None):
@@ -752,12 +639,12 @@ class File(NCPConn):
 
     # See directory option DIRECTORIES-ONLY instead
     def all_directories(self, fname=None):
-        if self.dnsinfo and self.dnsinfo['os'] == 'ITS':
+        if self.ostype == 'ITS':
             # ITS: space dirname-using-six-positions-with-space-filler RETURN
             dirlist = list(filter(lambda x: len(x) > 0, map(lambda x: x.strip(), self.read_file("dsk:m.f.d. (file)", 'return').split('\n'))))
             dirlist.sort()
             return dirlist
-        elif self.dnsinfo and self.dnsinfo['os'] == 'LISPM':
+        elif self.ostype == 'LISPM':
             # LISPM
             # ('', [b'(((#\x10FS::LM-PATHNAME "LX: BACKUP-LOGS; .#"\x11) (#\x10FS::LM-PATHNAME "LX: RELEASE-5; .#"\x11) (#\x10FS::LM-PATHNAME "LX: VICTOR; .#"\x11)))'])
             resp,dlist = self.execute_operation("extended-command", options=["all-directories"], args=[fname,"((:noerror))"], dataconn=False)
@@ -776,7 +663,7 @@ class File(NCPConn):
             dirlist.sort()
             return dirlist
         else:
-            print('unsupported OS',self.dnsinfo['os'] if self.dnsinfo else None, file=sys.stderr)
+            print('all_directories: unsupported OS',self.ostype, file=sys.stderr)
         return None
 
     def change_props(self, fname, propvaldict):
@@ -929,84 +816,6 @@ class File(NCPConn):
                 files[fname] = fps
         return hdrs,files
 
-#### some DNS support
-
-# Get all info
-def dns_info_for(nameoraddr):
-    if isinstance(nameoraddr,int):
-        name = dns_name_of_addr(nameoraddr)
-    elif isinstance(nameoraddr,str) and nameoraddr.isdigit():
-        name = dns_name_of_addr(int(nameoraddr,8))
-    else:
-        name = nameoraddr
-    addrs = dns_addr_of_name(name)
-    hinfo = get_dns_host_info(name)
-    return dict(name=name, addrs=addrs, os=None if hinfo == None else hinfo['os'], cpu=None if hinfo == None else hinfo['cpu'])
-
-def get_dns_host_info(name):
-    # If it's an address given, look up the name first
-    if isinstance(name,int):
-        name = dns_name_of_addr(name) or name
-    elif isinstance(name,str) and name.isdigit():
-        name = dns_name_of_addr(int(name,8)) or name
-    try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.HINFO, rdclass=dns.rdataclass.CH), dns_resolver_addr)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.HINFO:
-                for d in t:
-                    return dict(os= str(d.os.decode()), cpu= str(d.cpu.decode()))
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
-
-def dns_addr_of_name(name):
-    # If it's an address given, look up the name first, to collect all its addresses
-    if isinstance(name,int):
-        name = dns_name_of_addr(name) or name
-    elif isinstance(name,str) and name.isdigit():
-        name = dns_name_of_addr(int(name,8)) or name
-    addrs = []
-    try:
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.A, rdclass=dns.rdataclass.CH), dns_resolver_addr)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.A:
-                    for d in t:
-                        addrs.append(d.address)
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
-    return addrs
-
-def dns_name_of_addr(addr):
-    if isinstance(addr, str) and not addr.isdigit():
-        # already a name, so get the canonical name by looking up its first address
-        addrs = dns_addr_of_name(addr)
-        if len(addrs) > 0:
-            addr = addrs[0]
-    try:
-        if (isinstance(addr,int)):
-            name = "{:o}.CH-ADDR.NET.".format(addr)
-        else:
-            name = "{}.CH-ADDR.NET.".format(addr)
-        h = dns.query.udp(dns.message.make_query(name, dns.rdatatype.PTR, rdclass=dns.rdataclass.CH), dns_resolver_addr)
-        for t in h.answer:
-            if t.rdtype == dns.rdatatype.PTR:
-                    for d in t:
-                        return d.target.to_text(omit_final_dot=True)
-                        # return d.target_to_text()
-    except AttributeError as e:
-        # dnspython not updated with support for Chaos records?
-        pass
-        # print("Error", e, file=sys.stderr)
-    except dns.exception.DNSException as e:
-        print("Error", e, file=sys.stderr)
-
 ## Handling directory listings
 
 def print_directory_list(hd,fs):
@@ -1077,11 +886,8 @@ def print_directory_list(hd,fs):
 if __name__ == '__main__':
     codecs.register(LMregentry)
 
-    try:
-        dns_resolver_addr = socket.gethostbyname(dns_resolver_name)
-    except OSError as msg:
-        print("Error resolving {!r}: {}".format(dns_resolver_name, msg), file=sys.stderr)
-        exit(1)
+    set_dns_resolver_address(dns_resolver_name)
+    set_dns_search_list([local_domain(),"Chaosnet.NET"])
 
     import argparse
     parser = argparse.ArgumentParser(description='Chaosnet FILE protocol client')
@@ -1174,9 +980,9 @@ if __name__ == '__main__':
         return uid, cwd
 
     try:
-        ncp = File(args.host)
-        if ncp == None:
-            exit(1)
+        ncp = File()
+        ncp.set_debug(debug)
+        ncp.connect(args.host)
 
         if args.user and len(args.user) > 0:
             if args.passw:
@@ -1211,12 +1017,15 @@ if __name__ == '__main__':
                 elif op in ["bye","quit"]:
                     print("Bye bye.", file=sys.stderr)
                     try:
-                        ncp.send_packet(Opcode.EOF,"")
-                    except BrokenPipeError as e:
+                        ncp.send_eof()
+                    except ChaosSocketError as e:
                         print("[Connection already down: {}]".format(e))
                     break
                 elif op == "debug":
                     debug = not debug
+                    ncp.set_debug(debug)
+                    if ncp.dataconn:
+                        ncp.dataconn.set_debug(debug)
                 elif op == "pwd":
                     print("Current {}, homedir {}".format(cwd, ncp.homedir))
                 elif op == "dns":
@@ -1360,9 +1169,14 @@ if __name__ == '__main__':
                 elif op == "mput":
                     flist = Path(".").glob(arg[0].strip())
                     for f in flist:
-                        outf = f.split(".", maxsplit=1).join(" ")
+                        inf = os.fspath(f)
+                        if ncp.ostype == 'ITS':
+                            outf = f.parts[-1].split(".", maxsplit=1).join(" ")
+                        else:
+                            outf = f.parts[-1]
                         try:
                             ins = open(f,"r")
+                            print("Writing {} as '{}'".format(inf,outf))
                             r = ncp.write_file(wdparse(outf), ins)
                         except FileNotFoundError as e:
                             print(e, file=sys.stderr)
@@ -1440,17 +1254,17 @@ if __name__ == '__main__':
     except EOFError:
         print("EOF", file=sys.stderr)
         try:
-            ncp.send_packet(Opcode.EOF,"")
-        except BrokenPipeError as e:
+            ncp.send_eof()
+        except ChaosSocketError as e:
             print("[Connection already down: {}]".format(e))
     if ncp:
         if ncp.dataconn:
             try:
                 ncp.dataconn.close()
-            except BrokenPipeError:
+            except ChaosSocketError:
                 pass
         try:
             ncp.close()
-        except BrokenPipeError:
+        except ChaosSocketError:
             pass
     exit(0)
