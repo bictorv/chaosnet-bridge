@@ -710,7 +710,8 @@ class BroadcastSimpleDict(SimpleDict):
         # Caller gets to use dns_name_of_address(src, timeout=2) if they want.
         vals = []
         for src in self.collected.keys():
-            vals.append(dict(source=src) | self.packet_to_dict(src, self.collected[src]))
+            dname = dns_name_of_address(src, timeout=2)
+            vals.append(dict(source=src, dname=dname) | self.packet_to_dict(src, self.collected[src]))
         return vals
 
 class StatusDict(SimpleDict):
@@ -871,7 +872,7 @@ def parse_idle_time_string(s):
     # NNd (days)?
     imatch = re.match(r"(\d+)d", s)
     if imatch:
-        return int(imatch.group(1))*7*24*60
+        return int(imatch.group(1))*24*60
     # Plain minutes?
     imatch = re.match(r"(\d+)", s)
     if imatch:
@@ -1011,8 +1012,10 @@ class NameDict:
         output = self.conn.get_string_until_eof().rstrip()
         if "\t" in output:
             output = output.expandtabs()
+
+        dname = get_canonical_name(self.conn.remote)
         if len(self.args) > 0:  # can't handle /whois-like output
-            return dict(source = self.conn.remote, rawlines=output.replace("\r\n","\n"))
+            return dict(source = self.conn.remote, dname=dname, rawlines=output.replace("\r\n","\n"))
         # Break it into lines
         if "\r\n" in output:
             lines = output.split("\r\n")
@@ -1043,7 +1046,7 @@ class NameDict:
                 if h not in r:
                     r[h] = ""
             result.append(r)
-        return dict(source = self.conn.remote, lines=result)
+        return dict(source = self.conn.remote, dname=dname, lines=result)
 
 ################ Get host name (and addr) using STATUS and/or DNS
 @functools.cache

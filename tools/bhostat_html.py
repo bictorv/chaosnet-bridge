@@ -45,21 +45,21 @@ class HTMLtable():
     def end(self):
         return "</table>"
 
-def name_host_with_tooltip(addr, user=None):
+def name_host_with_tooltip(addr, user=None, longname=False):
     if isinstance(addr,int) or re.match("^[0-7]+$",addr):
-        hname = host_name(addr)
-        dot = hname.find(".")
-        if dot >= 0:
-            hname = hname[:dot]
         dname = dns_name_of_address(addr, timeout=2)
+        hname = host_name(addr) if not longname else dname
+        if not longname:
+            hname = hname.split(".", maxsplit=1)[0] # even a STATUS reply might have a domain
     else:
         dname = get_canonical_name(addr)
         hname = dname
-        dot = hname.find(".")
-        if dot >= 0:
-            hname = hname[:dot]
+        if not longname:
+            hname = hname.split(".", maxsplit=1)[0]
     if user is None:
-        return "<a title={}>{}</a>".format(dname,hname)
+        return "<a title='More info about {0}' href='hinfo.py?host={0}&service[]=dns&service[]=uptime&service[]=load&service[]=name'>{1}</a>".format(dname,hname)
+    elif re.match(r"___\d\d\d", user):
+        return user
     else:
         return "<a title='Whois {1}@{0}' href='hinfo.py?service[]=name&host={0}&user={1}'>{2}</a>".format(dname,user,user)
 
@@ -83,16 +83,9 @@ class HTMLStatus(HTMLSimple):
         return self.table.start('status_table','status')+self.table.header()
     def printer(self,result):
         for r in result:
-            # Find the DNS name if possible
             src = r['source']
-            dname = dns_name_of_address(src,onlyfirst=False,timeout=2)
-            if dname is None:
-                first = r['hname']
-            elif dname.lower().startswith(r['hname'].lower()+".") or dname.lower() == r['hname'].lower():
-                # don't use title unless it clarifies something
-                first = dname
-            else:                   # make a pretty title
-                first = "<a title=\"{}\">{}</a>".format(html.escape(r['hname'],quote=True), dname)
+            # make a pretty title
+            first = name_host_with_tooltip(src, longname=True)
             if r['status'] is not None:
                 # Put name for later rows with "display: none" so it doesn't show, but table can be sorted,
                 # and change the attribute after sorting.
@@ -113,7 +106,7 @@ class HTMLUptime(HTMLSimple):
         return self.table.start('uptime_table','uptime')+self.table.header()
     def printer(self,result):
         for up in [r for r in result if r is not None]:
-            print(self.table.row(["{:o}".format(up['source']),up['dname'],(up['delta'],dict(sorttable_customkey=up['sec']))]))
+            print(self.table.row(["{:o}".format(up['source']),name_host_with_tooltip(up['source'],longname=True),(up['delta'],dict(sorttable_customkey=up['sec']))]))
 
 class HTMLTime(HTMLSimple):
     getter_class = BroadcastTimeDict
@@ -122,7 +115,8 @@ class HTMLTime(HTMLSimple):
         return self.table.start('time_table','time')+self.table.header()
     def printer(self,result):
         for t in [r for r in result if r is not None]:
-            print(self.table.row(["{:o}".format(t['source']),t['dname'],(t['dt'],dict(sorttable_customkey=t['timestamp'])),
+            print(self.table.row(["{:o}".format(t['source']),name_host_with_tooltip(t['source'],longname=True),
+                                  (t['dt'],dict(sorttable_customkey=t['timestamp'])),
                                   ("{}{}".format("+" if t['delta'] >= 0 else "-",timedelta(milliseconds=abs(1000*t['delta']))),dict(sorttable_customkey=t['delta']))]))
 
 class HTMLDumpRoutingTable(HTMLSimple):
@@ -132,7 +126,7 @@ class HTMLDumpRoutingTable(HTMLSimple):
         return self.table.start('routing_table','routing')+self.table.header()
     def printer(self,result):
         for rtt in result:
-            hname = rtt['dname']
+            hname = name_host_with_tooltip(rtt['source'], longname=True)
             saddr = "{:o}".format(rtt['source'])
             for sub in rtt['routingtable']:
                 print(self.table.row([saddr,hname,"{:o}".format(sub),"{:o}".format(rtt['routingtable'][sub]['method']),rtt['routingtable'][sub]['cost']]))
@@ -145,11 +139,11 @@ class HTMLLastSeen(HTMLSimple):
     def printer(self,result):
         for r in result:
             saddr = "{:o}".format(r['source'])
-            hname = r['dname']
+            hname = name_host_with_tooltip(r['source'], longname=True)
             for addr in r['lastseen']:
                 e = r['lastseen'][addr]
                 a = timedelta(seconds=e['age'])
-                print(self.table.row([saddr,hname,dns_name_of_address(addr,onlyfirst=False,timeout=2),"{:o}".format(addr),e['input'],"{:o}".format(e['via']),e['fc'],(a,dict(sorttable_customkey=e['age']))]))
+                print(self.table.row([saddr,hname,name_host_with_tooltip(addr,longname=True),"{:o}".format(addr),e['input'],"{:o}".format(e['via']),e['fc'],(a,dict(sorttable_customkey=e['age']))]))
 
 class GroupAffiliation:
     # Show a cute tooltip for the affiliation.
@@ -328,7 +322,7 @@ class HTMLLoad(HTMLSimple):
         return self.table.start('load_table','load')+self.table.header()
     def printer(self, result):
         for r in result:
-            print(self.table.row(["<a href='hinfo.py?service[]=name&host={0}'>{0}</a>".format(dns_name_of_address(r['source'],onlyfirst=False,timeout=2)), r['share'], r['users']]))
+            print(self.table.row([name_host_with_tooltip(r['source'],longname=True), r['share'], r['users']]))
 
 
 class HTMLFinger(HTMLSimple,GroupAffiliation):
@@ -343,9 +337,9 @@ class HTMLFinger(HTMLSimple,GroupAffiliation):
             if len(hn['uname']) == 0:
                 self.free_lispm.append(hn)
             else:
-                hname = host_name(hn['source'])
                 # uname affiliation pname hname idle loc
-                print(self.table.row([hn['uname'],self.group_affiliation_desc(hn['affiliation']), hn['pname'], hname,
+                print(self.table.row([hn['uname'],self.group_affiliation_desc(hn['affiliation']), hn['pname'],
+                                      name_host_with_tooltip(hn['source']),
                                       (hn['idle'],dict(sorttable_customkey=parse_idle_time_string(hn['idle']))),
                                       hn['location']]))
     def footer(self):
@@ -356,8 +350,7 @@ class HTMLFinger(HTMLSimple,GroupAffiliation):
             tbl = HTMLtable([("Host","status_name"),("Location","status_name"),("Idle","status_num")])
             s += tbl.start('free_lispm','finger')+tbl.header()
             for hn in self.free_lispm:
-                hname = host_name(hn['source'])
-                s += tbl.row([hname,hn['location'],hn['idle']])
+                s += tbl.row([name_host_with_tooltip(hn['source']),hn['location'],hn['idle']])
             s += tbl.end()
             return super().footer() + s
 
