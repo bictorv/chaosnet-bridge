@@ -8,7 +8,7 @@ Converse features:
 - (optional) markers for users indicating their online status and idleness (so you know if they are there)
 - time difference indicated in message timestamps (for conversations between different timezones)
 - (optionally) saving and restoring received and sent messages when Converse is restarted
-- an integrated server for the [Finger protocol](https://chaosnet.net/protocol#messages) (so other users know if you're there)
+- an integrated server for the [Finger protocol](https://chaosnet.net/protocol#who_is_logged_in) (so other users know if you're there)
 
 Converse is a client and server for the standard [SEND protocol](https://chaosnet.net/amber.html#Send) on Chaosnet. It uses the [NCP API](NCP.md) of cbridge (and thus requires cbridge to be running locally and with ncp enabled).
 
