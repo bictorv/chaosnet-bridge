@@ -8,6 +8,7 @@ Converse features:
 - (optional) markers for users indicating their online status and idleness (so you know if they are there)
 - time difference indicated in message timestamps (for conversations between different timezones)
 - (optionally) saving and restoring received and sent messages when Converse is restarted
+- an integrated server for the [Finger protocol](https://chaosnet.net/protocol#messages) (so other users know if you're there)
 
 Converse is a client and server for the standard [SEND protocol](https://chaosnet.net/amber.html#Send) on Chaosnet. It uses the [NCP API](NCP.md) of cbridge (and thus requires cbridge to be running locally and with ncp enabled).
 
@@ -101,6 +102,8 @@ In the Settings menu:
 - You can specify the DNS server to use for Chaosnet-class requests (default `dns.chaosnet.net`). Note that almost all DNS servers in the world are incapable of finding Chaosnet-class DNS information, so you probably do not want to change this setting.
 - You can edit the window background color (default light grey, which makes the white input fields easier to see I think) using the `Edit background color` menu item.
 - You can edit the background colors of messages in the Message history using the `Edit net message background color` and `Edit my message background color` menu items. Note that this only affects how the Converse program displays messages (e.g. the destination will not see the color).
+- You can set parameters for the checking of who else is online, in the `Online checks` submenu.
+- You can set your location, affiliation and personal name for the integrated Finger server, in the `Finger info` submenu.
 
 You can also reset all settings by using the `Reset all settings` menu item. This also moves and resizes the Converse window to the default position/size.
 
@@ -131,7 +134,7 @@ Let me know if you (want (me) to) implement any of this, or if you have more ide
 
 ## Please help!
 
-If you run Linux, Windows or some other non-macOS system:
+**If you run Linux, Windows or some other non-macOS system:**
 
 - Sound effects might not work - let me know if they do, and/or how to make them work
 - Screen lock detection does not work. It's used in order to not check online status while your screen is locked, so rather useful. Let me know how to do it and I'll implement it!

@@ -17,6 +17,9 @@
 #    limitations under the License.
 
 # TODO:
+# - integrate FingerDaemon (fingerd.py):
+# -- config options:
+# --- enable/disable finger server
 # - make watchers stop more quickly (e.g. when quitting the program).
 #   Now they only stop at the end of a full round, which can take a few seconds. Should use conn.abort() like
 #   the MessageReceiver.
@@ -53,9 +56,9 @@
 # Notifications: start off with terminal-notifier (https://github.com/julienXX/terminal-notifier)?
 
 
-import sys, re, os, time
+import sys, re, os, time, unicodedata
 from datetime import datetime, timezone, timedelta
-from chaosnet import ChaosSocketError, ChaosError, CLSError, dns_name_of_address, dns_addr_of_name_search, set_dns_resolver_address, local_domain, get_dns_host_info
+from chaosnet import ChaosSocketError, ChaosError, CLSError, LOSError, dns_name_of_address, dns_addr_of_name_search, set_dns_resolver_address, local_domain, get_dns_host_info
 from qsend import get_send_message, send_message, parse_send_message, make_send_message
 from watcher import ChaosUserWatcher, PersistentWorker
 from enum import auto, StrEnum
@@ -80,7 +83,7 @@ app = QApplication(sys.argv)
 app.setApplicationName("Converse")
 app.setOrganizationName("Chaosnet.net")
 app.setOrganizationDomain("chaosnet.net")
-app.setApplicationVersion("0.10.5")
+app.setApplicationVersion("0.10.6")
 
 ################ Default configuration
 debug = False
@@ -118,6 +121,10 @@ default_config = dict(
     message_incoming_sound="/System/Library/Sounds/Frog.aiff",
     message_sent_sound="/System/Library/Sounds/Morse.aiff",
     alert_sound="/System/Library/Sounds/Ping.aiff",
+    # Finger settings
+    finger_affiliation="-",
+    finger_name=None,
+    finger_location=None,
     # This is not a persistent setting - see the "-c" option
     my_chaos_hostname=None,     # None means use IP hostname
 )
@@ -1138,6 +1145,111 @@ class MessageStorage:
         except OSError as m:
             qInfo("Failed to clear messages: {}".format(m))
 
+class FingerServer:
+    debugp = False
+    closing_down = False
+    got_los_already = False
+    fingerd = None
+
+    def __init__(self):
+        from PyQt6.QtCore import QThreadPool
+        self.threadpool = QThreadPool()
+
+    def set_debug(self, debug):
+        self.debugp = debug
+        if self.fingerd:
+            self.fingerd.set_debug(debug)
+    def set_affiliation(self, aff):
+        if self.fingerd:
+            self.fingerd.set_affiliation(aff)
+    def set_location(self, loc):
+        if self.fingerd:
+            self.fingerd.set_location(loc)
+    def set_pname(self, p):
+        if self.fingerd:
+            self.fingerd.set_pname(p)
+    def get_fullname(self):
+        if self.fingerd:
+            return self.fingerd.get_fullname()
+    def auto_location(self):
+        if self.fingerd:
+            return self.fingerd.auto_location()
+
+    def start_server(self, debug=False):
+        w = PersistentWorker(self.receive_request, interval = 0) # keep going without waiting
+        w.set_debug(debug)
+        from fingerd import FingerDaemon
+        self.fingerd = FingerDaemon()
+        w.signals.error.connect(self.server_error)
+        w.signals.result.connect(self.server_message_received)
+        w.signals.finished.connect(self.server_finished)
+        if self.debugp:
+            w.signals.progress.connect(self.server_progress)
+        self.worker = w
+        if self.debugp:
+            qDebug("Starting finger server")
+        self.threadpool.start(w)
+    def stop_server(self, wait_time=10):
+        if self.debugp:
+            qDebug("Stopping finger server")
+        self.closing_down = True # ignore errors
+        if self.fingerd and self.fingerd.conn:
+            self.fingerd.conn.abort()        # @@@@ aaargh - but it helps
+        self.fingerd = None
+        self.worker.signals.please_stop.emit(666)
+        done = self.threadpool.waitForDone((wait_time)*1000)
+        if self.debugp:
+            qDebug("Finger server thread finished: {}".format(done))
+
+    # This runs in the receiver thread
+    def receive_request(self, progress_callback, interval=None):
+        # Note: errors are handled through receiver_error
+        try:
+            if self.fingerd:
+                self.fingerd.get_and_handle_finger_request()
+        except ChaosSocketError as m:
+            # print("DEBUG: socket error {}".format(m), file=sys.stderr)
+            progress_callback.emit((None, "{}".format(m)))
+            time.sleep(5)       # wait before trying again
+            return
+        progress_callback.emit((None,"Got a Finger request and handled it"))
+        return
+
+
+    # These run in the "main thread"
+    def server_finished(self, val):
+        if verbose:
+            qInfo("Finger server finished: {!r}".format(val))
+    def server_progress(self, val):
+        if verbose:
+            qInfo("Finger server: {!r}".format(val))
+    def server_error(self,data):
+        try:
+            etype, exc, trace_string = data
+        except ValueError:
+            pass                # didnt get the triple we're expecting
+        else:
+            if etype == LOSError:
+                if not self.got_los_already:
+                    # This is normal, if there was already a FINGER server
+                    self.got_los_already = True # Note, so we don't report this again
+                    qInfo("Error in Finger server (stopping server): {}".format(exc))
+                    self.stop_server()
+                return # raise exc
+            if etype == ChaosSocketError:
+                qInfo("Error in Finger server: {}".format(exc))
+                return
+            qInfo("Error in Finger server: {}".format(exc))
+            if not self.closing_down:
+                raise exc
+    def server_message_received(self, data):
+        if data is None:
+            qDebug("No message received?!")
+            return
+        if self.debugp:
+            qDebug("Finger server: data received")
+        
+
 class MessageReceiver:
     debugp = False
     conn = None
@@ -1401,6 +1513,91 @@ class MainWindow(QMainWindow):
         else:
             qDebug("Setting multi-line input lines cancelled")
 
+    def set_finger_name(self):
+        def default_finger_name():
+            if self.fingerd and self.fingerd.get_fullname():
+                return self.fingerd.get_fullname()
+            else:
+                import pwd, getpass
+                p = pwd.getpwnam(getpass.getuser())
+                return unicodedata.normalize("NFKD",p.pw_gecos).encode("ascii","ignore").decode().split(",",maxsplit=1)[0]
+        if getconf('finger_name') and len(getconf('finger_name')) > 0:
+            n = getconf('finger_name')
+        else:
+            n = default_finger_name()
+        input, ok = QInputDialog.getText(self,"Personal name for Chaosnet finger","ASCII only. Probably no need to change this.",
+                                         text=n)
+        if ok:
+            n = unicodedata.normalize("NFKD",input.strip()).encode("ascii","ignore").decode()
+            if len(n) > 0:
+                settings.setValue('finger_name', n)
+                if self.fingerd:
+                    self.fingerd.set_pname(n)
+            else:
+                n = default_finger_name()
+                qInfo("Empty input for personal name, setting default: {}".format(n))
+                settings.setValue('finger_name', n)
+                if self.fingerd:
+                    self.fingerd.set_pname(n)
+        else:
+            qDebug("Setting finger name cancelled")
+    def set_finger_location(self):
+        def default_finger_location():
+            if self.fingerd and self.fingerd.auto_location():
+                return self.fingerd.auto_location()
+            else:
+                import pwd, getpass
+                p = pwd.getpwnam(getpass.getuser())
+                g = unicodedata.normalize("NFKD",p.pw_gecos).encode("ascii","ignore").decode().split(",",maxsplit=2)
+                if len(g) > 1:
+                    return g[1]
+                else:
+                    return ""
+        if getconf('finger_location') and len(getconf('finger_location')) > 0:
+            n = getconf('finger_location')
+        else:
+            n = default_finger_location()
+        input, ok = QInputDialog.getText(self,"Location for Chaosnet finger","ASCII only. Brief and to the point.",
+                                         text=n)
+        if ok:
+            loc = unicodedata.normalize("NFKD",input.strip()).encode("ascii","ignore").decode()
+            if loc and len(loc) > 0:
+                qInfo("Setting new location {!r}".format(loc))
+                settings.setValue('finger_location', loc)
+                if self.fingerd:
+                    self.fingerd.set_location(loc)
+            else:
+                n = default_finger_location()
+                qInfo("Empty input for location, setting default: {}".format(n))
+                settings.setValue('finger_location', n)
+                if self.fingerd:
+                    self.fingerd.set_location(n)
+        else:
+            qInfo("Setting finger location cancelled: ok {!r} input {!r}".format(ok, input))
+            qDebug("Setting finger location cancelled")
+    def set_finger_affiliation(self):
+        if getconf('finger_affiliation'):
+            a = getconf('finger_affiliation')
+        else:
+            a = "-"
+        # @@@@ Could use a dropdown of classic affiliations, or at least some legend?
+        input, ok = QInputDialog.getText(self,"Affiliation for Chaosnet finger","ASCII only. One or two chars.",
+                                         # InputMethodHint.ImhLatinOnly? for all three
+                                         text=a)
+        if ok:
+            i = unicodedata.normalize("NFKD",input.strip()).encode("ascii","ignore").decode().upper()
+            if len(i) > 2:
+                QMessageBox.warning(self,"Syntax error","<b>Syntax error:</b> affiliation too long (max 2 chars)")
+                return
+            elif len(i) == 0:
+                i = "-"         # default
+                qInfo("Empty input for affiliation, setting default: {}".format(i))
+            settings.setValue('finger_affiliation', i)
+            if self.fingerd:
+                self.fingerd.set_affiliation(i)
+        else:
+            qDebug("Setting finger affiliation cancelled")
+        
     def set_dns_server(self):
         input,ok = QInputDialog.getText(self,"DNS server for Chaosnet","Strongly recommended not to change!",
                                        text=getconf('dns_server'))
@@ -2005,6 +2202,11 @@ class MainWindow(QMainWindow):
         online_menu.addAction(ac)
         online_menu.addAction(make_action("Reset user status colors to defaults", self.reset_icon_colors))
         settings_menu.addSeparator() # ----------------------------------------------------------------
+        finger_menu = settings_menu.addMenu("Finger info")
+        finger_menu.addAction(make_action("Set location...", self.set_finger_location))
+        finger_menu.addAction(make_action("Set affiliation...", self.set_finger_affiliation))
+        finger_menu.addAction(make_action("Set personal name...", self.set_finger_name))
+        settings_menu.addSeparator() # ----------------------------------------------------------------
         settings_menu.addAction(make_action("Set send timeout...", self.set_message_timeout))
         settings_menu.addAction(make_action("Set domain search list...", self.set_dns_search_list))
         settings_menu.addAction(make_action("Set DNS server...", self.set_dns_server))
@@ -2066,6 +2268,8 @@ class MainWindow(QMainWindow):
         def end_all_watchers():
             if self.screen_lock_watcher:
                 self.screen_lock_watcher.stop_screen_lock_watcher()
+            if self.fingerd:
+                self.fingerd.stop_server()
             self.receiver.stop_receiver()
             self.destwatcher.end_all_watchers() # @@@@ this should abort their conns (like the receiver does)
         app.aboutToQuit.connect(end_all_watchers)
@@ -2128,6 +2332,11 @@ class MainWindow(QMainWindow):
         self.resize(getconf('MainWindowSize'))
         if getconf("MainWindowPosition"):
             self.move(getconf("MainWindowPosition"))
+
+        # runs in a PersistentWorker
+        self.fingerd = FingerServer()
+        self.fingerd.set_debug(debug)
+        self.fingerd.start_server(debug)
 
         # initialize layout etc
         self.init_layout_and_boxes()

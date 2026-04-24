@@ -22,10 +22,11 @@ import os
 from chaosnet import PacketConn, ChaosError
 
 cachetime = 30                  # seconds to cache info we're collecting and sending back
-# -d
-debug = False
 
 class FingerDaemon:
+    # -d
+    debug = False
+    conn = None
 
     def __init__(self, user=None, pname=None, location=None, affiliation=None):
         self.user = user
@@ -41,6 +42,8 @@ class FingerDaemon:
         self.user = uname
     def set_pname(self, pn):
         self.pname = pn
+    def set_debug(self, dbugp):
+        self.debug = dbugp
 
     def auto_location(self):
         # Get the location reported by ipinfo.io, assuming we're connected to the Internet.
@@ -66,23 +69,23 @@ class FingerDaemon:
                     loc.append(resp['country'])
                 return ", ".join(loc)
         except URLError as m:
-            if debug:
-                print("Error checking ipinfo.io: {}".format(m), file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: Error checking ipinfo.io: {}".format(m), file=sys.stderr)
 
-    def get_fullname(self, user):
+    def get_fullname(self, user=None):
         import pwd
         if user is None:
             user = self.get_current_user()
         try:
             p = pwd.getpwnam(user)
-            if debug:
-                print("user {} = {}".format(user,p.pw_gecos), file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: user {} = {}".format(user,p.pw_gecos), file=sys.stderr)
             import unicodedata
-            # Make it ascii, if you can
-            return unicodedata.normalize("NFKD",p.pw_gecos).encode("ascii","ignore").decode()
+            # Make it ascii, if you can, and use only up to first comma
+            return unicodedata.normalize("NFKD",p.pw_gecos).encode("ascii","ignore").decode().split(",",maxsplit=1)[0]
         except KeyError:
-            if debug:
-                print("user {} not found".format(user), file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: user {} not found".format(user), file=sys.stderr)
             return ""
 
     def get_current_user(self):
@@ -97,8 +100,8 @@ class FingerDaemon:
                 u,con,rest = l.split(maxsplit=2)
                 if con == b'console':
                     return str(u,"ascii")
-            if debug:
-                print("Can't find console, using first line for uname: {}".format(rout[0]), file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: Can't find console, using first line for uname: {}".format(rout[0]), file=sys.stderr)
             uname,rest = rout[0].split(maxsplit=1)
             return str(uname,"ascii")
 
@@ -108,16 +111,16 @@ class FingerDaemon:
         rout = r.stdout.splitlines()
         hididletime = next((line for line in rout if b"HIDIdleTime" in line), None)
         if hididletime is None:
-            if debug:
-                print("Can't find idle time", file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: Can't find idle time", file=sys.stderr)
             return 0
         m = re.match(r".*\"HIDIdleTime\" = ([0-9]+)",str(hididletime,"ascii"))
         if m:
-            if debug:
-                print("Idle time {} => {} sec".format(m.group(1), round(int(m.group(1))/1000000000)), file=sys.stderr)
+            if self.debug:
+                print("FingerDaemon: Idle time {} => {} sec".format(m.group(1), round(int(m.group(1))/1000000000)), file=sys.stderr)
             return round(int(m.group(1))/1000000000)
-        elif debug:
-            print("Can't parse idle time: {!r}".format(str(hididletime,"ascii")), file=sys.stderr)
+        elif self.debug:
+            print("FingerDaemon: Can't parse idle time: {!r}".format(str(hididletime,"ascii")), file=sys.stderr)
 
     def parse_idle_time(self, i):
         if i == '-':
@@ -174,10 +177,10 @@ class FingerDaemon:
             return "*:**"
 
     def get_and_handle_finger_request(self, conn=None, last=0):
-        c = PacketConn() if conn is None else conn
-        h = c.listen("FINGER")
-        if debug:
-            print("Conn from {}".format(h), file=sys.stderr)
+        self.conn = PacketConn() if conn is None else conn
+        h = self.conn.listen("FINGER")
+        if self.debug:
+            print("FingerDaemon: Conn from {}".format(h), file=sys.stderr)
         # get some real data to send
         if time.time() - last > cachetime:
             self.user = self.get_console_user() if self.user is None else self.user
@@ -187,38 +190,45 @@ class FingerDaemon:
                 self.location = "Home"
             self.affiliation = "-" if self.affiliation is None else self.affiliation
             self.idle = self.get_idle_time(self.user)
-            if debug:
-                print("Updated u,p,i,is,loc: {} {} {} {} {}".format(self.user,self.pname,self.idle,self.idlestring_min(self.idle), self.location), file=sys.stderr)
-        c.send_ans(b"\215".join(map(lambda s: bytes(s,"ascii"),[self.user,self.location,self.idlestring_min(self.idle),self.pname,self.affiliation]))+b"\215")
+            if self.debug:
+                print("FingerDaemon: Updated u,p,i,is,loc: {} {} {} {} {}".format(self.user,self.pname,self.idle,self.idlestring_min(self.idle), self.location), file=sys.stderr)
+        self.conn.send_ans(b"\215".join(map(lambda s: bytes(s,"ascii"),[self.user,self.location,self.idlestring_min(self.idle),self.pname,self.affiliation]))+b"\215")
         
 
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="FINGER daemon for Chaosnet",
+                                     epilog="Uses the LOCATION and AFFILIATION env vars for defaults. Default defaults are \"Home\" and \"-\", respectively.")
     parser.add_argument("-d",'--debug',dest='debug',action='store_true',
                             help='Turn on debug printouts')
     parser.add_argument("-l","--location", 
-                            help="Set the location of your system")
+                            help="Set the location of your system, default based on your public IP")
     parser.add_argument("-a","--affiliation", 
                             help="Set the affiliation shown (one char)")
     parser.add_argument("-c",'--cachetime',type=int, default=60,
                             help="Seconds to cache user and idletime data")
     args = parser.parse_args()
-    if args.debug:
-        debug = True
-        print(args, file=sys.stderr)
 
     fd = FingerDaemon()
+    if args.debug:
+        fd.set_debug(args.debug)
     if args.location:
-        fd.location = args.location
-    else:
-        fd.location = os.getenv("LOCATION")
+        fd.set_location(args.location)
+    elif os.getenv("LOCATION"):
+        fd.set_location(os.getenv("LOCATION"))
 
     if args.affiliation:
-        fd.affiliation = args.affiliation[0]
-    else:
-        fd.affiliation = os.getenv("AFFILIATION")
+        if len(args.affiliation[0]) > 2:
+            print("Error: affiliation can be max 2 characters")
+            exit(1)
+        fd.set_affiliation(args.affiliation[0])
+    elif os.getenv("AFFILIATION"):
+        a = os.getenv("AFFILIATION")
+        if len(a) > 2:
+            print("Error: $AFFILIATION can be max 2 characters")
+            exit(1)
+        fd.set_affiliation(os.getenv("AFFILIATION"))
 
     # Update data only occasionally (once per minute)
     last = 0
