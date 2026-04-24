@@ -297,11 +297,11 @@ class ChaosUserWatcher:
                 progress_callback.emit((host,"NAME: host {} responded in {:.2f}s, watching {!r}, users logged in: {!r}".format(host,
                                                                                                             end-start,
                                                                                                             users,
-                                                                                                            [d['userid'] for d in r])))
+                                                                                                            [d['userid'] for d in r['lines']])))
                 # return status of the users we're looking for
                 # No, return status of all users. ( if d['userid'].lower() in users)
                 return host, host_up_this_time, [(d['userid'],parse_idle_time_string(d['idle']))
-                                                 for d in r]
+                                                 for d in r['lines']]
         progress_callback.emit((host,"No methods gave any users, host is {}".format("up" if host_up_this_time else "down")))
         return host, host_up_this_time,[]
 
