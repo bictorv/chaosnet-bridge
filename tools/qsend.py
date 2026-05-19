@@ -145,7 +145,7 @@ def send_message(user,athost,text,timeout=5,myhostname=None):
     ncp = StreamConn()
     # Protocol: RFC arg is destination username
     ncp.connect(athost,"SEND",[user],options=dict(timeout=timeout))
-    msg = make_send_message(text)
+    msg = make_send_message(text, hostname=myhostname)
     # data with LISPM newlines etc
     bb = bytes(msg,"ascii").translate(bytes.maketrans(b'\t\n\f\r',b'\211\215\214\212'))
     ncp.send_data(bb)

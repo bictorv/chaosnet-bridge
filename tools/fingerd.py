@@ -156,7 +156,7 @@ class FingerDaemon:
         if len(rout) > 0:
             for l in rout:
                 u,con,src,login,i,what = l.split(maxsplit=5)
-                idl = parse_idle_time(str(i,"ascii"))
+                idl = self.parse_idle_time(str(i,"ascii"))
                 if idl is not None and idl < idle:
                     idle = idl
         else:
