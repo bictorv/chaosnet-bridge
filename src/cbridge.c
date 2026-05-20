@@ -2361,7 +2361,7 @@ main(int argc, char *argv[])
   }
 
 #if 1
-  if (verbose)
+  if (verbose || stats)
     // Print config
     print_stats(1);
 #endif
