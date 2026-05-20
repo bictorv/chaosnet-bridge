@@ -90,6 +90,7 @@ parse_tls_config_line()
       tok = strtok(NULL, " \t\r\n");
       if (tok == NULL) { fprintf(stderr,"tls: no address for myaddrs specified\n"); return -1; }
       char *sp, *ep;
+      u_short tlsaddr, found;
       for (sp = tok, ep = index(tok, ','); ep != NULL; sp = ep+1, ep = index(ep+1, ',')) {
 	if (tls_n_myaddrs > TLSDEST_MAX) {
 	  fprintf(stderr,"Error in tls \"myaddrs\" setting - too many addresses listed, max %d\n", TLSDEST_MAX);
@@ -100,21 +101,39 @@ parse_tls_config_line()
 	  fprintf(stderr,"Syntax error in tls \"myaddrs\" setting - empty address?\n");
 	  return -1;
 	}
-	if ((sscanf(sp, "%ho", &tls_myaddrs[tls_n_myaddrs]) != 1) || !valid_chaos_host_address(tls_myaddrs[tls_n_myaddrs])) {
+	if ((sscanf(sp, "%ho", &tlsaddr) != 1) || !valid_chaos_host_address(tlsaddr)) {
 	  fprintf(stderr,"tls: bad octal value %s for myaddrs specified\n", sp);
 	  return -1;
 	}
-	tls_n_myaddrs++;
+	found = 0;
+	for (int i = 0; i < tls_n_myaddrs; i++) {
+	  if (tls_myaddrs[i] == tlsaddr) {
+	    found = 1;
+	    break;
+	  }
+	}
+	if (!found) {
+	  tls_myaddrs[tls_n_myaddrs++] = tlsaddr;
+	} else if (tls_debug) fprintf(stderr,"tls: myaddrs %#o is already on tls_myaddrs\n", tlsaddr);
       }
       // add the single/last one
       if (strlen(sp) == 0) {
 	fprintf(stderr,"Syntax error in tls \"myaddrs\" setting - empty address?\n");
 	return -1;
-      } else if ((sscanf(sp, "%ho", &tls_myaddrs[tls_n_myaddrs]) != 1) || !valid_chaos_host_address(tls_myaddrs[tls_n_myaddrs])) {
+      } else if ((sscanf(sp, "%ho", &tlsaddr) != 1) || !valid_chaos_host_address(tlsaddr)) {
 	fprintf(stderr,"tls: bad octal value %s for myaddrs specified\n", sp);
 	return -1;
       }
-      tls_n_myaddrs++;
+      found = 0;
+      for (int i = 0; i < tls_n_myaddrs; i++) {
+	if (tls_myaddrs[i] == tlsaddr) {
+	  found = 1;
+	  break;
+	}
+      }
+      if (!found) {
+	tls_myaddrs[tls_n_myaddrs++] = tlsaddr;
+      } else if (tls_debug) fprintf(stderr,"tls: myaddr %#o is already on tls_myaddrs\n", tlsaddr);
     }
     else if (strncmp(tok,"server",sizeof("server")) == 0) {
       tok = strtok(NULL, " \t\r\n");
@@ -147,10 +166,11 @@ parse_tls_config_line()
     }
   }
   if ((tls_n_myaddrs == 0) && (mychaddr[0] != 0)) {
-    if (do_tls_server)
+    if (do_tls_server) {
       fprintf(stderr,"tls: server, but no myaddr parameter - defaulting to %#o\n", mychaddr[0]);
-    // default - see send_empty_sns below
-    tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
+      // default - see send_empty_sns below
+      tls_myaddrs[tls_n_myaddrs++] = mychaddr[0];
+    } else if (tls_debug) fprintf(stderr,"tls: no myaddr parameter, but not server\n");
   } else {
     for (int i = 0; i < tls_n_myaddrs; i++) {
       if (!is_mychaddr(tls_myaddrs[i])) {
@@ -1020,8 +1040,8 @@ void *tls_connector(void *arg)
 	u_char *server_cn = tls_get_cert_cn(ssl_server_cert);
 #if CHAOS_DNS
 	if (server_cn) {
-	  u_short claddrs[4];
-	  int i, naddrs = dns_addrs_of_name(server_cn, (u_short *)&claddrs, 4);
+	  u_short claddrs[12];
+	  int i, naddrs = dns_addrs_of_name(server_cn, (u_short *)&claddrs, 12);
 	  if (tls_debug) {
 	    fprintf(stderr, "TLS server CN %s has %d Chaos address(es): ", server_cn, naddrs);
 	    for (i = 0; i < naddrs; i++)
@@ -1560,8 +1580,8 @@ tls_server(void *v)
 	u_short client_chaddr = 0;
 #if CHAOS_DNS
 	if (client_cn) {
-	  u_short claddrs[4];
-	  int i, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+	  u_short claddrs[12];
+	  int i, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 12);
 	  if (tls_debug) {
 	    fprintf(stderr, "TLS server: client CN %s has %d Chaos address(es): ", client_cn, naddrs);
 	    for (i = 0; i < naddrs; i++)
@@ -2127,8 +2147,8 @@ validate_cert_file(char *fname)
 
 #if CHAOS_DNS
   // Check the addresses of the CN
-  u_short claddrs[4];
-  int i, j, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 4);
+  u_short claddrs[12];
+  int i, j, naddrs = dns_addrs_of_name(client_cn, (u_short *)&claddrs, 12);
   if (naddrs < -1) {
     fprintf(stderr,"%%%% TLS: DNS error when getting addresses of client CN %s\n", client_cn);
   }
