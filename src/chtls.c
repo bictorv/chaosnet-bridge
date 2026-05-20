@@ -2023,7 +2023,6 @@ validate_cert_vs_crl(X509 *cert, char *fname)
   if (crl == NULL) {
     perror("PEM_read_X509_CRL");
     ERR_print_errors_fp(stderr);
-    fclose(f);
     return -1;
   }
   validate_crl_date(crl, cert);
