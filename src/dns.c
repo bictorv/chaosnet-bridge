@@ -821,8 +821,9 @@ print_config_dns()
       printf(i == 0 ? "%s" : ",%s", chaos_dns_servers[i]);
     printf("\n");
   }
-  if (n_dns_servers == 1) {
+  if ((n_dns_servers == 1) && (strcasecmp(chaos_dns_servers[0],"dns.chaosnet.net") != 0)) {
     // @@@@ but if it is on a private network it's normal to have only one
+    // @@@@ Consider only+simply listing dns.chaosnet.net?
     printf(" Suggested DNS servers: ");
     int nrec = dns_list_root_nameservers();
     if (nrec > MAX_DNS_SERVERS) 
