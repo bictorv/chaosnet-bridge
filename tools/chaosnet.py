@@ -641,18 +641,18 @@ class SimpleDict:
             opc, data = self.conn.get_packet()
         except ChaosSocketError as m:
             if debug:
-                print("Error getting packet from {!r}: {}".format(hname, m), file=sys.stderr)
+                print("Error getting packet from {!r}: {}".format(self.hname, m), file=sys.stderr)
             return None,None
         if opc == Opcode.ANS:
             src = data[0] + data[1]*256
             return src, data[2:]
         elif opc == Opcode.LOS:
             if debug:
-                print("LOS from {!r}: {}".format(hname, data), file=sys.stderr)
+                print("LOS from {!r}: {}".format(self.hname, data), file=sys.stderr)
             raise LOSError("LOS: {}".format(str(data,"ascii")))
         elif opc == Opcode.CLS:
             if debug:
-                print("CLS from {!r}: {}".format(hname, data), file=sys.stderr)
+                print("CLS from {!r}: {}".format(self.hname, data), file=sys.stderr)
             return None,None
         elif opc == Opcode.FWD:
             dest = data[0] + data[1]*256
