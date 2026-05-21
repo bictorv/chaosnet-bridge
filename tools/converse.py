@@ -1126,7 +1126,12 @@ class MessageStorage:
                         break   # assume EOF/done
                     n = n+1
                     _,uname,host,date,diffh,text = parse_send_message(msg, destuser=destuser, searchlist=getconf('dns_search_list'))
-                    self.main_window.add_message(uname, host, date, diffh, text, is_from_net=not destuser.startswith("to:"))
+                    # if destuser.startswith("to:"), then restore it in the tab for that user! uname in that case is me.
+                    if destuser.startswith("to:"):
+                        u,h = destuser[3:].split("@",maxsplit=1)
+                        self.main_window.add_message(u, h, date, diffh, text, is_from_net=False)
+                    else:
+                        self.main_window.add_message(uname, host, date, diffh, text, is_from_net=True)
             # Clear all "unread" markers.
             self.main_window.clear_all_unread_markers()
         except EOFError:
@@ -1243,8 +1248,8 @@ class FingerServer:
             if not self.closing_down:
                 raise exc
     def server_message_received(self, data):
-        if data is None:
-            qDebug("No message received?!")
+        if self.debugp and data is None:
+            qDebug("Finger server: No data received")
             return
         if self.debugp:
             qDebug("Finger server: data received")
