@@ -3,6 +3,8 @@
 # Get the host addresses and subnets that respond to STATUS.
 # Cache the results, they won't change super often.
 
+import sys
+
 print("Content-Type: text/html")    # HTML is following
 # encourage caching: only serve new output every 30 seconds
 print("Cache-Control: max-age=30")
@@ -21,6 +23,7 @@ if 'timeout' in qs:
     to = int(qs['timeout'][0])
 
 s = ChaosSimpleStatus([sn],dict(timeout=to))
+
 print("<label style='vertical-align: top' for=\"host\">Host/subnet:</label>")
 print("<select name='host' id='host' multiple=\"multiple\">")
 print(" <option value=\"-1\">All hosts on all subnets</option>")
