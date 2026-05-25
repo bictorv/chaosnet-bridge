@@ -143,7 +143,7 @@ function loadTimesharingFinger(svcargs, sid, nameofservice) {
 	    svg.setAttribute("height", "100%");
 	    svg.setAttribute("data", "dragon.svg");
 	    svg.style = "float: right;";
-	    div.appendChild(svg);
+	    div.insertBefore(svg, div.children[0]); // Put the svg first (so fixupSVG makes the correct adjustment)
 	    const s = 'loadname';
 	    const nu = new Date().toDateString() + " " + new Date().toLocaleTimeString();
 	    // New header (@@@@ maybe should be h2, but doesn't really matter)
@@ -152,6 +152,8 @@ function loadTimesharingFinger(svcargs, sid, nameofservice) {
 		`<button value="Clear" title="Clear section" type="button" onclick="clearService(\'${s}\')">&#10005;</button>`;
 	    // create a table like in HTMLtable, replace the current sid node with it
 	    if (todo_hosts.length > 0) {
+		// @@@@ should add "Waiting for A, B, C", remove each host when its response comes,
+		// @@@@ and remove the "Waiting for" when the last host is removed.
 		var table = document.createElement("table");
 		table.id = "name_table";
 		table.className = 'name sortable ';
@@ -163,8 +165,8 @@ function loadTimesharingFinger(svcargs, sid, nameofservice) {
 		    ts += "<td class="+h[1]+">"+h[0]+"</td>";
 		}
 		table.innerHTML = ts + "</tr></thead><tbody></tbody>"; // @@@@ check that tbody is ok with sortable
+		// @@@@ should only add the header when the first response comes
 		div.appendChild(table);
-		// @@@@ should add some "Work in progress" indicator, cleared when first row is added
 		// for each of the responding hosts with users > 0, load name service
 		for (h of todo_hosts) {
 		    console.log("Host "+h+" has users, calling NAME");
