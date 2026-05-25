@@ -1184,7 +1184,8 @@ class FingerServer:
         w = PersistentWorker(self.receive_request, interval = 0) # keep going without waiting
         w.set_debug(debug)
         from fingerd import FingerDaemon
-        self.fingerd = FingerDaemon()
+        self.fingerd = FingerDaemon(pname=getconf('finger_name'), affiliation=getconf('finger_affiliation'), 
+                                    location=getconf('finger_location'))
         w.signals.error.connect(self.server_error)
         w.signals.result.connect(self.server_message_received)
         w.signals.finished.connect(self.server_finished)
