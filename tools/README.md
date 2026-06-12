@@ -21,13 +21,13 @@ Clients, written in Python using the NCP "API" of cbridge:
 - finger.py - a client for the NAME protocol (no, not the FINGER protocol...)
 - hostab.py - a client for the HOSTAB protocol ("host table").
 - spy.py - a client for the SPY protocol (which shows the screen of a Lisp Machine that allows it).
-- telnet.py - a client for the TELNET protocol (not SUPDUP, yet).
+- telnet.py - a client for the TELNET protocol (not SUPDUP, yet). Supports Telnet subnegotiation for [Terminal Window Size](https://datatracker.ietf.org/doc/html/rfc1073), [Terminal Type](https://datatracker.ietf.org/doc/html/rfc1091), and [location](https://datatracker.ietf.org/doc/html/rfc779), and can also be used for TCP connections.
 - qsend.py - a client for the SEND protocol (see also converse.py, below)
 - bhostat.py - a program which can use broadcast packets to quickly get information about the hosts on Chaosnet.
 - bhostat_html.py - similar but generates HTML output, see also [the web folder](web) for example usage.
 
 "Applications", which are sometimes both clients and servers:
-- converse.py - a [Converse](../doc/CONVERSE.md) program, inspired by Converse on LISPM.
+- converse.py - a [Converse](../doc/CONVERSE.md) program using QtPy6, inspired by Converse on LISPM. Contains a FINGER server.
 
 The Python servers and clients use support libraries:
 - chaosnet.py - basic Chaosnet access. See the e.g. classes PacketConn, StreamConn, BroadcastConn, and Simple for "simple" protocols. It also has some DNS support functions.
