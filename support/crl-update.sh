@@ -84,9 +84,9 @@ if [ -r $INCRL -a -s $INCRL ]; then
 	# Keep this script running and it shouldn't happen very often
 	echo WARNING: The existing CRL file $INCRL has expired, fetching a new copy.
 	# So always fetch a new one
-	curl -S -s --output $OUTPUT $url
+	curl -4 -S -s --output $OUTPUT $url
     else
-	curl -S -s --time-cond $INCRL --output $OUTPUT $url
+	curl -4 -S -s --time-cond $INCRL --output $OUTPUT $url
     fi
 elif [ ! -d $INCRL ]; then
     echo CRL file $INCRL does not exist, fetching a fresh copy
@@ -97,7 +97,7 @@ elif [ ! -d $INCRL ]; then
 	url=https://chaosnet.net/intermediate.crl.pem
     fi
     rm -f $OUTPUT
-    curl -S -s --output $OUTPUT $url
+    curl -4 -S -s --output $OUTPUT $url
 else
     echo Error: Invalid CRL file setting $INCRL - is it a directory?
     exit 1
