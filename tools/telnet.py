@@ -28,12 +28,18 @@ debug = False
 iacdebug = False
 naws = True                     # default on!
 do_window_size = False
+do_location = False
 noopts = False
 packetp = False
 
 ttytype = os.getenv("TERM")
-location = None
+location = os.getenv("LOCATION")
 status_ok = False
+
+# For temp switching between tty modes
+cbreak_modes = None
+raw_modes = None
+
 # Hard to get to work?
 local_echo = False
 
@@ -218,7 +224,7 @@ def send_window_size(sock):
     size = shutil.get_terminal_size()
     if debug:
         #print("Sending window size {}x{}: {} {} {} {} {}\r".format(size.columns, size.lines, opt,size.columns>>8,size.columns&0xff,size.lines>>8,size.lines&0xff), file=sys.stderr)
-        os.write(sys.stderr.fileno(), bytes("Sending window size {}x{}: {} {} {} {} {}\r\n".format(size.columns, size.lines, opt,size.columns>>8,size.columns&0xff,size.lines>>8,size.lines&0xff), "ascii"))
+        os.write(sys.stderr.fileno(), bytes("Sending window size {}x{}: {} {} {} {} {}\r\n".format(size.columns, size.lines, TelnetOption.WINSIZE, size.columns>>8,size.columns&0xff,size.lines>>8,size.lines&0xff), "ascii"))
     send_subneg(sock,bytes([TelnetOption.WINSIZE, size.columns>>8,size.columns&0xff,size.lines>>8,size.lines&0xff]))
 
 def handle_window_resize(sock):
@@ -232,13 +238,18 @@ def handle_do(opt, sock, data):
     # Do whatever acceptable thing we were asked to (caller responds with WILL)
     match opt:
         case TelnetOption.SEND_LOC:
-            send_subneg(sock,bytes([opt])+bytes(location or "Here","ascii"))
+            if not noopts:
+                global do_location
+                do_location = True
+                if location:
+                    send_subneg(sock,bytes([opt])+bytes(location,"ascii"))
         case TelnetOption.TTYTYPE:
             pass                # the WILL is sufficient for handling this
         case TelnetOption.WINSIZE:
             global do_window_size
-            do_window_size = True
-            send_window_size(sock)
+            if not noopts:
+                do_window_size = True
+                send_window_size(sock)
         case TelnetOption.SUPRGA:
             pass                # easy
         case TelnetOption.ECHO:
@@ -258,6 +269,8 @@ def handle_dont(opt, sock, data):
             local_echo = False
         case TelnetOption.STATUS:
             status_ok = False
+        case TelnetOption.SEND_LOC:
+            do_location = False
         case _:
             if not opt in outstanding_will and not opt in outstanding_do:
                 if iacdebug:
@@ -271,7 +284,8 @@ def handle_wont(opt, sock, data):
 
 def handle_ttytype_subnegotiation(sock):
     # TTYTYPE IS whatever
-    # Cf RFC1700: should be "XTERM" and "DEC-VT100" etc (but modern clients send whatever)
+    # Cf RFC1700: should be from the official list, "XTERM" and "DEC-VT100" etc
+    # (but modern clients send whatever)
     send_subneg(sock,bytes([TelnetOption.TTYTYPE, 0])+bytes(ttytype or "VT100","ascii"))
 
 def handle_subnegotiation(sock, data):
@@ -286,7 +300,8 @@ def handle_subnegotiation(sock, data):
         print("[Received Subneg {} {!r}]\r".format(opt.name,data[1:e]), file=sys.stderr)
     if opt == TelnetOption.TTYTYPE:
         if data[1] == 1:        # Remote wants the next TTY type
-            handle_ttytype_subnegotiation(sock)
+            if not noopts:
+                handle_ttytype_subnegotiation(sock)
         else:
             print("[Bad TTYTYPE sequence: got IAC SB TTYTYPE {}, expected 1 (SEND)]\r".format(data[1]), file=sys.stderr)
     else:
@@ -364,12 +379,22 @@ def init_telnet_options(sock):
     if local_echo:
         # Most seem to insist on doing ECHO themselves
         send_dont_command(sock, TelnetOption.ECHO)
-    if location is not None: # if we have a location
+    if True or location is not None: # if we have a location - no, try anyway to see what they accept
         send_will_command(sock,TelnetOption.SEND_LOC)
 
-def handle_escape(sock, ch):
+def handle_escape(sock, ch, tin):
     global debug
-    if ch == b"q" or ch == b"l":
+    if ch == b"?":
+        print("Type the escape char (^^ or ^]) followed by a command character. Commands are:\r", file=sys.stderr)
+        for (c,s) in [("^^ or ^]","send escape character through"),
+                      ("q or l","close the connection"),
+                      ("d","toggle debug"),
+                      ("^T","send AYT (Are You There)"),
+                      ("L","set terminal location, if supported"),
+                      ("s","ask for remote status, if supported")]:
+            print(" {:9s} {}\r".format(c,s), file=sys.stderr)
+        return None
+    elif ch == b"q" or ch == b"l":
         if debug:
             print("Closing socket",file=sys.stderr)
         try:
@@ -384,9 +409,35 @@ def handle_escape(sock, ch):
     elif ch == b"\x14":
         send_command(sock,[TelnetCommand.AYT])
         return None
-    elif status_ok and ch == b"s":
+    elif ch == b"L":
+        if do_location:
+            try:
+                # Set cbreak mode while reading location.
+                if iacdebug or debug:
+                    print("Setting CBREAK\r", file=sys.stderr)
+                tty.setcbreak(tin, when=termios.TCSANOW)
+                if cbreak_modes is not None:
+                    termios.tcsetattr(tin, termios.TCSANOW, cbreak_modes)
+                print("\rLocation: ", file=sys.stderr, end='')
+                # sys.stderr.flush()
+                loc = tin.readline()
+                if len(loc.strip()) > 0:
+                    send_subneg(sock,bytes([TelnetOption.SEND_LOC])+loc.strip())
+            finally:
+                if iacdebug or debug:
+                    print("Finally setting RAW again\r", file=sys.stderr)
+                tty.setraw(tin)
+                if raw_modes is not None:
+                    termios.tcsetattr(tin, termios.TCSANOW, raw_modes)
+        else:
+            print("Setting location not supported by remote server, sorry\r", file=sys.stderr)
+        return None
+    elif ch == b"s":
         # not implemented by ITS or TOPS-20
-        send_subneg(sock,bytes([TelnetOption.STATUS,1]))
+        if status_ok:
+            send_subneg(sock,bytes([TelnetOption.STATUS,1]))
+        else:
+            print("STATUS not supported by remote server, sorry\r", file=sys.stderr)
         return None
     else:
         return ch
@@ -400,12 +451,13 @@ def do_telnet_to_net(tin, sock):
             if line == b"\x1d" or line == b"\x1e":
                 # ^] or ^^ pressed
                 print("\r",file=sys.stderr)
-                print("Telnet escape - press q or l for quit, d to toggle debug, ^T for AYT{}: "
-                      .format(", s for status" if status_ok else ""), file=sys.stderr, end='')
+                print("Telnet escape - press q or l for quit, d to toggle debug, ^T for AYT{}{}: "
+                      .format(", s for status" if status_ok else "",
+                              ", L to set location" if do_location else "",), file=sys.stderr, end='')
                 sys.stderr.flush()
                 ch = tin.read(1)
                 print("\r",file=sys.stderr)
-                line = handle_escape(sock, ch)
+                line = handle_escape(sock, ch, tin)
                 if line is None:
                     continue
                 elif line is True:
@@ -427,8 +479,10 @@ def telnet(host,contact="TELNET", options=None, tcp=False):
             xec = threading.Thread(target=input_handler, args=(sock,))
             xec.start()
             with open("/dev/tty","rb", buffering=0) as tin:
-                oldmode = termios.tcgetattr(tin)
+                global cbreak_modes, raw_modes
+                cbreak_modes = termios.tcgetattr(tin)
                 tty.setraw(tin)
+                raw_modes = termios.tcgetattr(tin)
                 try:
                     if (tcp or contact.upper() == "TELNET") and not noopts:
                         init_telnet_options(sock)
@@ -443,7 +497,7 @@ def telnet(host,contact="TELNET", options=None, tcp=False):
                     if debug:
                         print("finally setting cbreak again\r", file=sys.stderr)
                     tty.setcbreak(tin)
-                    termios.tcsetattr(tin, termios.TCSANOW, oldmode)
+                    termios.tcsetattr(tin, termios.TCSANOW, cbreak_modes)
         finally:
             pass
     else:
@@ -463,7 +517,7 @@ if __name__ == '__main__':
     parser.add_argument("-t","--ttytype",dest='ttytype', default=None,
                             help="Terminal type to try to convey to the server, default "+ttytype)
     parser.add_argument("-l","--location",dest='location', default=None,
-                            help="Location to try to convey to the server")
+                            help="Location to try to convey to the server"+(", default {!r}".format(location) if location else ""))
     parser.add_argument("-W","--no-naws", action='store_true',
                             help="Do not negotiate about terminal window size")
     parser.add_argument("-w","--naws",action='store_true', 
@@ -489,7 +543,6 @@ if __name__ == '__main__':
         packetp = True
     if args.ttytype:
         ttytype = args.ttytype
-        acceptable_options.append(TelnetOption.TTYTYPE)
     if args.location:
         location = args.location
     if args.iacdebug:
@@ -502,6 +555,9 @@ if __name__ == '__main__':
         noopts = True
     # if args.localecho:
     #     local_echo = True
+
+    if ttytype is not None:
+        acceptable_options.append(TelnetOption.TTYTYPE)
 
     try:
         telnet(args.host, args.contact, options=cargs, tcp=args.tcp)
