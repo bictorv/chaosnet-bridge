@@ -10,7 +10,9 @@ else
 CONVERSE=
 endif
 
-all:	hostat finger $(CONVERSE)
+all:	hostat finger
+
+converse:	 $(CONVERSE)
 
 
 hostat: hostat.c ../src/cbridge-chaos.h
@@ -20,7 +22,8 @@ finger: finger.c ../src/cbridge-chaos.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 ifeq ($(OS_NAME), Darwin)
-dist/Converse.app: converse.py qsend.py chaosnet.py Converse-icon.icns
+dist/Converse.app: converse.py qsend.py chaosnet.py watcher.py Converse-icon.icns
+	@echo "#### If this fails, see Makefile ####"
 	pyinstaller --noconfirm --windowed --name Converse --icon Converse-icon.icns converse.py
 endif
 

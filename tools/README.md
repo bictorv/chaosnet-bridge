@@ -27,9 +27,9 @@ Clients, written in Python using the NCP "API" of cbridge:
 - bhostat_html.py - similar but generates HTML output, see also [the web folder](web) for example usage.
 
 "Applications", which are sometimes both clients and servers:
-- converse.py - a [Converse](../doc/CONVERSE.md) program using QtPy6, inspired by Converse on LISPM. Contains a FINGER server.
+- converse.py - a [Converse](../doc/CONVERSE.md) program using PyQt6, inspired by Converse on LISPM. Contains a FINGER server. Has additional requirements, see [Converse doc](../doc/CONVERSE.md).
 
 The Python servers and clients use support libraries:
 - chaosnet.py - basic Chaosnet access. See the e.g. classes PacketConn, StreamConn, BroadcastConn, and Simple for "simple" protocols. It also has some DNS support functions.
-- watcher.py - a QtPy6 library for running persistent background threads, including a class for watching the online status of users on hosts.
+- watcher.py - a PyQt6 library for running persistent background threads, including a class for watching the online status of users on hosts.
 - dnspython - library for low-level DNS, see [documentation](https://dnspython.readthedocs.io/en/latest/). Install by e.g. `pip3 install dnspython`.

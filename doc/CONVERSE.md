@@ -111,7 +111,7 @@ You can also reset all settings by using the `Reset all settings` menu item. Thi
 
 Requirements: dnspython, pyqt6, nocasedict. All three can be installed with `pip3 install ...`
 
-Doing `make` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.org/en/stable/) to produce an app from the python sources. If `pip3 install PyInstaller` doesn't put pyinstaller in your `PATH`, please see a comment in [Makefile](Makefile).
+Under macOS, doing `make converse` in the `tools` subdirectory uses [pyinstaller](https://pyinstaller.org/en/stable/) to produce an app from the python sources. If `pip3 install PyInstaller` doesn't put pyinstaller in your `PATH`, please see a comment in [Makefile](Makefile).
 
 ## Future plans/features
 
