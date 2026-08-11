@@ -240,8 +240,8 @@ def handle_do(opt, sock, data):
         case TelnetOption.SEND_LOC:
             if not noopts:
                 global do_location
-                do_location = True
-                if location:
+                do_location = True # Note that it's OK to send location
+                if location:       # Do it if we have one
                     send_subneg(sock,bytes([opt])+bytes(location,"ascii"))
         case TelnetOption.TTYTYPE:
             pass                # the WILL is sufficient for handling this
@@ -421,8 +421,9 @@ def handle_escape(sock, ch, tin):
                 print("\rLocation: ", file=sys.stderr, end='')
                 # sys.stderr.flush()
                 loc = tin.readline()
-                if len(loc.strip()) > 0:
-                    send_subneg(sock,bytes([TelnetOption.SEND_LOC])+loc.strip())
+                if len(loc.strip()) == 0:
+                    print("\rClearing location.\r", file=sys.stderr)
+                send_subneg(sock,bytes([TelnetOption.SEND_LOC])+loc.strip())
             finally:
                 if iacdebug or debug:
                     print("Finally setting RAW again\r", file=sys.stderr)
@@ -451,9 +452,8 @@ def do_telnet_to_net(tin, sock):
             if line == b"\x1d" or line == b"\x1e":
                 # ^] or ^^ pressed
                 print("\r",file=sys.stderr)
-                print("Telnet escape - press q or l for quit, d to toggle debug, ^T for AYT{}{}: "
-                      .format(", s for status" if status_ok else "",
-                              ", L to set location" if do_location else "",), file=sys.stderr, end='')
+                print("Telnet escape - press q or l for quit, ? to list other commands: ", 
+                      file=sys.stderr, end='')
                 sys.stderr.flush()
                 ch = tin.read(1)
                 print("\r",file=sys.stderr)
