@@ -3,7 +3,7 @@ MACH_NAME = $(shell uname -m)
 
 # default
 LIBRESOLV=-lresolv
-CFLAGS = -g
+CFLAGS+=-g
 
 # Mac OSX
 ifeq ($(OS_NAME), Darwin)
@@ -13,8 +13,8 @@ PFX=/opt/local
 ifneq ($(HOMEBREW_PREFIX),)
   PFX=$(HOMEBREW_PREFIX)
 endif
-LDFLAGS = -L$(PFX)/lib
-CFLAGS = -I$(PFX)/include -g
+LDFLAGS+=-L$(PFX)/lib
+CFLAGS+=-I$(PFX)/include
 # To make chaosnet dns work in macOS >= 15.4, you may need to install libbind (which needs tbl which comes with groff).
 # Use "make WITH_BIND=yes" to try bind instead of resolv.
 ifeq ($(WITH_BIND), yes)
@@ -25,8 +25,8 @@ endif
 
 # For OpenBSD, do "pkg_add libbind"
 ifeq ($(OS_NAME), OpenBSD)
-CFLAGS = -I/usr/local/include/bind -g
-LDFLAGS = -L/usr/local/lib/libbind
+CFLAGS+= -I/usr/local/include/bind
+LDFLAGS+= -L/usr/local/lib/libbind
 LIBRESOLV = -lbind
 endif
 
